@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="img/icon.png">
+<title>RadioMaster</title>
+<meta name="description" content="RadioMaster — free radio automation for Windows. Playlists, hour markers, smart crossfades, Icecast/Shoutcast streaming and AzuraCast station management.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a studio console — header bar, an on-air board as the hero, then a running-order "log" of features, screens, and a download desk. */
+:root {
+  --bg: #080e17;          /* studio dark, sampled from the logo */
+  --panel: #0e1724;
+  --panel-2: #132034;
+  --line: #1f3048;
+  --fg: #e6eef8;
+  --muted: #8ea2bb;
+  --accent: #1e9bf0;      /* RadioMaster blue */
+  --accent-2: #5cc4ff;
+  --onair: #e5484d;       /* the on-air lamp */
+  --last: #f2b36b;
+  --next: #e9e48b;
+  --good: #3ccf7a;
+  --marker: #e0569a;
+  --display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 var(--body); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent-2); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px; }
+img { max-width: 100%; display: block; }
+.wrap { max-width: 1160px; margin: 0 auto; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.02; margin: 0; letter-spacing: .005em; }
+h2 { font-size: clamp(2.1rem, 4.6vw, 3.4rem); font-weight: 700; text-transform: uppercase; }
+h3 { font-size: 1.45rem; font-weight: 600; }
+p { margin: 0; }
+.eyebrow { font: 600 .78rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent-2); }
+.lede { color: var(--muted); font-size: 1.12rem; max-width: 62ch; }
+
+/* ---------- header */
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 24px; padding-block: 12px; }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--fg); font: 700 1.5rem/1 var(--display); letter-spacing: .01em; }
+.brand img { width: 34px; height: 34px; border-radius: 8px; }
+.brand b { color: var(--accent); font-weight: 700; }
+nav.links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
+nav.links a { color: var(--muted); text-decoration: none; font-weight: 500; font-size: .95rem; }
+nav.links a:hover { color: var(--fg); }
+.btn { display: inline-flex; align-items: center; gap: 10px; padding: 12px 20px; border-radius: 6px; font: 600 1rem/1 var(--body); text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: transform .15s ease, background .15s ease; }
+.btn:hover { transform: translateY(-1px); }
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.primary:hover { background: #2aa8ff; }
+.btn.ghost { border-color: var(--line); color: var(--fg); background: var(--panel); }
+.btn.small { padding: 8px 14px; font-size: .9rem; }
+.btn small { font: 400 .8rem/1 var(--mono); opacity: .8; }
+@media (max-width: 760px) { nav.links a.hide-sm { display: none; } }
+
+/* ---------- hero */
+.hero { padding-block: 56px 40px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 48px; align-items: center; }
+.hero h1 { font-size: clamp(3.2rem, 7.6vw, 6.2rem); font-weight: 800; text-transform: uppercase; line-height: .9; }
+.hero h1 span { color: var(--accent); }
+.hero .lede { margin-top: 20px; }
+.hero .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.hero .fine { margin-top: 14px; color: var(--muted); font-size: .88rem; }
+@media (max-width: 900px) { .hero { grid-template-columns: 1fr; padding-block: 36px 24px; gap: 32px; } }
+
+/* the on-air board: a live miniature of the app's header */
+.board { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; box-shadow: 0 30px 80px -30px rgba(30,155,240,.35); }
+.board-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px; }
+.tile { border-radius: 6px; padding: 10px 12px; min-width: 0; color: #111a26; }
+.tile .k { font: 600 .66rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; opacity: .7; }
+.tile .v { margin-top: 6px; font-weight: 600; font-size: .92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.clock { background: #e4e9f1; }
+.tile.clock .v { font: 600 1.2rem/1 var(--mono); margin-top: 6px; overflow: visible; }
+.tile.clock .cd { font: 600 .82rem/1 var(--mono); color: #0b7f86; margin-top: 4px; }
+.tile.last { background: #ffd6aa; }
+.tile.air { background: #b2f0bc; }
+.tile.air .k { color: #12612a; opacity: 1; display: flex; align-items: center; gap: 6px; }
+.tile.air .v { font-size: 1.05rem; }
+.tile.next { background: #f5f6be; }
+.lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--onair); box-shadow: 0 0 0 0 rgba(229,72,77,.6); animation: lamp 2s infinite; }
+@keyframes lamp { 0% { box-shadow: 0 0 0 0 rgba(229,72,77,.55);} 70% { box-shadow: 0 0 0 7px rgba(229,72,77,0);} 100% { box-shadow: 0 0 0 0 rgba(229,72,77,0);} }
+.deck { display: grid; grid-template-columns: auto minmax(0, 1fr) 150px; gap: 16px; align-items: center; margin-top: 12px; padding: 12px; background: var(--panel-2); border-radius: 6px; }
+.elapsed { font: 600 2rem/1 var(--mono); color: var(--accent-2); }
+.elapsed small { display: block; font-size: .8rem; color: var(--muted); margin-top: 4px; }
+.song { min-width: 0; }
+.song .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.song .a { color: var(--muted); font-size: .88rem; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.vu { display: grid; gap: 5px; }
+.vu div { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 9px; }
+.vu span { background: #1d3a26; border-radius: 1px; }
+.vu span.on { background: var(--good); }
+.vu span.amb.on { background: #e7bd3c; }
+.vu span.red.on { background: var(--onair); }
+.log { margin-top: 12px; border-top: 1px solid var(--line); }
+.log div { display: grid; grid-template-columns: 26px minmax(0, 1fr) 62px 70px; gap: 10px; padding: 7px 8px; font-size: .86rem; border-bottom: 1px solid var(--line); align-items: center; }
+.log .n { font-family: var(--mono); color: var(--muted); font-size: .78rem; }
+.log .ttl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log .d, .log .s { font: 400 .8rem/1 var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.log .cur { background: rgba(60,207,122,.12); color: #9ff0bd; }
+.log .cur .n, .log .cur .d, .log .cur .s { color: #9ff0bd; }
+.log .mk { background: rgba(224,86,154,.14); color: #ff9ccc; font-weight: 600; }
+.log .mk .s { color: #ff9ccc; }
+.log .cm { background: rgba(233,228,139,.08); color: var(--next); font-style: italic; }
+@media (max-width: 560px) {
+  .board-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .deck { grid-template-columns: auto minmax(0, 1fr); }
+  .vu { grid-column: 1 / -1; }
+  .log div { grid-template-columns: 22px minmax(0, 1fr) 64px; }
+  .log .d { display: none; }
+}
+
+/* ---------- sections */
+section.block { padding-block: 72px; border-top: 1px solid var(--line); }
+.head { display: grid; gap: 14px; margin-bottom: 36px; }
+.features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.feature { background: var(--bg); padding: 26px 24px; display: grid; gap: 10px; align-content: start; }
+.feature .tag { font: 600 .72rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent-2); }
+.feature p { color: var(--muted); font-size: .97rem; }
+@media (max-width: 900px) { .features { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .features { grid-template-columns: 1fr; } }
+
+/* running order of playlist item types */
+.rundown { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 48px; align-items: start; }
+.rundown-table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 .72rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); background: var(--panel-2); }
+td.k { font-family: var(--mono); font-size: .82rem; color: var(--accent-2); white-space: nowrap; }
+td.it { font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.markers { display: grid; gap: 12px; margin-top: 26px; }
+.markers div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 14px; align-items: baseline; }
+.markers b { font: 700 1.1rem/1 var(--display); text-transform: uppercase; color: var(--marker); letter-spacing: .04em; }
+.markers span { color: var(--muted); }
+@media (max-width: 900px) { .rundown { grid-template-columns: 1fr; gap: 32px; } }
+
+/* screens */
+.shots { display: grid; gap: 18px; }
+.shot-main { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.thumbs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.thumbs button { padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); cursor: pointer; text-align: left; color: var(--fg); }
+.thumbs button[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.thumbs img { aspect-ratio: 16 / 9.7; object-fit: cover; object-position: top left; width: 100%; }
+.thumbs span { display: block; padding: 8px 10px; font-size: .85rem; color: var(--muted); }
+.caption { color: var(--muted); font-size: .95rem; }
+@media (max-width: 700px) { .thumbs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* AzuraCast */
+.az { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; align-items: center; }
+.az ul { list-style: none; margin: 22px 0 0; padding: 0; display: grid; gap: 10px; }
+.az li { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.az li b { font: 600 .78rem/1.6 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent-2); }
+.az li span { color: var(--muted); }
+.az .note { margin-top: 18px; color: var(--muted); font-size: .9rem; }
+.az figure { margin: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+@media (max-width: 900px) { .az { grid-template-columns: 1fr; gap: 32px; } .az li { grid-template-columns: 1fr; gap: 2px; } }
+
+/* download desk */
+.desk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.dl { border: 1px solid var(--line); border-radius: 10px; padding: 24px; background: var(--panel); display: grid; gap: 12px; align-content: start; }
+.dl.rec { border-color: var(--accent); background: linear-gradient(180deg, rgba(30,155,240,.12), var(--panel) 60%); }
+.dl .file { font: 400 .8rem/1.4 var(--mono); color: var(--muted); word-break: break-all; }
+.dl p { color: var(--muted); font-size: .95rem; }
+.dl .btn { justify-self: start; margin-top: 6px; }
+.code { position: relative; background: #050a11; border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+.code pre { margin: 0; padding: 14px 16px; font: 400 .82rem/1.6 var(--mono); color: #cfe3f7; }
+.code button { position: absolute; top: 8px; right: 8px; font: 600 .72rem/1 var(--mono); padding: 6px 8px; border-radius: 4px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+.req { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--muted); font-size: .9rem; }
+.req b { color: var(--fg); font-weight: 600; }
+@media (max-width: 900px) { .desk { grid-template-columns: 1fr; } }
+
+footer { border-top: 1px solid var(--line); padding-block: 36px 48px; color: var(--muted); font-size: .88rem; }
+footer .wrap { display: grid; gap: 10px; }
+footer .row { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; }
+footer a { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) { .lamp { animation: none; } .btn { transition: none; } html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="img/icon.png" alt=""><span>Radio<b>Master</b></span></a>
+    <nav class="links" aria-label="Sections">
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#playlist">Playlist</a>
+      <a class="hide-sm" href="#azuracast">AzuraCast</a>
+      <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a class="btn primary small" href="#download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap hero">
+    <div>
+      <p class="eyebrow">Free radio automation for Windows</p>
+      <h1 style="margin-top:14px">Your studio.<br><span>Your control.</span></h1>
+      <p class="lede">RadioMaster runs your station from one screen: playlists with live start times, hour markers that keep you on the clock, smart crossfades, Icecast and Shoutcast streaming, and full AzuraCast station management.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/epell-development/RadioMaster/releases/latest">Download for Windows <small>Setup .exe</small></a>
+        <a class="btn ghost" href="https://github.com/epell-development/RadioMaster">View source</a>
+      </div>
+      <p class="fine">Windows 10 and 11 · 64-bit · MIT licensed · no account or subscription</p>
+    </div>
+
+    <div class="board" aria-label="Example of the RadioMaster on-air display">
+      <div class="board-row">
+        <div class="tile clock"><div class="k" id="b-date">Sat 17/10</div><div class="v" id="b-clock">12:00:00</div><div class="cd" id="b-cd" title="Time to the top of the hour">60:00</div></div>
+        <div class="tile last"><div class="k">Last track</div><div class="v" id="b-last">Night Drive — Coastline</div></div>
+        <div class="tile air"><div class="k"><i class="lamp"></i>On air</div><div class="v" id="b-air">Harbour Lights — Bloom</div></div>
+        <div class="tile next"><div class="k">Coming up</div><div class="v" id="b-next">Station ID</div></div>
+      </div>
+      <div class="deck">
+        <div class="elapsed" id="b-el">01:12<small id="b-rem">-02:31</small></div>
+        <div class="song"><div class="t" id="b-title">Bloom</div><div class="a" id="b-artist">Harbour Lights</div><div class="bar"><i id="b-bar"></i></div></div>
+        <div class="vu" aria-hidden="true"><div id="vu-l"></div><div id="vu-r"></div></div>
+      </div>
+      <div class="log" id="b-log" aria-label="Playlist">
+      </div>
+    </div>
+  </div>
+
+  <section class="block" id="features">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">What's on the desk</p>
+        <h2>Everything a live studio needs</h2>
+        <p class="lede">Built for stations that run around the clock and for presenters who jump in live.</p>
+      </div>
+      <div class="features">
+        <div class="feature"><span class="tag">Playlists</span><h3>As many as you need</h3><p>Playlist tabs side by side. The one marked ▶ is on air; play any row of another tab and it goes to air. Every row shows its projected start time.</p></div>
+        <div class="feature"><span class="tag">Timing</span><h3>Hour markers</h3><p>Wait for the top of the hour, finish the song and jump, or cut in exactly on time. The clock counts down to the next marker.</p></div>
+        <div class="feature"><span class="tag">Transitions</span><h3>Smart fading</h3><p>Each track is analysed: silence is trimmed, cold endings get a tight mix, fade-outs overlap. Fine-tune any song in the waveform track editor.</p></div>
+        <div class="feature"><span class="tag">Work zones</span><h3>Fill every screen</h3><p>One, two or three panels in the main window, plus as many Additional windows as you like for a second or third monitor.</p></div>
+        <div class="feature"><span class="tag">Streaming</span><h3>Icecast and Shoutcast</h3><p>Several encoders at once with automatic reconnect and track titles, plus multiple sound-card outputs for FM and monitors.</p></div>
+        <div class="feature"><span class="tag">On air</span><h3>Built for live shows</h3><p>Cart wall for jingles, microphone with music ducking, recorded voice tracks, a notepad for scripts, and a log of everything that played.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="playlist">
+    <div class="wrap rundown">
+      <div>
+        <div class="head">
+          <p class="eyebrow">Running order</p>
+          <h2>More than songs in a list</h2>
+          <p class="lede">The Playlist menu adds rows that do things. Put them anywhere in the running order and RadioMaster handles them when they come up.</p>
+        </div>
+        <div class="markers">
+          <div><b>Wait</b><span>Early? Hold silence until the marker time.</span></div>
+          <div><b>Soft</b><span>Late? Let the current song finish, then skip ahead to the marker.</span></div>
+          <div><b>Hard</b><span>Cut in exactly on time with a quick crossfade, for news and network joins.</span></div>
+        </div>
+      </div>
+      <div class="rundown-table">
+        <table>
+          <thead><tr><th>Item</th><th>What it does</th><th>Key</th></tr></thead>
+          <tbody>
+            <tr><td class="it">URL</td><td>Relays an internet stream for a set time or until Next</td><td class="k">Alt+U</td></tr>
+            <tr><td class="it">Line input</td><td>Puts the studio input or a remote feed to air</td><td class="k"></td></tr>
+            <tr><td class="it">Command</td><td><code>VOLUME 80</code>, <code>ENCODER START 1</code>, <code>PLAYLIST Evening</code>, <code>RUN</code> a program</td><td class="k">Alt+C</td></tr>
+            <tr><td class="it">Timed pause</td><td>Silence for an exact length</td><td class="k">Ctrl+P</td></tr>
+            <tr><td class="it">Teaser</td><td>Faded snippets of the next few songs</td><td class="k"></td></tr>
+            <tr><td class="it">Time announcement</td><td>Your recorded H00–H23 and M00–M59 files, or a speech voice reading "It's 4:15 PM"</td><td class="k"></td></tr>
+            <tr><td class="it">Container</td><td>Several files as one row, played in order or one at random</td><td class="k"></td></tr>
+            <tr><td class="it">Track list</td><td>One random song from a folder, skipping recent tracks and artists</td><td class="k"></td></tr>
+            <tr><td class="it">Voice track</td><td>Insert a recording or record one straight into the playlist</td><td class="k">Ctrl+R</td></tr>
+            <tr><td class="it">Comment</td><td>A note for the presenter; nothing plays</td><td class="k">Alt+W</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="screens">
+    <div class="wrap shots">
+      <div class="head" style="margin-bottom:12px">
+        <p class="eyebrow">Screens</p>
+        <h2>See it running</h2>
+      </div>
+      <figure class="shot-main" style="margin:0"><img id="shot" src="img/main.png" alt="RadioMaster main window with playlist, library and side panels" width="1280" height="780"></figure>
+      <p class="caption" id="shot-cap">The main window: playlist tabs with start times in the centre, library on the left, panels on the right.</p>
+      <div class="thumbs" role="group" aria-label="Choose a screenshot">
+        <button type="button" aria-pressed="true" data-src="img/main.png" data-cap="The main window: playlist tabs with start times in the centre, library on the left, panels on the right." data-alt="RadioMaster main window"><img src="img/main.png" alt="" loading="lazy"><span>Main window</span></button>
+        <button type="button" aria-pressed="false" data-src="img/playlist-menu.png" data-cap="The Playlist menu: files, streams, commands, pauses, teasers, time announcements, containers, voice tracks and more." data-alt="The Playlist menu open"><img src="img/playlist-menu.png" alt="" loading="lazy"><span>Playlist menu</span></button>
+        <button type="button" aria-pressed="false" data-src="img/hour-marker.png" data-cap="Waiting for the 2:00 hour marker. Rows that will be skipped are struck through and start times update live." data-alt="Playlist waiting for an hour marker"><img src="img/hour-marker.png" alt="" loading="lazy"><span>Hour markers</span></button>
+        <button type="button" aria-pressed="false" data-src="img/additional-window.png" data-cap="An Additional window beside the main window. Open as many as you like and move them to other screens." data-alt="Main window with an Additional window beside it"><img src="img/additional-window.png" alt="" loading="lazy"><span>Additional windows</span></button>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="azuracast">
+    <div class="wrap az">
+      <div>
+        <p class="eyebrow">AzuraCast</p>
+        <h2 style="margin-top:14px">Manage the station without leaving the studio</h2>
+        <p class="lede" style="margin-top:16px">Point RadioMaster at your AzuraCast server to see what's playing and who's listening. Add an API key and run the station from the same window.</p>
+        <ul>
+          <li><b>Services</b><span>Start, stop or restart AutoDJ and the broadcast server, skip songs, disconnect a live DJ</span></li>
+          <li><b>Queue</b><span>See what AutoDJ plays next and remove songs</span></li>
+          <li><b>Requests</b><span>Listener requests, cleared or added to your local playlist in one click</span></li>
+          <li><b>Media</b><span>Browse folders, upload files, queue a song next</span></li>
+          <li><b>Streamers</b><span>Add and edit DJ accounts, then fill an encoder with their login</span></li>
+          <li><b>Reports</b><span>Live listeners, song history and the station schedule</span></li>
+        </ul>
+        <p class="note">Optional. Without a server RadioMaster streams to any Icecast or Shoutcast host.</p>
+      </div>
+      <figure><img src="img/azuracast.png" alt="The AzuraCast station manager window" width="1280" height="780" loading="lazy"></figure>
+    </div>
+  </section>
+
+  <section class="block" id="download">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Download</p>
+        <h2>Get on air</h2>
+        <p class="lede">Free and open source. Pick the installer, or the portable zip if you'd rather keep everything in one folder.</p>
+      </div>
+      <div class="desk">
+        <div class="dl rec">
+          <h3>Installer</h3>
+          <p class="file">RadioMaster-Setup-&lt;version&gt;.exe</p>
+          <p>Start-menu and desktop shortcuts plus an uninstaller. Install for just you without an admin password, or for everyone on the PC.</p>
+          <a class="btn primary" href="https://github.com/epell-development/RadioMaster/releases/latest">Download installer</a>
+        </div>
+        <div class="dl">
+          <h3>Portable</h3>
+          <p class="file">RadioMaster-&lt;version&gt;-windows-x64.zip</p>
+          <p>Unzip anywhere, including a USB stick, and run RadioMaster.exe. Settings live in your AppData folder either way.</p>
+          <a class="btn ghost" href="https://github.com/epell-development/RadioMaster/releases/latest">Download zip</a>
+        </div>
+        <div class="dl">
+          <h3>From source</h3>
+          <p>Needs the Rust toolchain. Linux builds work too.</p>
+          <div class="code"><pre id="src-cmd">git clone https://github.com/epell-development/RadioMaster
+cd RadioMaster
+cargo run --release</pre><button type="button" id="copy">Copy</button></div>
+        </div>
+      </div>
+      <div class="req">
+        <span><b>Windows</b> 10 or 11, 64-bit</span>
+        <span><b>Web panels</b> use the Edge WebView2 runtime, already on most PCs</span>
+        <span><b>Streaming</b> Icecast 2, Shoutcast 2, AzuraCast</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="#top" style="font-size:1.2rem"><img src="img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS) or AzuraCast. Names are used only to describe compatibility.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var mmss = function (s) { s = Math.max(0, Math.floor(s)); return pad(Math.floor(s / 60)) + ':' + pad(s % 60); };
+  var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // example running order (demo content)
+  var rows = [
+    { t: 'Harbour Lights — Bloom', a: 'Harbour Lights', s: 'Bloom', d: 223 },
+    { t: 'Station ID', a: 'RadioMaster FM', s: 'Station ID', d: 9, kind: 'id' },
+    { t: 'Kelpie Club — Edge of Town', a: 'Kelpie Club', s: 'Edge of Town', d: 247 },
+    { t: 'Back after the news with your requests', d: 0, kind: 'cm' },
+    { t: 'Hour marker — wait', d: 0, kind: 'mk' },
+    { t: 'News on the hour', a: 'Newsroom', s: 'News on the hour', d: 180 },
+    { t: 'The Sundowners — Nice to Be Alive', a: 'The Sundowners', s: 'Nice to Be Alive', d: 201 }
+  ];
+  var cur = 0, pos = 72, last = 'Night Drive — Coastline';
+  var $ = function (id) { return document.getElementById(id); };
+
+  function buildVu(el) { for (var i = 0; i < 24; i++) { var s = document.createElement('span'); if (i >= 21) s.className = 'red'; else if (i >= 17) s.className = 'amb'; el.appendChild(s); } }
+  buildVu($('vu-l')); buildVu($('vu-r'));
+  var vuL = $('vu-l').children, vuR = $('vu-r').children;
+
+  function nextPlayable(i) { for (var j = i + 1; j < rows.length; j++) if (rows[j].d > 0) return j; return -1; }
+
+  function drawLog(now) {
+    var log = $('b-log'); log.innerHTML = '';
+    var t = new Date(now.getTime() - pos * 1000);
+    var top = new Date(now); top.setMinutes(0, 0, 0); top.setHours(top.getHours() + 1);
+    for (var i = cur; i < rows.length && i < cur + 5; i++) {
+      var r = rows[i], div = document.createElement('div');
+      var start = t;
+      if (r.kind === 'mk') { start = top; t = top; }
+      div.className = i === cur ? 'cur' : (r.kind === 'mk' ? 'mk' : (r.kind === 'cm' ? 'cm' : ''));
+      var name = r.kind === 'mk' ? 'Hour marker ' + pad(top.getHours()) + ':00 — wait' : r.t;
+      div.innerHTML = '<span class="n">' + (i === cur ? '▶' : i + 1) + '</span><span class="ttl"></span><span class="d">' + (r.d ? mmss(r.d) : '') + '</span><span class="s">' + pad(start.getHours()) + ':' + pad(start.getMinutes()) + ':' + pad(start.getSeconds()) + '</span>';
+      div.querySelector('.ttl').textContent = name;
+      log.appendChild(div);
+      t = new Date(t.getTime() + r.d * 1000);
+    }
+  }
+
+  function tick() {
+    var now = new Date();
+    $('b-date').textContent = days[now.getDay()] + ' ' + pad(now.getDate()) + '/' + pad(now.getMonth() + 1);
+    $('b-clock').textContent = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+    $('b-cd').textContent = mmss(3600 - (now.getMinutes() * 60 + now.getSeconds()));
+    var r = rows[cur];
+    if (pos >= r.d) {
+      last = r.t;
+      var n = nextPlayable(cur);
+      cur = n < 0 ? 0 : n; pos = 0; r = rows[cur];
+    }
+    var n2 = nextPlayable(cur);
+    $('b-last').textContent = last;
+    $('b-air').textContent = r.t;
+    $('b-next').textContent = n2 < 0 ? rows[0].t : rows[n2].t;
+    $('b-title').textContent = r.s || r.t; $('b-artist').textContent = r.a || '';
+    $('b-el').firstChild.nodeValue = mmss(pos);
+    $('b-rem').textContent = '-' + mmss(r.d - pos);
+    $('b-bar').style.width = (100 * pos / r.d).toFixed(1) + '%';
+    drawLog(now);
+    pos += 1;
+  }
+
+  function meters() {
+    var base = 15 + Math.random() * 4;
+    for (var k = 0; k < 2; k++) {
+      var lvl = Math.min(24, Math.round(base + (Math.random() - .5) * 5)), segs = k ? vuR : vuL;
+      for (var i = 0; i < 24; i++) segs[i].classList.toggle('on', i < lvl);
+    }
+  }
+
+  tick(); meters();
+  setInterval(tick, 1000);
+  if (!reduce) setInterval(meters, 110);
+
+  // screenshot switcher
+  var buttons = document.querySelectorAll('.thumbs button');
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      buttons.forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+      var img = $('shot'); img.src = b.dataset.src; img.alt = b.dataset.alt; $('shot-cap').textContent = b.dataset.cap;
+    });
+  });
+
+  // copy build commands
+  $('copy').addEventListener('click', function () {
+    var text = $('src-cmd').textContent, btn = this;
+    var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1600); };
+    var fallback = function () { var r = document.createRange(); r.selectNodeContents($('src-cmd')); var s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = 'Press Ctrl+C'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+  });
+})();
+</script>
+
+</body>
+</html>

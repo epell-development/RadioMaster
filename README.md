@@ -6,6 +6,7 @@
 Playlists, hour markers, smart crossfades, Icecast / Shoutcast streaming and AzuraCast station management in one studio app.</p>
 
 <p align="center">
+  <a href="https://epell-development.github.io/RadioMaster/">Website</a> ·
   <a href="../../releases/latest">Download</a> ·
   <a href="#playlists">Playlists</a> ·
   <a href="#work-zones">Work zones</a> ·
