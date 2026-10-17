@@ -34,6 +34,7 @@ Double-click **`run-windows.bat`** (or `cargo run --release` in this folder).
 **`build-installer.bat`** also makes `dist\RadioMaster-Setup-<version>.exe` (needs [Inno Setup 6](https://jrsoftware.org/isdl.php)).
 
 Linux: `sudo apt install build-essential libasound2-dev pkg-config`, then `cargo run --release`.
+macOS: install Rust, then `cargo run --release`.
 
 Settings, playlists, layout and `history.csv` live in `%APPDATA%\RadioMaster` (settings from an older
 OpenBoss install are copied across on first start). If the program ever crashes, the reason is in `crash.log` there.
@@ -56,6 +57,7 @@ OpenBoss install are copied across on first start). If the program ever crashes,
 | Add timed pause… (Ctrl+P) | silence for a set time |
 | Add teaser… | faded snippets of the next N tracks |
 | Add time announcement… | recordings H00…H23 / M00…M59 from a folder, otherwise the computer's speech voice reads your text (`{h12}:{mm} {ampm}`) |
+| Add text to speech… (Alt+T) | reads your text: {time}, {next}, {last}, {station}… |
 | Add comment… (Alt+W) | a note row; nothing plays |
 | Add container… | several files as one row: all in order, or one at random |
 | Insert voice track (Ctrl+W) / Record voice track (Ctrl+R) | recordings go to `voicetracks\` |
@@ -100,6 +102,22 @@ The **Song Requests** panel tab shows the same request list.
 Two-deck crossfading with smart fading and a waveform track editor (cues, fades, intro/outro), cart wall, mic with ducking,
 multiple outputs, 12-band EQ / compressor / leveling, ad scheduler, event scheduler, rotations, reports, metadata export,
 remote control HTTP API, station profiles, local operator accounts.
+
+## Plugins
+Small programs in any language that run when something happens on air, and can send commands back.
+See [PLUGINS.md](PLUGINS.md) and **Tools → Plugins**.
+
+## Translations
+Settings → General → Language. To translate RadioMaster, see [lang/README.md](lang/README.md).
+
+## Users and permissions
+File → Users: administrators can add operators and choose what each one may do — playback, editing
+playlists, tools, streaming, AzuraCast and settings — reset passwords, disable or delete accounts.
+
+## macOS and Linux
+Each release also has `RadioMaster-<version>-macos.zip` (RadioMaster.app; unsigned, so right-click → Open the
+first time) and `RadioMaster-<version>-linux-x64.tar.gz`. Embedded web panels are Windows-only for now; elsewhere
+they open in your browser.
 
 ## Contributing
 Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).

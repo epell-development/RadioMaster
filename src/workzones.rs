@@ -28,11 +28,13 @@ pub enum Tab {
     Log,
     SongRequests,
     AuxPlaylist,
+    TrackInfo,
 }
 impl Tab {
     /// Tabs that can go in a panel, in the order of the "+" menu.
-    pub const PANEL: [Tab; 16] = [
+    pub const PANEL: [Tab; 17] = [
         Tab::AuxPlaylist,
+        Tab::TrackInfo,
         Tab::Carts,
         Tab::Search,
         Tab::Scheduler,
@@ -74,6 +76,7 @@ impl Tab {
             Tab::Log => "Log",
             Tab::SongRequests => "Song Requests",
             Tab::AuxPlaylist => "AUX Playlist",
+            Tab::TrackInfo => "Track Info",
         }
     }
     /// Tools that live in their own window instead of a panel.
@@ -232,6 +235,8 @@ pub struct WorkzoneSet {
     pub aux: Vec<AuxWindow>,
     pub next_aux: u64,
     pub dark: bool,
+    /// the playlist scrolls along with the on-air track
+    pub follow: bool,
     pub scale: f32,
     /// Four user-defined web panels (name + address). Nothing is built in.
     pub web: Vec<WebSite>,
@@ -261,6 +266,7 @@ impl Default for WorkzoneSet {
             aux: vec![],
             next_aux: 1,
             dark: false,
+            follow: true,
             scale: 1.0,
             web: default_web(),
             zones: vec![],

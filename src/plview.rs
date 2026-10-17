@@ -5,6 +5,28 @@ use super::panes::{row_background, row_text_color};
 use super::*;
 use crate::items::{ItemKind, PlEntry};
 
+/// Playlist rows being dragged (from playlist `tab`).
+#[derive(Clone)]
+pub(super) struct DragRows {
+    pub tab: usize,
+    pub rows: BTreeSet<usize>,
+}
+
+/// Audio files being dragged from the library or the file explorer.
+#[derive(Clone)]
+pub(super) struct DragFiles(pub Vec<PathBuf>);
+
+/// Draw "what's being dragged" next to the pointer.
+pub(super) fn drag_label(ctx: &egui::Context, text: &str) {
+    if let Some(p) = ctx.pointer_interact_pos() {
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("drag_label")));
+        let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::proportional(13.0), Color32::WHITE);
+        let r = egui::Rect::from_min_size(p + egui::vec2(14.0, 8.0), galley.size() + egui::vec2(12.0, 6.0));
+        painter.rect_filled(r, 4.0, Color32::from_rgb(20, 120, 210));
+        painter.galley(r.min + egui::vec2(6.0, 3.0), galley, Color32::WHITE);
+    }
+}
+
 /// Changes to the playlist tab strip, applied after the view has been drawn.
 pub(super) enum TabOp {
     View(usize),
@@ -18,6 +40,10 @@ pub(super) enum TabOp {
     SaveM3u(usize),
     LoadM3u(usize),
     Rows(usize, Vec<PlEntry>),
+    /// rows dragged onto another playlist's tab: (from tab, rows, to tab)
+    MoveRows(usize, BTreeSet<usize>, usize),
+    /// rows of one playlist copied into another at a position: (from, rows, to, at)
+    CopyInto(usize, BTreeSet<usize>, usize, usize),
 }
 
 /// Small type icon for the "#" column.
@@ -35,6 +61,8 @@ pub(super) fn kind_icon(e: &PlEntry) -> &'static str {
         ItemKind::Container { .. } => "📦",
         ItemKind::TrackList { .. } => "🔀",
         ItemKind::HourMarker { .. } => "⏰",
+        ItemKind::HourInfo { .. } => "🕒",
+        ItemKind::Tts { .. } => "🔊",
     }
 }
 
@@ -133,6 +161,29 @@ impl App {
                     self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::LoadM3u));
                 }
                 TabOp::Rows(i, rows) => core.append_to_tab(i, rows),
+                TabOp::CopyInto(from, rows, to, at) => {
+                    let taken: Vec<PlEntry> = rows.iter().filter_map(|&i| core.tab_rows(from).get(i)).map(|e| e.fresh()).collect();
+                    let n = taken.len();
+                    core.with_tab(to, |c| c.insert_rows(at, taken));
+                    if to == self.view_pl {
+                        self.sel = (at..at + n).collect();
+                    }
+                }
+                TabOp::MoveRows(from, rows, to) => {
+                    if from != to && to < core.tabs.len() {
+                        let taken: Vec<PlEntry> = core.with_tab(from, |c| {
+                            let v = rows.iter().filter_map(|&i| c.playlist.get(i)).map(|e| e.fresh()).collect();
+                            c.remove(&rows);
+                            v
+                        });
+                        let n = taken.len();
+                        core.append_to_tab(to, taken);
+                        core.say(format!("{n} item(s) moved to {}", core.tabs[to].name));
+                        if from == self.view_pl {
+                            self.sel.clear();
+                        }
+                    }
+                }
             }
         }
     }
@@ -169,49 +220,66 @@ impl App {
                 if r.clicked() {
                     self.tab_ops.push(TabOp::View(i));
                 }
+                if let Some(d) = r.dnd_hover_payload::<DragRows>() {
+                    if d.tab != i {
+                        ui.painter().rect_stroke(r.rect.expand(2.0), 4.0, egui::Stroke::new(2.0_f32, ACCENT), egui::StrokeKind::Outside);
+                    }
+                }
+                if let Some(d) = r.dnd_release_payload::<DragRows>() {
+                    if d.tab != i {
+                        self.tab_ops.push(TabOp::MoveRows(d.tab, d.rows.clone(), i));
+                    }
+                }
+                if let Some(f) = r.dnd_release_payload::<DragFiles>() {
+                    let rows: Vec<PlEntry> = f.0.iter().map(|p| PlEntry::file(crate::library::Track::from_path(p))).collect();
+                    self.tab_ops.push(TabOp::Rows(i, rows));
+                }
+                if !self.perm.edit_playlists {
+                    continue;
+                }
                 if r.double_clicked() {
                     self.renaming = Some((i, name.clone()));
                 }
                 r.context_menu(|ui| {
-                    if ui.add_enabled(!live, egui::Button::new("▶ Put this playlist on air")).clicked() {
+                    if ui.add_enabled(!live, egui::Button::new(tr("▶ Put this playlist on air"))).clicked() {
                         self.tab_ops.push(TabOp::PlayTab(i));
                         self.tab_ops.push(TabOp::View(i));
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("✏ Rename…").clicked() {
+                    if ui.button(tr("✏ Rename…")).clicked() {
                         self.renaming = Some((i, name.clone()));
                         ui.close_menu();
                     }
-                    if ui.button("Duplicate").clicked() {
+                    if ui.button(tr("Duplicate")).clicked() {
                         self.tab_ops.push(TabOp::Duplicate(i));
                         ui.close_menu();
                     }
-                    if ui.button("💾 Save as M3U…").clicked() {
+                    if ui.button(tr("💾 Save as M3U…")).clicked() {
                         self.tab_ops.push(TabOp::SaveM3u(i));
                         ui.close_menu();
                     }
-                    if ui.button("📂 Load M3U into this tab…").clicked() {
+                    if ui.button(tr("📂 Load M3U into this tab…")).clicked() {
                         self.tab_ops.push(TabOp::LoadM3u(i));
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.add_enabled(i > 0, egui::Button::new("◀ Move left")).clicked() {
+                    if ui.add_enabled(i > 0, egui::Button::new(tr("◀ Move left"))).clicked() {
                         self.tab_ops.push(TabOp::MoveTab(i, i - 1));
                         ui.close_menu();
                     }
-                    if ui.add_enabled(i + 1 < n, egui::Button::new("Move right ▶")).clicked() {
+                    if ui.add_enabled(i + 1 < n, egui::Button::new(tr("Move right ▶"))).clicked() {
                         self.tab_ops.push(TabOp::MoveTab(i, i + 1));
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.add_enabled(!live, egui::Button::new("Clear")).clicked() {
+                    if ui.add_enabled(!live, egui::Button::new(tr("Clear"))).clicked() {
                         self.tab_ops.push(TabOp::Clear(i));
                         ui.close_menu();
                     }
                     if ui
-                        .add_enabled(!live && n > 1, egui::Button::new("✖ Close"))
-                        .on_disabled_hover_text("The playlist that is on air can't be closed")
+                        .add_enabled(!live && n > 1, egui::Button::new(tr("✖ Close")))
+                        .on_disabled_hover_text(tr("The playlist that is on air can't be closed"))
                         .clicked()
                     {
                         self.tab_ops.push(TabOp::Close(i));
@@ -219,7 +287,7 @@ impl App {
                     }
                 });
             }
-            if ui.small_button("➕").on_hover_text("New playlist").clicked() {
+            if self.perm.edit_playlists && ui.small_button("➕").on_hover_text(tr("New playlist")).clicked() {
                 self.tab_ops.push(TabOp::New);
             }
         });
@@ -228,7 +296,7 @@ impl App {
     fn playlist_view(&mut self, ctx: &egui::Context, core: &mut Playout, strip: &[(String, usize, f32)], on_air_tab: usize) {
         let viewing_on_air = self.view_pl == on_air_tab;
         if !ctx.wants_keyboard_input() {
-            if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !self.sel.is_empty() {
+            if self.perm.edit_playlists && ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !self.sel.is_empty() {
                 let s = std::mem::take(&mut self.sel);
                 core.remove(&s);
             }
@@ -240,13 +308,22 @@ impl App {
             self.playlist_tab_strip(ui, strip, on_air_tab);
             ui.horizontal_wrapped(|ui| {
                 if !viewing_on_air {
-                    ui.label(RichText::new("not on air").small().color(Color32::from_rgb(190, 120, 0)))
-                        .on_hover_text("Edit this playlist freely. Play any row (or right-click the tab) to put it on air.");
+                    ui.label(RichText::new(tr("not on air")).small().color(Color32::from_rgb(190, 120, 0)))
+                        .on_hover_text(tr("Edit this playlist freely. Play any row (or right-click the tab) to put it on air."));
                 }
                 ui.label(RichText::new(format!("{} items · {}", core.playlist.len(), fmt(core.total_secs()))).color(GRAY));
-                ui.checkbox(&mut core.cfg.loop_playlist, "Loop");
-                ui.checkbox(&mut core.cfg.auto_enabled, "Auto-playlist");
-                ui.checkbox(&mut core.cfg.random_fill, "Auto-fill from library");
+                ui.checkbox(&mut core.cfg.loop_playlist, tr("Loop"));
+                ui.checkbox(&mut core.cfg.auto_enabled, tr("Auto-playlist"));
+                ui.checkbox(&mut core.cfg.random_fill, tr("Auto-fill from library"));
+                ui.checkbox(&mut self.workzones.follow, tr("Follow"))
+                    .on_hover_text(tr("Keep the playing track near the top as songs finish (the last one played stays in view)"));
+                if ui
+                    .checkbox(&mut core.cfg.hour_lines, tr("Hour lines"))
+                    .on_hover_text(tr("Show a line where each new hour starts"))
+                    .changed()
+                {
+                    self.hour_check = None;
+                }
             });
 
             let starts = core.projected_starts(viewing_on_air);
@@ -259,7 +336,23 @@ impl App {
             let cur = core.current;
             let playing = core.state != PlayState::Stopped;
             let dark = self.workzones.dark;
-            let scroll_to = self.scroll_to.take();
+            let mut scroll_to = self.scroll_to.take().map(|r| (r, egui::Align::Center));
+            // follow the on-air track: when it changes, put the last played row at the top
+            let key = (view_tab, cur);
+            if viewing_on_air && self.workzones.follow && self.followed != Some(key) && cur.is_some() && scroll_to.is_none() {
+                scroll_to = cur.map(|c| (c.saturating_sub(1), egui::Align::TOP));
+            }
+            self.followed = Some(key);
+            let may_edit = self.perm.edit_playlists;
+            let may_play = self.perm.playback;
+            let dragging_rows = egui::DragAndDrop::payload::<DragRows>(ctx);
+            let dragging_files = egui::DragAndDrop::payload::<DragFiles>(ctx);
+            let mut drop_line: Option<f32> = None;
+            let mut drop_at: Option<usize> = None;
+            let mut drop_files: Option<(usize, Vec<PathBuf>)> = None;
+            let mut drop_rows: Option<(DragRows, usize)> = None;
+            let mut drag_start: Option<usize> = None;
+            let n_rows = core.playlist.len();
             let plays = &core.plays;
             let sel = &mut self.sel;
             let anchor = &mut self.anchor;
@@ -269,7 +362,7 @@ impl App {
                 .id_salt(("playlist_table", (avail_w / 24.0) as i32, wide, very_wide))
                 .striped(true)
                 .resizable(true)
-                .sense(egui::Sense::click())
+                .sense(egui::Sense::click_and_drag())
                 .column(Column::exact(52.0))
                 .column(Column::remainder().at_least(120.0).clip(true))
                 .column(Column::exact(64.0))
@@ -280,8 +373,8 @@ impl App {
             if very_wide {
                 tb = tb.column(Column::exact(90.0));
             }
-            if let Some(r) = scroll_to {
-                tb = tb.scroll_to_row(r, Some(egui::Align::Center));
+            if let Some((r, align)) = scroll_to {
+                tb = tb.scroll_to_row(r, Some(align));
             }
             tb.header(24.0, |mut h| {
                 let mut heads = vec!["#", "Track Title", "Duration", "Start time"];
@@ -293,7 +386,7 @@ impl App {
                 }
                 for t in heads {
                     h.col(|ui| {
-                        ui.strong(t);
+                        ui.strong(tr(t));
                     });
                 }
             })
@@ -363,6 +456,28 @@ impl App {
                         });
                     }
                     let resp = row.response();
+                    // drag rows to reorder them (or onto another playlist's tab)
+                    if resp.drag_started() && may_edit {
+                        drag_start = Some(i);
+                        if !sel.contains(&i) {
+                            sel.clear();
+                            sel.insert(i);
+                            *anchor = Some(i);
+                        }
+                        resp.dnd_set_drag_payload(DragRows { tab: view_tab, rows: sel.clone() });
+                    }
+                    if may_edit && (dragging_rows.is_some() || dragging_files.is_some()) && resp.contains_pointer() {
+                        let below = resp.hover_pos().or(resp.ctx.pointer_hover_pos()).is_some_and(|p| p.y > resp.rect.center().y);
+                        let at = if below { i + 1 } else { i };
+                        drop_at = Some(at);
+                        drop_line = Some(if below { resp.rect.bottom() } else { resp.rect.top() });
+                        if let Some(d) = resp.dnd_release_payload::<DragRows>() {
+                            drop_rows = Some(((*d).clone(), at));
+                        }
+                        if let Some(f) = resp.dnd_release_payload::<DragFiles>() {
+                            drop_files = Some((at, f.0.clone()));
+                        }
+                    }
                     if resp.clicked() {
                         if mods.shift && anchor.is_some() {
                             let a = anchor.unwrap();
@@ -383,34 +498,42 @@ impl App {
                         sel.clear();
                         sel.insert(i);
                     }
-                    if resp.double_clicked() {
+                    if resp.double_clicked() && may_play {
                         acts.push(PlAct::Play(i));
                     }
                     resp.context_menu(|ui| {
-                        if ui.button("▶ Play now").clicked() {
+                        if !may_edit {
+                            if may_play && ui.button(tr("▶ Play now")).clicked() {
+                                acts.push(PlAct::Play(i));
+                                ui.close_menu();
+                            }
+                            ui.label(RichText::new(tr("Your account can't change playlists")).small().color(GRAY));
+                            return;
+                        }
+                        if may_play && ui.button(tr("▶ Play now")).clicked() {
                             acts.push(PlAct::Play(i));
                             ui.close_menu();
                         }
                         if e.is_file() {
-                            if ui.button("✏ Track editor (tags, cues, fades)…").clicked() {
+                            if ui.button(tr("✏ Track editor (tags, cues, fades)…")).clicked() {
                                 acts.push(PlAct::Fade(i));
                                 ui.close_menu();
                             }
-                        } else if !matches!(e.kind, ItemKind::TimeAnnounce) && ui.button("✏ Edit…").clicked() {
+                        } else if !matches!(e.kind, ItemKind::TimeAnnounce) && ui.button(tr("✏ Edit…")).clicked() {
                             acts.push(PlAct::Edit(i));
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("⬆ Move up").clicked() {
+                        if ui.button(tr("⬆ Move up")).clicked() {
                             acts.push(PlAct::Up);
                             ui.close_menu();
                         }
-                        if ui.button("⬇ Move down").clicked() {
+                        if ui.button(tr("⬇ Move down")).clicked() {
                             acts.push(PlAct::Down);
                             ui.close_menu();
                         }
                         if strip.len() > 1 {
-                            ui.menu_button("Copy to playlist", |ui| {
+                            ui.menu_button(tr("Copy to playlist"), |ui| {
                                 for (t, (name, _, _)) in strip.iter().enumerate() {
                                     if t != view_tab && ui.button(name).clicked() {
                                         acts.push(PlAct::CopyTo(t));
@@ -418,7 +541,7 @@ impl App {
                                     }
                                 }
                             });
-                            ui.menu_button("Move to playlist", |ui| {
+                            ui.menu_button(tr("Move to playlist"), |ui| {
                                 for (t, (name, _, _)) in strip.iter().enumerate() {
                                     if t != view_tab && ui.button(name).clicked() {
                                         acts.push(PlAct::MoveTo(t));
@@ -427,18 +550,51 @@ impl App {
                                 }
                             });
                         }
-                        if e.is_file() && ui.button("☁ Upload to AzuraCast").clicked() {
+                        if e.is_file() && ui.button(tr("☁ Upload to AzuraCast")).clicked() {
                             acts.push(PlAct::Upload);
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("🗑 Remove").clicked() {
+                        if ui.button(tr("🗑 Remove")).clicked() {
                             acts.push(PlAct::Remove);
                             ui.close_menu();
                         }
                     });
                 });
             });
+
+            if let Some(y) = drop_line {
+                let r = ui.min_rect();
+                ui.painter().hline(r.x_range(), y, egui::Stroke::new(2.5_f32, ACCENT));
+            }
+            if let Some(d) = &dragging_rows {
+                let _ = drag_start;
+                drag_label(ctx, &format!("{} row(s)", d.rows.len()));
+            } else if let Some(f) = &dragging_files {
+                drag_label(ctx, &format!("+ {} file(s)", f.0.len()));
+            }
+            // released below the last row: drop at the end
+            if may_edit && drop_at.is_none() && ui.input(|i| i.pointer.any_released()) && ui.rect_contains_pointer(ui.max_rect()) {
+                if let Some(d) = egui::DragAndDrop::take_payload::<DragRows>(ctx) {
+                    drop_rows = Some(((*d).clone(), n_rows));
+                } else if let Some(f) = egui::DragAndDrop::take_payload::<DragFiles>(ctx) {
+                    drop_files = Some((n_rows, f.0.clone()));
+                }
+            }
+            if let Some((d, at)) = drop_rows {
+                if d.tab == view_tab {
+                    self.sel = core.move_rows(&d.rows, at);
+                } else {
+                    // rows from another playlist (e.g. an Additional window's AUX playlist): copied in
+                    self.tab_ops.push(TabOp::CopyInto(d.tab, d.rows.clone(), view_tab, at));
+                }
+            }
+            if let Some((at, files)) = drop_files {
+                let rows: Vec<PlEntry> = files.iter().map(|p| core.entry_for(p)).collect();
+                let n = rows.len();
+                core.insert_rows(at, rows);
+                self.sel = (at..at + n).collect();
+            }
 
             for a in acts {
                 match a {

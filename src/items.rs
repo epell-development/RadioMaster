@@ -32,6 +32,12 @@ pub enum ItemKind {
     TrackList { source: String },
     /// Syncs the playlist to the clock. `hard` = cut in exactly on time; `wait` = wait if early.
     HourMarker { hour: u32, minute: u32, hard: bool, wait: bool },
+    /// Shows where the next hour starts; does nothing on air. `auto` rows are placed (and moved)
+    /// by RadioMaster itself.
+    HourInfo { hour: u32, auto: bool },
+    /// Reads `text` with the computer's speech voice. `{time}`, `{next}`, `{last}` and friends are
+    /// filled in when it plays.
+    Tts { text: String, voice: String, rate: i32 },
 }
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
@@ -103,6 +109,14 @@ impl PlEntry {
             ItemKind::HourMarker { hour, minute, hard, .. } => {
                 format!("Hour Marker {hour}:{minute:02}{}", if *hard { " (hard)" } else { "" })
             }
+            ItemKind::HourInfo { hour, .. } => format!("{hour:02}:00 — new hour"),
+            ItemKind::Tts { text, .. } => {
+                if self.track.title.is_empty() {
+                    format!("Speak: {text}")
+                } else {
+                    self.track.title.clone()
+                }
+            }
         }
     }
 
@@ -121,6 +135,8 @@ impl PlEntry {
             ItemKind::Container { .. } => "Container",
             ItemKind::TrackList { .. } => "Track list",
             ItemKind::HourMarker { .. } => "Hour marker",
+            ItemKind::HourInfo { .. } => "Hour",
+            ItemKind::Tts { .. } => "Speech",
         }
     }
 
@@ -132,14 +148,17 @@ impl PlEntry {
             ItemKind::Pause(s) => *s,
             ItemKind::Teaser { count, secs } => *count as f32 * secs,
             ItemKind::TimeAnnounce => 4.0,
-            ItemKind::Command(_) | ItemKind::Comment(_) | ItemKind::HourMarker { .. } => 0.0,
+            ItemKind::Tts { text, rate, .. } => {
+                (text.split_whitespace().count() as f32 / (2.6 * (1.0 + *rate as f32 * 0.08)).max(0.8)).max(1.5)
+            }
+            ItemKind::Command(_) | ItemKind::Comment(_) | ItemKind::HourMarker { .. } | ItemKind::HourInfo { .. } => 0.0,
         }
     }
 
     /// Length as shown in the playlist.
     pub fn length_text(&self) -> String {
         match &self.kind {
-            ItemKind::Comment(_) | ItemKind::Command(_) | ItemKind::HourMarker { .. } => String::new(),
+            ItemKind::Comment(_) | ItemKind::Command(_) | ItemKind::HourMarker { .. } | ItemKind::HourInfo { .. } => String::new(),
             ItemKind::Url { secs, .. } | ItemKind::LineIn { secs } if *secs <= 0.0 => "live".into(),
             _ if self.est_secs() <= 0.0 => "—:—".into(),
             _ => mmss(self.est_secs()),

@@ -9,11 +9,13 @@ mod dsp;
 mod engine;
 mod fade;
 mod generator;
+mod i18n;
 mod items;
 mod library;
 mod live;
 mod mic;
 mod playout;
+mod plugins;
 mod remote;
 mod scheduler;
 mod stream;
@@ -42,6 +44,9 @@ fn main() -> eframe::Result<()> {
     }));
     let engine = engine::Engine::new_detached();
     let cfg = config::Config::load();
+    if let Err(e) = i18n::load(&cfg.language) {
+        eprintln!("language: {e}");
+    }
     engine.set_volume(cfg.volume);
     let remote = cfg.remote.clone();
     let core = Arc::new(Mutex::new(playout::Playout::new(engine, cfg)));

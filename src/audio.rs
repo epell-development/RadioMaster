@@ -122,6 +122,35 @@ pub struct PreviewSide {
 }
 
 impl PreviewPlayer {
+    /// Play any audio source (e.g. a speech preview) on the preview device.
+    pub fn play_pcm(device: &str, src: crate::engine::Pcm, label: &str) -> anyhow::Result<PreviewPlayer> {
+        let host = cpal::default_host();
+        let dev = if device.is_empty() {
+            host.default_output_device()
+        } else {
+            host.output_devices()
+                .ok()
+                .and_then(|mut it| it.find(|d| d.name().map(|n| n == device).unwrap_or(false)))
+                .or_else(|| host.default_output_device())
+        }
+        .ok_or_else(|| anyhow::anyhow!("no output device for preview"))?;
+        let (stream, handle) = OutputStream::try_from_device(&dev)?;
+        let engine = Engine::new_detached();
+        engine.set_volume(1.0);
+        handle.play_raw(engine.primary_source())?;
+        engine.play_source(src, None, 0.0, crate::engine::CueSpec::default(), Some(0.0), false);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (s2, e2) = (stop.clone(), engine.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            while !s2.load(Ordering::Relaxed) && e2.status().has_track {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            s2.store(true, Ordering::Relaxed);
+        });
+        Ok(PreviewPlayer { _stream: stream, stop, engine, label: label.to_string() })
+    }
+
     /// Play A from `from` seconds. If `b` is given, B comes in at A's mix point and plays for `tail`
     /// seconds; otherwise A plays to its cue out.
     pub fn start(device: &str, a: PreviewSide, b: Option<PreviewSide>, from: f32, tail: f32) -> anyhow::Result<PreviewPlayer> {

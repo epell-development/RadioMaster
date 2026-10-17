@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.2.3 — 2026-10-17
+**New**
+- Drag and drop in playlists: reorder rows, drop them on another playlist's tab, or drag songs in from
+  the Library and File Explorer
+- The playlist follows the on-air track (the last played song stays in view; you can still scroll up)
+- Hour lines: "08:00 — new hour" rows are placed automatically where each hour starts (Playlist → Hour lines),
+  plus information-only hour markers you can add yourself
+- New hour markers go where that time falls in the running order
+- Text to speech playlist rows with {next}, {last}, {time} and more; voice and speed; preview
+- Song-count rules for adverts and jingles: e.g. every 5 songs play 2 adverts — random, in order, or all,
+  from a folder or a hand-picked list
+- Stop jingles (Ctrl+J, Jingles menu, or click a playing pad); playing pads light up red
+- EQ: exact values under each slider, 10 built-in presets, save your own
+- Users and permissions: edit, disable or delete operators, reset passwords, and choose what each may do
+  (playback, playlists, tools, streaming, AzuraCast, settings)
+- About window with contributors and credits
+- Track Info panel tab: last / on air / next with details and your own notes about each song and artist
+- Track editor from the Library, stepping through the library list
+- Add AzuraCast media straight to the playlist (downloaded and cached)
+- Plugins: run your own scripts on events (song started, hour, encoder…) and let them send commands
+- Translations: every text can be translated (Settings → General → Language), template included
+- Many more keyboard shortcuts (Help → Keyboard shortcuts, Ctrl+/)
+- macOS build (RadioMaster.app) and Linux build on every release
+
+**Fixed**
+- Web panels: "WebView2 error: Access is denied (0x80070005)" when installed in Program Files
+- Streaming: "connection aborted (os error 10053)" — RadioMaster now logs in the classic Icecast way (SOURCE)
+  that AzuraCast DJ ports and Icecast both accept, falls back to PUT, explains early disconnects and
+  backs off between retries
+
+**Changed**
+- The remote control API's default port is now 9258
+- The program and installer are published by DovaFM Digital Entertainment Group
+- Less redrawing while idle
+
 ## v0.2.2 — 2026-10-17
 - Update checker: when a newer release is on GitHub, an "Update available" button appears next to the
   RadioMaster logo. Installed copies download the new setup and update themselves (RadioMaster closes,

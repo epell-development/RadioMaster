@@ -78,12 +78,20 @@ pub(super) struct AzTool {
     dj: Option<DjForm>,
     confirm: Option<(String, String, String)>, // (question, method, path)
     new_folder: String,
+    /// finished media downloads: (local file, insert after the selection?) or an error
+    dl_tx: mpsc::Sender<Result<(PathBuf, bool), String>>,
+    dl_rx: mpsc::Receiver<Result<(PathBuf, bool), String>>,
+    pub downloading: usize,
 }
 
 impl Default for AzTool {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
+        let (dl_tx, dl_rx) = mpsc::channel();
         AzTool {
+            dl_tx,
+            dl_rx,
+            downloading: 0,
             page: AzPage::Overview,
             data: HashMap::new(),
             fetched: HashMap::new(),
@@ -289,7 +297,7 @@ impl App {
         let mut refresh = false;
         ui.horizontal(|ui| {
             ui.strong(title);
-            if ui.small_button("⟳ Refresh").clicked() {
+            if ui.small_button(tr("⟳ Refresh")).clicked() {
                 refresh = true;
             }
             if self.az.loading(key) {
@@ -311,11 +319,13 @@ impl App {
         if core.cfg.azuracast.api_key.trim().is_empty() {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("This page needs an AzuraCast API key.").strong());
+                ui.label(RichText::new(tr("This page needs an AzuraCast API key.")).strong());
                 ui.label(
-                    RichText::new("In AzuraCast: your account (top right) → API Keys → Add API key. Paste it on the 🔑 Connection page.")
-                        .small()
-                        .color(GRAY),
+                    RichText::new(tr(
+                        "In AzuraCast: your account (top right) → API Keys → Add API key. Paste it on the 🔑 Connection page.",
+                    ))
+                    .small()
+                    .color(GRAY),
                 );
             });
             return true;
@@ -335,19 +345,19 @@ impl App {
             if let Some(n) = &np {
                 ui.label(RichText::new(&n.station.name).strong());
                 ui.label(if n.is_online {
-                    RichText::new("● online").color(GREEN).small()
+                    RichText::new(tr("● online")).color(GREEN).small()
                 } else {
-                    RichText::new("● offline").color(RED).small()
+                    RichText::new(tr("● offline")).color(RED).small()
                 });
                 ui.label(RichText::new(format!("👥 {}", n.listeners.current)).small());
             } else {
-                ui.label(RichText::new("AzuraCast").strong());
+                ui.label(RichText::new(tr("AzuraCast")).strong());
                 ui.label(RichText::new(if core.cfg.azuracast.enabled { "connecting…" } else { "not connected" }).small().color(GRAY));
             }
             ui.separator();
             for p in AzPage::ALL {
                 let enabled = configured || p == AzPage::Connection;
-                if ui.add_enabled(enabled, egui::SelectableLabel::new(self.az.page == p, p.label())).clicked() {
+                if ui.add_enabled(enabled, egui::SelectableLabel::new(self.az.page == p, tr(p.label()))).clicked() {
                     self.az.page = p;
                 }
             }
@@ -386,10 +396,10 @@ impl App {
             .show(ctx, |ui| {
                 ui.label(&q);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Yes").strong()).clicked() {
+                    if ui.button(RichText::new(tr("Yes")).strong()).clicked() {
                         answer = Some(true);
                     }
-                    if ui.button("No").clicked() {
+                    if ui.button(tr("No")).clicked() {
                         answer = Some(false);
                     }
                 });
@@ -432,8 +442,8 @@ impl App {
         let err = core.azura.lock().error.clone();
         if !core.cfg.azuracast.enabled {
             ui.horizontal(|ui| {
-                ui.label("Now-playing polling is off.");
-                if ui.button("Turn on").clicked() {
+                ui.label(tr("Now-playing polling is off."));
+                if ui.button(tr("Turn on")).clicked() {
                     core.cfg.azuracast.enabled = true;
                 }
             });
@@ -446,9 +456,9 @@ impl App {
                 ui.heading(&n.station.name);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(if n.is_online {
-                        RichText::new("● On air").color(GREEN).strong()
+                        RichText::new(tr("● On air")).color(GREEN).strong()
                     } else {
-                        RichText::new("● Offline").color(RED).strong()
+                        RichText::new(tr("● Offline")).color(RED).strong()
                     });
                     ui.separator();
                     ui.label(format!("👥 {} listening ({} unique)", n.listeners.current, n.listeners.unique));
@@ -459,7 +469,7 @@ impl App {
                 });
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("NOW PLAYING").small().color(GRAY));
+                    ui.label(RichText::new(tr("NOW PLAYING")).small().color(GRAY));
                     ui.label(
                         RichText::new(if n.now_playing.song.text.is_empty() {
                             format!("{} - {}", n.now_playing.song.artist, n.now_playing.song.title)
@@ -485,20 +495,20 @@ impl App {
                 });
                 if !n.station.listen_url.is_empty() {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Listen:").small().color(GRAY));
+                        ui.label(RichText::new(tr("Listen:")).small().color(GRAY));
                         ui.hyperlink(&n.station.listen_url);
                     });
                 }
             }
             None => {
-                ui.label(RichText::new("No now-playing data yet.").color(GRAY));
+                ui.label(RichText::new(tr("No now-playing data yet.")).color(GRAY));
             }
         }
         ui.add_space(8.0);
         ui.separator();
-        ui.strong("Station control");
+        ui.strong(tr("Station control"));
         if core.cfg.azuracast.api_key.trim().is_empty() {
-            ui.label(RichText::new("Add an API key on the Connection page to skip songs, restart services, manage queue, requests, playlists, media, DJs and listeners.").small().color(GRAY));
+            ui.label(RichText::new(tr("Add an API key on the Connection page to skip songs, restart services, manage queue, requests, playlists, media, DJs and listeners.")).small().color(GRAY));
             return;
         }
         self.az_auto(core, "status", 20);
@@ -517,8 +527,8 @@ impl App {
             {
                 ui.label(name);
                 ui.label(match running {
-                    Some(true) => RichText::new("● running").color(GREEN),
-                    Some(false) => RichText::new("● stopped").color(RED),
+                    Some(true) => RichText::new(tr("● running")).color(GREEN),
+                    Some(false) => RichText::new(tr("● stopped")).color(RED),
                     None => RichText::new("…").color(GRAY),
                 });
                 ui.horizontal(|ui| {
@@ -539,15 +549,15 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button("⏭ Skip song").clicked() {
+            if ui.button(tr("⏭ Skip song")).clicked() {
                 self.az_action(core, "Skip", "queue", "POST", "/station/{st}/backend/skip".into(), None);
             }
-            if ui.button("🔌 Disconnect live DJ").clicked() {
+            if ui.button(tr("🔌 Disconnect live DJ")).clicked() {
                 self.az_action(core, "Disconnect streamer", "status", "POST", "/station/{st}/backend/disconnect".into(), None);
             }
             if ui
                 .button("♻ Restart broadcasting")
-                .on_hover_text("Applies configuration changes; listeners are briefly disconnected")
+                .on_hover_text(tr("Applies configuration changes; listeners are briefly disconnected"))
                 .clicked()
             {
                 self.az_action(core, "Restart", "status", "POST", "/station/{st}/restart".into(), None);
@@ -567,13 +577,13 @@ impl App {
             _ => vec![],
         };
         if items.is_empty() && !self.az.loading("queue") {
-            ui.label(RichText::new("The queue is empty.").color(GRAY));
+            ui.label(RichText::new(tr("The queue is empty.")).color(GRAY));
         }
         let mut del = None;
         egui::Grid::new("az_queue").striped(true).num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
-            ui.strong("Cued");
-            ui.strong("Song");
-            ui.strong("From");
+            ui.strong(tr("Cued"));
+            ui.strong(tr("Song"));
+            ui.strong(tr("From"));
             ui.label("");
             ui.end_row();
             for it in &items {
@@ -581,7 +591,7 @@ impl App {
                 ui.label(song_text(it));
                 let from = if vb(it, "is_request") { "Request".to_string() } else { first(it, &["playlist", "playlist.name"]) };
                 ui.label(RichText::new(from).small().color(GRAY));
-                if ui.small_button("🗑").on_hover_text("Remove from queue").clicked() {
+                if ui.small_button("🗑").on_hover_text(tr("Remove from queue")).clicked() {
                     del = Some(vs(it, "id"));
                 }
                 ui.end_row();
@@ -596,8 +606,8 @@ impl App {
     /// Pending listener requests (also the Song Requests panel tab), plus "request a song".
     pub(super) fn az_requests_panel(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         if core.cfg.azuracast.base_url.trim().is_empty() || core.cfg.azuracast.station.trim().is_empty() {
-            ui.label(RichText::new("Song requests come from AzuraCast. Set it up in Tools → AzuraCast → Connection.").color(GRAY));
-            if ui.button("Open AzuraCast tool").clicked() {
+            ui.label(RichText::new(tr("Song requests come from AzuraCast. Set it up in Tools → AzuraCast → Connection.")).color(GRAY));
+            if ui.button(tr("Open AzuraCast tool")).clicked() {
                 self.az.page = AzPage::Connection;
                 self.open_tool(ToolWin::AzuraCast);
             }
@@ -616,7 +626,7 @@ impl App {
         let pending: Vec<&Value> = items.iter().filter(|r| vs(r, "played_at").is_empty() || vf(r, "played_at") == 0.0).collect();
         ui.horizontal(|ui| {
             ui.label(format!("{} pending", pending.len()));
-            if !pending.is_empty() && ui.small_button("Clear all pending").clicked() {
+            if !pending.is_empty() && ui.small_button(tr("Clear all pending")).clicked() {
                 self.az_action(core, "Clear requests", "requests", "POST", "/station/{st}/reports/requests/clear".into(), None);
             }
         });
@@ -627,10 +637,10 @@ impl App {
                 ui.label(when_any(r, &["timestamp", "submitted_at", "requested_at"]));
                 let text = song_text(r);
                 ui.label(&text);
-                if ui.small_button("➕").on_hover_text("Find this song in the local library and add it to the playlist").clicked() {
+                if ui.small_button("➕").on_hover_text(tr("Find this song in the local library and add it to the playlist")).clicked() {
                     add_local = Some(text.clone());
                 }
-                if ui.small_button("🗑").on_hover_text("Delete request").clicked() {
+                if ui.small_button("🗑").on_hover_text(tr("Delete request")).clicked() {
                     del = Some(vs(r, "id"));
                 }
                 ui.end_row();
@@ -661,8 +671,8 @@ impl App {
         ui.separator();
         ui.collapsing("Request a song on the station", |ui| {
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.az.req_filter).hint_text("search requestable songs").desired_width(220.0));
-                if ui.button("Load list").clicked() {
+                ui.add(egui::TextEdit::singleline(&mut self.az.req_filter).hint_text(tr("search requestable songs")).desired_width(220.0));
+                if ui.button(tr("Load list")).clicked() {
                     self.az_fetch(core, "requestable");
                 }
                 if self.az.loading("requestable") {
@@ -680,7 +690,7 @@ impl App {
             let mut req = None;
             for s in list.iter().filter(|s| f.is_empty() || song_text(s).to_lowercase().contains(&f)).take(100) {
                 ui.horizontal(|ui| {
-                    if ui.small_button("Request").clicked() {
+                    if ui.small_button(tr("Request")).clicked() {
                         req = Some((vs(s, "request_id"), song_text(s)));
                     }
                     ui.label(song_text(s));
@@ -706,13 +716,13 @@ impl App {
         let mut act: Option<(String, String, String)> = None;
         egui::Grid::new("az_pl").striped(true).num_columns(6).spacing([10.0, 4.0]).show(ui, |ui| {
             for h in ["On", "Name", "Type", "Songs", "Length", ""] {
-                ui.strong(h);
+                ui.strong(tr(h));
             }
             ui.end_row();
             for p in &items {
                 let id = vs(p, "id");
                 let mut on = vb(p, "is_enabled");
-                if ui.checkbox(&mut on, "").on_hover_text("Enable / disable").changed() {
+                if ui.checkbox(&mut on, "").on_hover_text(tr("Enable / disable")).changed() {
                     act = Some(("Toggle playlist".into(), "PUT".into(), format!("/station/{{st}}/playlist/{id}/toggle")));
                 }
                 ui.label(RichText::new(vs(p, "name")).strong());
@@ -720,10 +730,10 @@ impl App {
                 ui.label(vs(p, "num_songs"));
                 ui.label(fmt(vf(p, "total_length") as f32));
                 ui.horizontal(|ui| {
-                    if ui.small_button("🔀 Reshuffle").clicked() {
+                    if ui.small_button(tr("🔀 Reshuffle")).clicked() {
                         act = Some(("Reshuffle".into(), "PUT".into(), format!("/station/{{st}}/playlist/{id}/reshuffle")));
                     }
-                    if ui.small_button("Queue all").on_hover_text("Queue this playlist's songs to play next").clicked() {
+                    if ui.small_button(tr("Queue all")).on_hover_text(tr("Queue this playlist's songs to play next")).clicked() {
                         act = Some(("Queue playlist".into(), "PUT".into(), format!("/station/{{st}}/playlist/{id}/queue")));
                     }
                 });
@@ -746,7 +756,7 @@ impl App {
         }
         self.az_auto(core, "files", 120);
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.az.media_dir.is_empty(), egui::Button::new("⬆ Up")).clicked() {
+            if ui.add_enabled(!self.az.media_dir.is_empty(), egui::Button::new(tr("⬆ Up"))).clicked() {
                 let d = self.az.media_dir.trim_end_matches('/');
                 self.az.media_dir = d.rsplit_once('/').map(|(a, _)| a.to_string()).unwrap_or_default();
                 self.az_fetch(core, "files");
@@ -755,16 +765,16 @@ impl App {
         });
         self.az_head(ui, core, "files", "Station media");
         ui.horizontal_wrapped(|ui| {
-            if ui.button("☁ Upload files here…").clicked() {
+            if ui.button(tr("☁ Upload files here…")).clicked() {
                 self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AzUpload));
             }
-            ui.add(egui::TextEdit::singleline(&mut self.az.new_folder).hint_text("new folder name").desired_width(130.0));
-            if ui.add_enabled(!self.az.new_folder.trim().is_empty(), egui::Button::new("📁 Create folder")).clicked() {
+            ui.add(egui::TextEdit::singleline(&mut self.az.new_folder).hint_text(tr("new folder name")).desired_width(130.0));
+            if ui.add_enabled(!self.az.new_folder.trim().is_empty(), egui::Button::new(tr("📁 Create folder"))).clicked() {
                 let body = json!({"currentDirectory": self.az.media_dir, "name": self.az.new_folder.trim()});
                 self.az.new_folder.clear();
                 self.az_action(core, "Create folder", "files", "POST", "/station/{st}/files/mkdir".into(), Some(body));
             }
-            ui.add(egui::TextEdit::singleline(&mut self.az.media_filter).hint_text("filter").desired_width(130.0));
+            ui.add(egui::TextEdit::singleline(&mut self.az.media_filter).hint_text(tr("filter")).desired_width(130.0));
         });
         let items = match self.az.get("files") {
             Some(Ok(v)) => rows(v),
@@ -772,6 +782,7 @@ impl App {
         };
         let f = self.az.media_filter.to_lowercase();
         let mut open_dir = None;
+        let mut get: Option<(String, bool)> = None;
         let mut act: Option<(String, Value)> = None;
         let mut del = None;
         egui::Grid::new("az_files").striped(true).num_columns(4).spacing([10.0, 3.0]).show(ui, |ui| {
@@ -796,16 +807,39 @@ impl App {
                         .color(GRAY),
                 );
                 ui.horizontal(|ui| {
-                    if !is_dir && ui.small_button("Queue next").clicked() {
+                    if !is_dir
+                        && ui
+                            .small_button(tr("➕ Playlist"))
+                            .on_hover_text(tr("Download it and add it to the playlist you're viewing"))
+                            .clicked()
+                    {
+                        get = Some((path.clone(), false));
+                    }
+                    if !is_dir && ui.small_button(tr("Insert")).on_hover_text(tr("Download it and put it after the selected row")).clicked()
+                    {
+                        get = Some((path.clone(), true));
+                    }
+                    if !is_dir
+                        && ui.small_button(tr("Queue next")).on_hover_text(tr("AzuraCast plays it next on the station's AutoDJ")).clicked()
+                    {
                         act = Some(("Queue".into(), json!({"do": "queue", "files": [path.clone()], "dirs": []})));
                     }
-                    if ui.small_button("🗑").on_hover_text("Delete from the station").clicked() {
+                    if ui.small_button("🗑").on_hover_text(tr("Delete from the station")).clicked() {
                         del = Some((name.clone(), format!("{}{path}", if is_dir { "D:" } else { "F:" })));
                     }
                 });
                 ui.end_row();
             }
         });
+        if let Some((remote, after_sel)) = get {
+            self.az_download(core, remote, after_sel);
+        }
+        if self.az.downloading > 0 {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!("Downloading {} file(s) from the station…", self.az.downloading));
+            });
+        }
         if let Some(d) = open_dir {
             self.az.media_dir = d;
             self.az.media_filter.clear();
@@ -817,6 +851,44 @@ impl App {
         if let Some((name, path)) = del {
             // confirm: (question, file path, endpoint)
             self.az.confirm = Some((format!("Delete \"{name}\" from the station?"), path, "/station/{st}/files/batch".into()));
+        }
+    }
+
+    /// Fetch a station media file into the local cache, then add it to the playlist.
+    fn az_download(&mut self, core: &Playout, remote: String, after_sel: bool) {
+        let c = core.cfg.azuracast.clone();
+        let safe_station: String =
+            c.station.chars().map(|ch| if ch.is_alphanumeric() || ch == '_' || ch == '-' { ch } else { '_' }).collect();
+        let rel: PathBuf = remote.split('/').filter(|p| !p.is_empty() && *p != "..").collect();
+        let dest = data_dir().join("azuracast").join(safe_station).join(rel);
+        let (tx, ctx) = (self.az.dl_tx.clone(), self.ctx.clone());
+        self.az.downloading += 1;
+        thread::spawn(move || {
+            // already downloaded earlier: use the cached copy
+            let r = if dest.exists() { Ok(()) } else { Client::new(&c).download(&remote, &dest).map_err(|e| format!("{remote}: {e}")) };
+            let _ = tx.send(r.map(|_| (dest, after_sel)));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Add finished downloads to the playlist being viewed (called every frame).
+    pub(super) fn az_take_downloads(&mut self, core: &mut Playout) {
+        while let Ok(r) = self.az.dl_rx.try_recv() {
+            self.az.downloading = self.az.downloading.saturating_sub(1);
+            match r {
+                Ok((p, after_sel)) => {
+                    let e = core.entry_for(&p);
+                    let title = e.title();
+                    if after_sel {
+                        self.insert_rows_here(core, vec![e]);
+                    } else {
+                        let v = self.view_pl;
+                        core.with_tab(v, |c| c.insert_rows(usize::MAX, vec![e]));
+                    }
+                    self.az.msg = format!("Added {title}");
+                }
+                Err(e) => self.az.msg = format!("Download failed: {e}"),
+            }
         }
     }
 
@@ -847,7 +919,7 @@ impl App {
         }
         self.az_auto(core, "streamers", 120);
         self.az_head(ui, core, "streamers", "Streamer / DJ accounts");
-        if ui.button("➕ Add streamer").clicked() {
+        if ui.button(tr("➕ Add streamer")).clicked() {
             self.az.dj = Some(DjForm { is_active: true, ..Default::default() });
         }
         let items = match self.az.get("streamers") {
@@ -859,20 +931,20 @@ impl App {
         let mut use_for = None;
         egui::Grid::new("az_dj").striped(true).num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
             for h in ["Username", "Display name", "Active", ""] {
-                ui.strong(h);
+                ui.strong(tr(h));
             }
             ui.end_row();
             for d in &items {
                 ui.label(vs(d, "streamer_username"));
                 ui.label(vs(d, "display_name"));
-                ui.label(if vb(d, "is_active") { RichText::new("yes").color(GREEN) } else { RichText::new("no").color(GRAY) });
+                ui.label(if vb(d, "is_active") { RichText::new(tr("yes")).color(GREEN) } else { RichText::new(tr("no")).color(GRAY) });
                 ui.horizontal(|ui| {
-                    if ui.small_button("✏ Edit").clicked() {
+                    if ui.small_button(tr("✏ Edit")).clicked() {
                         edit = Some(d.clone());
                     }
                     if ui
                         .small_button("Use in encoder")
-                        .on_hover_text("Fill encoder 1 with this DJ's login (type the password there)")
+                        .on_hover_text(tr("Fill encoder 1 with this DJ's login (type the password there)"))
                         .clicked()
                     {
                         use_for = Some(vs(d, "streamer_username"));
@@ -910,7 +982,7 @@ impl App {
         }
         ui.add_space(6.0);
         ui.label(
-            RichText::new("DJs connect to the station's DJ port (usually 8005) with these logins — RadioMaster's encoders can too.")
+            RichText::new(tr("DJs connect to the station's DJ port (usually 8005) with these logins — RadioMaster's encoders can too."))
                 .small()
                 .color(GRAY),
         );
@@ -926,10 +998,10 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 egui::Grid::new("dj_form").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.label("Username");
+                    ui.label(tr("Username"));
                     ui.add(egui::TextEdit::singleline(&mut f.username).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Password");
+                    ui.label(tr("Password"));
                     ui.add(
                         egui::TextEdit::singleline(&mut f.password)
                             .password(true)
@@ -937,27 +1009,27 @@ impl App {
                             .desired_width(220.0),
                     );
                     ui.end_row();
-                    ui.label("Display name");
+                    ui.label(tr("Display name"));
                     ui.add(egui::TextEdit::singleline(&mut f.display_name).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Comments");
+                    ui.label(tr("Comments"));
                     ui.add(egui::TextEdit::singleline(&mut f.comments).desired_width(220.0));
                     ui.end_row();
                     ui.label("");
-                    ui.checkbox(&mut f.is_active, "Account is active");
+                    ui.checkbox(&mut f.is_active, tr("Account is active"));
                     ui.end_row();
                     ui.label("");
-                    ui.checkbox(&mut f.enforce_schedule, "Only allow during scheduled times");
+                    ui.checkbox(&mut f.enforce_schedule, tr("Only allow during scheduled times"));
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {
                     save = ui
                         .add_enabled(
                             !f.username.trim().is_empty() && (f.id.is_some() || !f.password.is_empty()),
-                            egui::Button::new(RichText::new("Save").strong()),
+                            egui::Button::new(RichText::new(tr("Save")).strong()),
                         )
                         .clicked();
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr("Cancel")).clicked() {
                         keep = false;
                     }
                 });
@@ -998,7 +1070,7 @@ impl App {
         ui.label(format!("{} connected", items.len()));
         egui::Grid::new("az_lis").striped(true).num_columns(5).spacing([10.0, 3.0]).show(ui, |ui| {
             for h in ["IP", "Location", "Time", "Mount", "Player"] {
-                ui.strong(h);
+                ui.strong(tr(h));
             }
             ui.end_row();
             for l in &items {
@@ -1019,9 +1091,9 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
-            ui.label("Day");
+            ui.label(tr("Day"));
             let r = ui.add(egui::TextEdit::singleline(&mut self.az.history_date).desired_width(100.0));
-            if r.lost_focus() || ui.button("Show").clicked() {
+            if r.lost_focus() || ui.button(tr("Show")).clicked() {
                 self.az_fetch(core, "history");
             }
         });
@@ -1033,7 +1105,7 @@ impl App {
         };
         egui::Grid::new("az_hist").striped(true).num_columns(4).spacing([10.0, 3.0]).show(ui, |ui| {
             for h in ["Played", "Song", "Source", "Listeners"] {
-                ui.strong(h);
+                ui.strong(tr(h));
             }
             ui.end_row();
             for h in &items {
@@ -1064,7 +1136,7 @@ impl App {
             _ => vec![],
         };
         if items.is_empty() && !self.az.loading("schedule") {
-            ui.label(RichText::new("Nothing scheduled.").color(GRAY));
+            ui.label(RichText::new(tr("Nothing scheduled.")).color(GRAY));
         }
         for s in &items {
             ui.horizontal(|ui| {
@@ -1076,7 +1148,7 @@ impl App {
                 ui.label(RichText::new(first(s, &["title", "name"])).strong().color(if now { GREEN } else { ui.visuals().text_color() }));
                 ui.label(RichText::new(vs(s, "type")).small().color(GRAY));
                 if now {
-                    ui.label(RichText::new("NOW").small().strong().color(GREEN));
+                    ui.label(RichText::new(tr("NOW")).small().strong().color(GREEN));
                 }
             });
         }
@@ -1084,15 +1156,15 @@ impl App {
 
     // ----------------------------------------------------------- connection
     fn az_connection(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        ui.label(RichText::new("The AzuraCast tool is optional. Now-playing info only needs the address and station; managing the station needs an API key.").small().color(GRAY));
+        ui.label(RichText::new(tr("The AzuraCast tool is optional. Now-playing info only needs the address and station; managing the station needs an API key.")).small().color(GRAY));
         ui.add_space(4.0);
         self.tab_azuracast(ui, core);
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Find stations on this server").clicked() {
+            if ui.button(tr("Find stations on this server")).clicked() {
                 self.az_fetch(core, "stations");
             }
-            if ui.button("Test API key").clicked() {
+            if ui.button(tr("Test API key")).clicked() {
                 self.az_action(core, "API key test", "status", "GET", "/station/{st}/status".into(), None);
             }
         });
@@ -1102,7 +1174,7 @@ impl App {
                     let mut pick = None;
                     for s in rows(&v) {
                         ui.horizontal(|ui| {
-                            if ui.small_button("Use").clicked() {
+                            if ui.small_button(tr("Use")).clicked() {
                                 pick = Some(vs(&s, "shortcode"));
                             }
                             ui.label(format!("{}  ({}, id {})", vs(&s, "name"), vs(&s, "shortcode"), vs(&s, "id")));

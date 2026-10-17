@@ -3,7 +3,7 @@
 ; Output: dist\RadioMaster-Setup-<version>.exe
 
 #ifndef AppVersion
-  #define AppVersion "0.2.2"
+  #define AppVersion "0.2.3"
 #endif
 
 #define AppName "RadioMaster"
@@ -14,7 +14,11 @@ AppId={{6D7DB8E2-88CE-4D8E-B734-1FBC3A2350FB}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher=RadioMaster contributors
+AppPublisher=DovaFM Digital Entertainment Group
+AppPublisherURL=https://deg.dovafm.com
+AppSupportURL=https://github.com/epell-development/RadioMaster/issues
+AppUpdatesURL=https://github.com/epell-development/RadioMaster/releases
+VersionInfoCompany=DovaFM Digital Entertainment Group
 AppComments=Radio automation for Icecast, Shoutcast and AzuraCast
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
@@ -50,6 +54,8 @@ Source: "..\target\release\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\PLUGINS.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\lang\*.json"; DestDir: "{app}\lang"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

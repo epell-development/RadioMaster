@@ -519,7 +519,30 @@ impl Engine {
         let mut s = self.shared.lock();
         let slot = s.carts.iter().position(|c| c.src.is_none()).unwrap_or(0);
         s.carts[slot] = Deck::new(src, dur, 1.0);
+        s.carts[slot].path = Some(path.to_path_buf());
         Ok(())
+    }
+
+    /// Fade out jingles: all of them, or only the ones playing `path`. Returns how many were playing.
+    pub fn stop_carts(&self, path: Option<&Path>, fade_secs: f32) -> usize {
+        let mut s = self.shared.lock();
+        let mut n = 0;
+        for c in s.carts.iter_mut() {
+            if c.src.is_some() && !c.fading_out && path.is_none_or(|p| c.path.as_deref() == Some(p)) {
+                n += 1;
+                if fade_secs > 0.0 {
+                    c.fade_to(0.0, fade_secs);
+                } else {
+                    *c = Deck::default();
+                }
+            }
+        }
+        n
+    }
+
+    /// Files of the jingles playing right now.
+    pub fn carts_playing(&self) -> Vec<PathBuf> {
+        self.shared.lock().carts.iter().filter(|c| c.src.is_some() && !c.fading_out).filter_map(|c| c.path.clone()).collect()
     }
 
     pub fn set_dsp(&self, c: &DspConfig) {

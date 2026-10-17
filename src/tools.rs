@@ -16,10 +16,11 @@ pub(super) enum ToolWin {
     Reports,
     History,
     Notepad,
+    Plugins,
 }
 
 impl ToolWin {
-    pub(super) const ALL: [ToolWin; 9] = [
+    pub(super) const ALL: [ToolWin; 10] = [
         ToolWin::FadeEditor,
         ToolWin::Generator,
         ToolWin::Ads,
@@ -29,7 +30,19 @@ impl ToolWin {
         ToolWin::Reports,
         ToolWin::History,
         ToolWin::Notepad,
+        ToolWin::Plugins,
     ];
+    /// Whether an operator with these permissions may open this tool.
+    pub(super) fn allowed(self, p: &crate::auth::Perms) -> bool {
+        match self {
+            ToolWin::FadeEditor | ToolWin::Generator | ToolWin::Ads => p.tools,
+            ToolWin::Streams => p.streaming,
+            ToolWin::AzuraCast => p.azuracast,
+            ToolWin::AudioFx | ToolWin::Plugins => p.settings,
+            ToolWin::Reports | ToolWin::History | ToolWin::Notepad => true,
+        }
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             ToolWin::FadeEditor => "Track editor",
@@ -41,6 +54,7 @@ impl ToolWin {
             ToolWin::Reports => "Reports",
             ToolWin::History => "Play history",
             ToolWin::Notepad => "Notepad",
+            ToolWin::Plugins => "Plugins",
         }
     }
     pub(super) fn icon(self) -> &'static str {
@@ -54,6 +68,7 @@ impl ToolWin {
             ToolWin::Reports => "📊",
             ToolWin::History => "📜",
             ToolWin::Notepad => "📝",
+            ToolWin::Plugins => "🔌",
         }
     }
     fn size(self) -> [f32; 2] {
@@ -61,12 +76,13 @@ impl ToolWin {
             ToolWin::FadeEditor => [1060.0, 620.0],
             ToolWin::Generator => [820.0, 560.0],
             ToolWin::Ads => [860.0, 440.0],
-            ToolWin::AudioFx => [720.0, 520.0],
+            ToolWin::AudioFx => [760.0, 560.0],
             ToolWin::Streams => [820.0, 520.0],
             ToolWin::AzuraCast => [900.0, 560.0],
             ToolWin::Reports => [760.0, 480.0],
             ToolWin::History => [560.0, 480.0],
             ToolWin::Notepad => [560.0, 460.0],
+            ToolWin::Plugins => [720.0, 520.0],
         }
     }
 }
@@ -75,7 +91,8 @@ impl ToolWin {
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum EditSrc {
     Playlist(usize),
-    Library,
+    /// a library track (its index in the library), stepping through the library list on screen
+    Library(Option<usize>),
 }
 
 /// Working state of the track editor (tags + cue points + fades).
@@ -205,11 +222,19 @@ impl App {
     }
 
     pub(super) fn open_tool(&mut self, w: ToolWin) {
-        self.tool_open.insert(w);
+        if w.allowed(&self.perm) {
+            self.tool_open.insert(w);
+        } else {
+            *self.notify.lock() = format!("Your account isn't allowed to use {}", w.label());
+        }
     }
 
     /// Open the track editor for a playlist row (or the selected / on-air track).
     pub(super) fn open_fade_editor(&mut self, core: &mut Playout, row: Option<usize>) {
+        if !self.perm.tools {
+            core.say("Your account isn't allowed to use the track editor");
+            return;
+        }
         let idx = row.or_else(|| self.sel.iter().next().copied()).or(core.current).unwrap_or(0);
         let Some(entry) = core.playlist.get(idx) else {
             core.say("Add a track to the playlist first, then open the track editor on it");
@@ -222,8 +247,14 @@ impl App {
     }
 
     /// Open the track editor for a track that isn't (necessarily) in the playlist.
-    pub(super) fn open_track_editor_for(&mut self, core: &mut Playout, t: Track) {
-        self.load_track_editor(core, EditSrc::Library, t, None);
+    pub(super) fn open_track_editor_for(&mut self, core: &mut Playout, t: Track, lib_index: Option<usize>) {
+        // the next track in the library list (for the transition preview)
+        let next = lib_index
+            .and_then(|li| self.lib_filtered.iter().position(|&x| x == li))
+            .and_then(|p| self.lib_filtered.get(p + 1))
+            .and_then(|&j| core.library.get(j))
+            .map(|n| (n.path.clone(), n.label(), n.duration));
+        self.load_track_editor(core, EditSrc::Library(lib_index), t, next);
     }
 
     fn load_track_editor(&mut self, core: &mut Playout, src: EditSrc, t: Track, next: Option<(PathBuf, String, f32)>) {
@@ -278,6 +309,9 @@ impl App {
         if self.preview.as_ref().is_some_and(|p| p.finished()) {
             self.preview = None;
         }
+        // a tool the operator may not use (e.g. after signing in as someone else) closes
+        let perm = self.perm;
+        self.tool_open.retain(|w| w.allowed(&perm));
         for w in ToolWin::ALL {
             if !self.tool_open.contains(&w) {
                 continue;
@@ -306,6 +340,7 @@ impl App {
                         ToolWin::AudioFx => self.tab_dsp(ui, core),
                         ToolWin::Streams => self.tab_streaming(ui, core),
                         ToolWin::Notepad => self.tab_segment(ui, core),
+                        ToolWin::Plugins => self.tab_plugins(ui, core),
                         ToolWin::AzuraCast => {}
                         ToolWin::Reports => self.tab_reports(ui, core),
                         ToolWin::History => self.tab_history(ui, core),
@@ -327,38 +362,38 @@ impl App {
     pub(super) fn smart_fade_settings(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let before = core.cfg.fade.clone();
         ui.horizontal(|ui| {
-            ui.label("Transitions");
-            ui.selectable_value(&mut core.cfg.fade.mode, FadeMode::Smart, "Smart fading");
-            ui.selectable_value(&mut core.cfg.fade.mode, FadeMode::Fixed, "Fixed crossfade");
+            ui.label(tr("Transitions"));
+            ui.selectable_value(&mut core.cfg.fade.mode, FadeMode::Smart, tr("Smart fading"));
+            ui.selectable_value(&mut core.cfg.fade.mode, FadeMode::Fixed, tr("Fixed crossfade"));
         });
         match core.cfg.fade.mode {
             FadeMode::Smart => {
-                ui.small("Each track is analysed: silence is skipped, cold endings get almost no overlap, and songs that fade out let the next one start as the outro dies away. Cues you set in the track editor always win.");
+                ui.small(tr("Each track is analysed: silence is skipped, cold endings get almost no overlap, and songs that fade out let the next one start as the outro dies away. Cues you set in the track editor always win."));
                 let f = &mut core.cfg.fade;
                 egui::Grid::new("smartfade").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                    ui.label("Outro ends when it drops");
+                    ui.label(tr("Outro ends when it drops"));
                     ui.add(egui::Slider::new(&mut f.drop_db, 4.0..=30.0).suffix(" dB below the song"));
                     ui.end_row();
-                    ui.label("Longest overlap");
+                    ui.label(tr("Longest overlap"));
                     ui.add(egui::Slider::new(&mut f.max_overlap, 0.5..=20.0).suffix(" s"));
                     ui.end_row();
-                    ui.label("Overlap on cold endings");
+                    ui.label(tr("Overlap on cold endings"));
                     ui.add(egui::Slider::new(&mut f.hard_overlap, 0.0..=2.0).suffix(" s"));
                     ui.end_row();
-                    ui.label("Fade on cold endings");
+                    ui.label(tr("Fade on cold endings"));
                     ui.add(egui::Slider::new(&mut f.hard_fade, 0.05..=2.0).suffix(" s"));
                     ui.end_row();
-                    ui.label("Silence below");
+                    ui.label(tr("Silence below"));
                     ui.add(egui::Slider::new(&mut f.silence_db, -80.0..=-20.0).suffix(" dBFS"));
                     ui.end_row();
                 });
-                if ui.button("Reset smart settings").clicked() {
+                if ui.button(tr("Reset smart settings")).clicked() {
                     core.cfg.fade = crate::fade::SmartFadeConfig::default();
                 }
             }
             FadeMode::Fixed => {
                 ui.add(egui::Slider::new(&mut core.cfg.crossfade_secs, 0.0..=15.0).text("Crossfade seconds"));
-                ui.small("Every track overlaps the next by this much. Tracks with cues set in the track editor still use their own.");
+                ui.small(tr("Every track overlaps the next by this much. Tracks with cues set in the track editor still use their own."));
             }
         }
         if core.cfg.fade != before {
@@ -370,12 +405,12 @@ impl App {
         let Some(mut fe) = self.fade_edit.take() else {
             ui.add_space(30.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Select a track in the playlist, then:").color(GRAY));
-                if ui.button("Edit selected track").clicked() {
+                ui.label(RichText::new(tr("Select a track in the playlist, then:")).color(GRAY));
+                if ui.button(tr("Edit selected track")).clicked() {
                     let row = self.sel.iter().next().copied();
                     self.open_fade_editor(core, row);
                 }
-                ui.label(RichText::new("…or right-click a playlist row → Track editor.").color(GRAY));
+                ui.label(RichText::new(tr("…or right-click a playlist row → Track editor.")).color(GRAY));
             });
             return;
         };
@@ -424,30 +459,30 @@ impl App {
         // ================= footer: prev / next / OK / cancel / apply
         egui::TopBottomPanel::bottom("te_footer").exact_height(40.0).show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                let in_pl = matches!(fe.src, EditSrc::Playlist(_));
-                if ui.add_enabled(in_pl, egui::Button::new("◀ Prev (PgUp)")).clicked() {
+                let in_pl = matches!(fe.src, EditSrc::Playlist(_) | EditSrc::Library(Some(_)));
+                if ui.add_enabled(in_pl, egui::Button::new(tr("◀ Prev (PgUp)"))).clicked() {
                     nav = Some(-1);
                 }
-                if ui.add_enabled(in_pl, egui::Button::new("Next (PgDn) ▶")).clicked() {
+                if ui.add_enabled(in_pl, egui::Button::new(tr("Next (PgDn) ▶"))).clicked() {
                     nav = Some(1);
                 }
                 if !fe.msg.is_empty() && fe.msg != "\u{0}close" {
                     ui.label(RichText::new(&fe.msg).small().color(GRAY));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr("Cancel")).clicked() {
                         close = true;
                     }
-                    if ui.button("Apply").clicked() {
+                    if ui.button(tr("Apply")).clicked() {
                         fe.msg = if Self::apply_track_edit(&mut fe, core) { "Saved".into() } else { "Nothing to save".into() };
                     }
-                    if ui.button(RichText::new("  OK  ").strong()).clicked() {
+                    if ui.button(RichText::new(tr("  OK  ")).strong()).clicked() {
                         Self::apply_track_edit(&mut fe, core);
                         close = true;
                     }
                     let dirty = fe.edited || fe.tags_edited;
                     if dirty {
-                        ui.label(RichText::new("● unsaved").small().color(Color32::from_rgb(210, 130, 0)));
+                        ui.label(RichText::new(tr("● unsaved")).small().color(Color32::from_rgb(210, 130, 0)));
                     }
                 });
             });
@@ -466,7 +501,7 @@ impl App {
                 field(ui, "Album", &mut fe.tags.album);
                 field(ui, "Year", &mut fe.tags.year);
                 field(ui, "Genre", &mut fe.tags.genre);
-                ui.label(RichText::new("Comment").small().color(GRAY));
+                ui.label(RichText::new(tr("Comment")).small().color(GRAY));
                 ch |= ui.add(egui::TextEdit::multiline(&mut fe.tags.comment).desired_rows(3).desired_width(f32::INFINITY)).changed();
                 if ch {
                     fe.tags_edited = true;
@@ -499,20 +534,20 @@ impl App {
                 ui.label(RichText::new(badge).small().color(col));
                 if wave.is_none() {
                     ui.spinner();
-                    ui.label(RichText::new("analysing…").small().color(GRAY));
+                    ui.label(RichText::new(tr("analysing…")).small().color(GRAY));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Mix").on_hover_text("Zoom on the hand-over to the next track").clicked() {
+                    if ui.small_button(tr("Mix")).on_hover_text(tr("Zoom on the hand-over to the next track")).clicked() {
                         let m = fe.cues.mix;
                         fe.view = ((m - 12.0).max(0.0), (m + 10.0).min(fe.duration.max(m + 1.0)));
                     }
-                    if ui.small_button("End").clicked() {
+                    if ui.small_button(tr("End")).clicked() {
                         fe.view = ((fe.duration - 30.0).max(0.0), fe.duration);
                     }
-                    if ui.small_button("Start").clicked() {
+                    if ui.small_button(tr("Start")).clicked() {
                         fe.view = (0.0, 30.0f32.min(fe.duration));
                     }
-                    if ui.small_button("Whole").clicked() {
+                    if ui.small_button(tr("Whole")).clicked() {
                         fe.view = (0.0, fe.duration);
                     }
                 });
@@ -761,7 +796,7 @@ impl App {
             // ------------------------------------------------ transport
             ui.horizontal(|ui| {
                 if self.preview.is_some() {
-                    if ui.button("⏹ Stop (F12)").clicked() {
+                    if ui.button(tr("⏹ Stop (F12)")).clicked() {
                         self.preview = None;
                     }
                 } else {
@@ -779,8 +814,8 @@ impl App {
                         }
                     }
                     if ui
-                        .add_enabled(has_next, egui::Button::new("▶ Preview mix"))
-                        .on_hover_text("Last 6 s of this track into the next one, with the fades as set")
+                        .add_enabled(has_next, egui::Button::new(tr("▶ Preview mix")))
+                        .on_hover_text(tr("Last 6 s of this track into the next one, with the fades as set"))
                         .clicked()
                     {
                         let a = PreviewSide { path: fe.path.clone(), duration: fe.duration, cues: fe.cues };
@@ -830,11 +865,11 @@ impl App {
                             }
                             changed = true;
                         }
-                        if ui.small_button("Set").on_hover_text("Set to the playhead / cursor position").clicked() {
+                        if ui.small_button(tr("Set")).on_hover_text(tr("Set to the playhead / cursor position")).clicked() {
                             set_mark(&mut cc, i, set_from, d);
                             changed = true;
                         }
-                        if (i == 5 || i == 6) && ui.small_button("✖").on_hover_text("Clear").clicked() {
+                        if (i == 5 || i == 6) && ui.small_button("✖").on_hover_text(tr("Clear")).clicked() {
                             if i == 5 {
                                 cc.intro = 0.0
                             } else {
@@ -854,13 +889,13 @@ impl App {
             }
 
             ui.horizontal_wrapped(|ui| {
-                ui.label("Playback level");
+                ui.label(tr("Playback level"));
                 if ui.add(egui::Slider::new(&mut fe.cues.gain_db, -12.0..=12.0).suffix(" dB").fixed_decimals(1)).changed() {
                     fe.edited = true;
                 }
                 if ui
-                    .add_enabled(wave.is_some(), egui::Button::new("Detect"))
-                    .on_hover_text("Level the track to a common loudness")
+                    .add_enabled(wave.is_some(), egui::Button::new(tr("Detect")))
+                    .on_hover_text(tr("Level the track to a common loudness"))
                     .clicked()
                 {
                     if let Some(w) = &wave {
@@ -869,11 +904,11 @@ impl App {
                     }
                 }
                 ui.separator();
-                ui.label("BPM");
+                ui.label(tr("BPM"));
                 if ui.add(egui::DragValue::new(&mut fe.cues.bpm).range(0.0..=300.0).fixed_decimals(1)).changed() {
                     fe.edited = true;
                 }
-                if ui.add_enabled(wave.is_some(), egui::Button::new("Detect")).clicked() {
+                if ui.add_enabled(wave.is_some(), egui::Button::new(tr("Detect"))).clicked() {
                     if let Some(b) = wave.as_deref().and_then(detect_bpm) {
                         fe.cues.bpm = b;
                         fe.edited = true;
@@ -883,8 +918,8 @@ impl App {
                 }
                 ui.separator();
                 if ui
-                    .add_enabled(wave.is_some(), egui::Button::new("✨ Smart cues"))
-                    .on_hover_text("Work out START / END / MIX / FADE automatically")
+                    .add_enabled(wave.is_some(), egui::Button::new(tr("✨ Smart cues")))
+                    .on_hover_text(tr("Work out START / END / MIX / FADE automatically"))
                     .clicked()
                 {
                     if let Some(w) = &wave {
@@ -898,7 +933,7 @@ impl App {
                         fe.edited = true;
                     }
                 }
-                if ui.button("↺ Automatic").on_hover_text("Forget the hand-set cues for this track").clicked() {
+                if ui.button(tr("↺ Automatic")).on_hover_text(tr("Forget the hand-set cues for this track")).clicked() {
                     core.clear_manual_cues(&fe.path);
                     core.save_all();
                     fe.edited = false;
@@ -916,6 +951,22 @@ impl App {
         });
 
         // ================= navigation / close
+        if let (Some(dir), EditSrc::Library(Some(li))) = (nav, fe.src) {
+            // step through the library list as it is shown (search filter included)
+            Self::apply_track_edit(&mut fe, core);
+            if let Some(p) = self.lib_filtered.iter().position(|&x| x == li) {
+                let j = p as i64 + dir;
+                if j >= 0 && (j as usize) < self.lib_filtered.len() {
+                    let lj = self.lib_filtered[j as usize];
+                    if let Some(t) = core.library.get(lj).cloned() {
+                        self.fade_edit = None;
+                        self.lib_sel = Some(lj);
+                        self.open_track_editor_for(core, t, Some(lj));
+                        return;
+                    }
+                }
+            }
+        }
         if let Some(dir) = nav {
             if let EditSrc::Playlist(i) = fe.src {
                 Self::apply_track_edit(&mut fe, core);

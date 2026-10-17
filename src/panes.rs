@@ -19,7 +19,7 @@ impl App {
     pub(super) fn tab_name(&self, tab: Tab) -> String {
         match tab.web_index().and_then(|i| self.workzones.web.get(i)) {
             Some(w) => format!("🌐 {}", w.name),
-            None => tab.label().to_string(),
+            None => tr(tab.label()).to_string(),
         }
     }
 
@@ -45,7 +45,7 @@ impl App {
                 }
             })
             .response
-            .on_hover_text("Add a tab to this panel");
+            .on_hover_text(tr("Add a tab to this panel"));
             egui::ScrollArea::horizontal().id_salt(("pane_tabs", pane.key())).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for (i, tab) in pt.tabs.iter().copied().enumerate() {
@@ -60,12 +60,12 @@ impl App {
                                     ui.close_menu();
                                 }
                             }
-                            if ui.button("Move to a new Additional window").clicked() {
+                            if ui.button(tr("Move to a new Additional window")).clicked() {
                                 new_window = Some(i);
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("Close tab").clicked() {
+                            if ui.button(tr("Close tab")).clicked() {
                                 close = Some(i);
                                 ui.close_menu();
                             }
@@ -119,14 +119,15 @@ impl App {
                     Tab::FileExplorer => self.tab_file_explorer(ui, pane, core),
                     Tab::Log => self.tab_log(ui, core),
                     Tab::SongRequests => self.tab_song_requests(ui, core),
+                    Tab::TrackInfo => self.tab_track_info(ui, core),
                     _ => {}
                 });
             }
             None => {
                 ui.vertical_centered(|ui| {
                     ui.add_space(28.0);
-                    ui.label(RichText::new("No tabs in this panel").color(GRAY));
-                    ui.label("Click ➕ to add a tab.");
+                    ui.label(RichText::new(tr("No tabs in this panel")).color(GRAY));
+                    ui.label(tr("Click ➕ to add a tab."));
                 });
             }
         }
@@ -279,25 +280,25 @@ impl App {
         let mut navigate = false;
         let mut open_ext = false;
         ui.horizontal(|ui| {
-            if ui.small_button("◀").on_hover_text("Back").clicked() {
+            if ui.small_button("◀").on_hover_text(tr("Back")).clicked() {
                 self.browsers.back(&key);
             }
-            if ui.small_button("▶").on_hover_text("Forward").clicked() {
+            if ui.small_button("▶").on_hover_text(tr("Forward")).clicked() {
                 self.browsers.forward(&key);
             }
-            if ui.small_button("⟳").on_hover_text("Reload").clicked() {
+            if ui.small_button("⟳").on_hover_text(tr("Reload")).clicked() {
                 self.browsers.reload(&key);
             }
-            if ui.small_button("⌂").on_hover_text("Home").clicked() {
+            if ui.small_button("⌂").on_hover_text(tr("Home")).clicked() {
                 if let Some(st) = self.web_state.get_mut(&key) {
                     st.entry = default.clone();
                 }
                 navigate = true;
             }
-            if ui.small_button("Go").clicked() {
+            if ui.small_button(tr("Go")).clicked() {
                 navigate = true;
             }
-            if ui.small_button("↗").on_hover_text("Open in your browser").clicked() {
+            if ui.small_button("↗").on_hover_text(tr("Open in your browser")).clicked() {
                 open_ext = true;
             }
         });
@@ -324,21 +325,21 @@ impl App {
         }
         ui.horizontal(|ui| {
             if let Some(w) = tab.web_index().and_then(|i| self.workzones.web.get_mut(i)) {
-                ui.label(RichText::new("Name").small().color(GRAY));
-                ui.add(egui::TextEdit::singleline(&mut w.name).desired_width(110.0)).on_hover_text("Name shown on this tab");
+                ui.label(RichText::new(tr("Name")).small().color(GRAY));
+                ui.add(egui::TextEdit::singleline(&mut w.name).desired_width(110.0)).on_hover_text(tr("Name shown on this tab"));
             }
         });
         if target.trim().is_empty() {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("No web address set for this panel.").color(GRAY));
-                ui.label(RichText::new("Type one above (https://…) and press Enter.").small().color(GRAY));
+                ui.label(RichText::new(tr("No web address set for this panel.")).color(GRAY));
+                ui.label(RichText::new(tr("Type one above (https://…) and press Enter.")).small().color(GRAY));
             });
             return;
         }
         if let Some(err) = self.browsers.error(&key) {
             ui.colored_label(AMBER, format!("Web page can't be shown here: {err}"));
-            if ui.button("Open page in your browser ↗").clicked() {
+            if ui.button(tr("Open page in your browser ↗")).clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab(target));
             }
             return;
@@ -348,6 +349,103 @@ impl App {
         // the native web view is positioned over this rectangle once the frame is laid out
         let ppp = ui.ctx().pixels_per_point();
         self.browsers.mark(&key, &window, rect.intersect(ui.clip_rect()), ppp, &target);
+    }
+
+    // ---------------------------------------------------------- track info
+    /// Last / on air / next with their details, plus notes the presenter keeps about each song and artist.
+    fn tab_track_info(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        let cur = core.current;
+        let st = core.status.clone();
+        let last =
+            cur.and_then(|c| core.playlist[..c.min(core.playlist.len())].iter().rev().find(|e| e.is_file())).map(|e| e.track.clone());
+        let now = core.on_air.clone().filter(|_| st.has_track);
+        let from = cur.map(|c| c + 1).unwrap_or(0);
+        let next = core.playlist.iter().skip(from).find(|e| e.is_file()).map(|e| e.track.clone());
+        let mut which = self.info_pick;
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut which, 0, tr("◀ Last"));
+            ui.selectable_value(&mut which, 1, RichText::new(tr("● On air")).strong());
+            ui.selectable_value(&mut which, 2, tr("Next ▶"));
+        });
+        self.info_pick = which;
+        ui.separator();
+        let t = match which {
+            0 => last,
+            2 => next,
+            _ => now,
+        };
+        let Some(t) = t else {
+            ui.label(RichText::new(["Nothing has played yet.", "Nothing is on air.", "Nothing is coming up."][which.min(2)]).color(GRAY));
+            return;
+        };
+        ui.horizontal(|ui| {
+            if which == 1 {
+                self.album_art(ui, Some(t.path.as_path()), 84.0);
+            }
+            ui.vertical(|ui| {
+                ui.label(RichText::new(if t.title.is_empty() { t.label() } else { t.title.clone() }).size(18.0).strong());
+                if !t.artist.is_empty() {
+                    ui.label(RichText::new(&t.artist).size(15.0));
+                }
+                let mut bits = vec![];
+                if !t.album.is_empty() {
+                    bits.push(t.album.clone());
+                }
+                if !t.year.is_empty() {
+                    bits.push(t.year.clone());
+                }
+                if !t.genre.is_empty() {
+                    bits.push(t.genre.clone());
+                }
+                bits.push(fmt(t.duration));
+                ui.label(RichText::new(bits.join(" · ")).color(GRAY));
+                if which == 1 && st.total > 0.0 {
+                    ui.add(
+                        egui::ProgressBar::new((st.pos / st.total).clamp(0.0, 1.0))
+                            .desired_width(180.0)
+                            .text(format!("{} left", fmt(st.total - st.pos))),
+                    );
+                }
+            });
+        });
+        if !t.comment.trim().is_empty() {
+            ui.label(RichText::new(format!("Tag comment: {}", t.comment.trim())).small().color(GRAY));
+        }
+        if let Some(n) = core.plays.get(&t.path).and_then(|&ts| chrono::DateTime::from_timestamp(ts, 0)) {
+            ui.label(RichText::new(format!("Last played {}", n.with_timezone(&Local).format("%a %d %b %H:%M"))).small().color(GRAY));
+        }
+        ui.add_space(6.0);
+        let song_key = t.path.to_string_lossy().to_string();
+        let artist_key = t.artist.trim().to_lowercase();
+        ui.strong(tr("About this song"));
+        let w = ui.available_width().clamp(160.0, 640.0) - 8.0;
+        let song = self.notes.songs.entry(song_key.clone()).or_default();
+        if ui
+            .add(
+                egui::TextEdit::multiline(song).desired_rows(3).desired_width(w).hint_text(tr("Talking points, chart facts, dedications…")),
+            )
+            .changed()
+        {
+            self.notes_dirty = true;
+        }
+        if !artist_key.is_empty() {
+            ui.strong(format!("About {}", t.artist.trim()));
+            let a = self.notes.artists.entry(artist_key.clone()).or_default();
+            if ui
+                .add(egui::TextEdit::multiline(a).desired_rows(3).desired_width(w).hint_text(tr("Shared by every song by this artist")))
+                .changed()
+            {
+                self.notes_dirty = true;
+            }
+        }
+        ui.label(RichText::new(t.path.display().to_string()).small().color(GRAY));
+        // don't keep empty notes around
+        if self.notes.songs.get(&song_key).is_some_and(|v| v.is_empty()) {
+            self.notes.songs.remove(&song_key);
+        }
+        if self.notes.artists.get(&artist_key).is_some_and(|v| v.is_empty()) {
+            self.notes.artists.remove(&artist_key);
+        }
     }
 
     // ------------------------------------------------------- file explorer
@@ -365,7 +463,7 @@ impl App {
         let dir = self.fx_dir.entry(key.clone()).or_insert_with(start).clone();
         let mut go: Option<PathBuf> = None;
         ui.horizontal_wrapped(|ui| {
-            if ui.small_button("⬆").on_hover_text("Up one folder").clicked() {
+            if ui.small_button("⬆").on_hover_text(tr("Up one folder")).clicked() {
                 if let Some(p) = dir.parent() {
                     go = Some(p.to_path_buf());
                 }
@@ -375,7 +473,7 @@ impl App {
                     go = Some(root.clone());
                 }
             }
-            if ui.small_button("Add folder to playlist").clicked() {
+            if ui.small_button(tr("Add folder to playlist")).clicked() {
                 let p = dir.clone();
                 core.with_tab(self.view_pl, |c| c.add_paths(vec![p]));
             }
@@ -400,7 +498,12 @@ impl App {
         let mut add: Vec<PathBuf> = vec![];
         for (is_dir, p) in entries.iter().take(2000) {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let r = ui.selectable_label(false, if *is_dir { format!("📁 {name}") } else { format!("🎵 {name}") });
+            let r =
+                ui.selectable_label(false, if *is_dir { format!("📁 {name}") } else { format!("🎵 {name}") }).interact(egui::Sense::drag());
+            if r.drag_started() {
+                let files = if *is_dir { crate::library::audio_files_in(p) } else { vec![p.clone()] };
+                r.dnd_set_drag_payload(super::plview::DragFiles(files));
+            }
             if r.double_clicked() {
                 if *is_dir {
                     go = Some(p.clone());
@@ -409,11 +512,11 @@ impl App {
                 }
             }
             r.context_menu(|ui| {
-                if ui.button("Add to playlist").clicked() {
+                if ui.button(tr("Add to playlist")).clicked() {
                     add.push(p.clone());
                     ui.close_menu();
                 }
-                if !*is_dir && ui.button("Insert after selected row").clicked() {
+                if !*is_dir && ui.button(tr("Insert after selected row")).clicked() {
                     let at = self.insert_pos(core);
                     let rows: Vec<PlEntry> = vec![core.entry_for(p)];
                     core.with_tab(self.view_pl, |c| c.insert_rows(at, rows));
@@ -422,7 +525,7 @@ impl App {
             });
         }
         if entries.is_empty() {
-            ui.label(RichText::new("No folders or audio files here.").color(GRAY));
+            ui.label(RichText::new(tr("No folders or audio files here.")).color(GRAY));
         }
         if !add.is_empty() {
             core.with_tab(self.view_pl, |c| c.add_paths(add));
@@ -430,14 +533,14 @@ impl App {
         if let Some(p) = go {
             self.fx_dir.insert(key, p);
         }
-        ui.small("Double-click a folder to open it, or a file to add it to the playlist you're viewing.");
+        ui.small(tr("Double-click a folder to open it, or a file to add it to the playlist you're viewing."));
     }
 
     // ------------------------------------------------------------------ log
     fn tab_log(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal(|ui| {
-            ui.strong("LOG");
-            if ui.small_button("Clear").clicked() {
+            ui.strong(tr("LOG"));
+            if ui.small_button(tr("Clear")).clicked() {
                 core.log.clear();
             }
         });
@@ -450,7 +553,7 @@ impl App {
             }
         });
         if core.log.is_empty() {
-            ui.label(RichText::new("Nothing logged yet.").color(GRAY));
+            ui.label(RichText::new(tr("Nothing logged yet.")).color(GRAY));
         }
     }
 
@@ -499,7 +602,7 @@ impl App {
             .header(20.0, |mut h| {
                 for t in ["#", "Title", "Length", "Start"] {
                     h.col(|ui| {
-                        ui.strong(t);
+                        ui.strong(tr(t));
                     });
                 }
             })
@@ -541,11 +644,11 @@ impl App {
                         play = Some(i);
                     }
                     r.context_menu(|ui| {
-                        if ui.button("▶ Play now").clicked() {
+                        if ui.button(tr("▶ Play now")).clicked() {
                             play = Some(i);
                             ui.close_menu();
                         }
-                        if ui.button("🗑 Remove").clicked() {
+                        if ui.button(tr("🗑 Remove")).clicked() {
                             sel.clear();
                             sel.insert(i);
                             remove = true;
@@ -571,6 +674,9 @@ pub(super) fn ui_dark(w: &WorkzoneSet) -> bool {
 
 /// Text colour of a playlist row.
 pub(super) fn row_text_color(e: &PlEntry, is_cur: bool, skipped: bool, dark: bool) -> Color32 {
+    if matches!(e.kind, ItemKind::HourInfo { .. }) {
+        return if dark { Color32::from_rgb(255, 150, 200) } else { Color32::from_rgb(170, 30, 110) };
+    }
     let normal = if dark { Color32::from_gray(225) } else { Color32::from_rgb(28, 34, 46) };
     if is_cur {
         return if dark { Color32::from_rgb(110, 230, 130) } else { Color32::from_rgb(15, 120, 40) };
@@ -612,6 +718,9 @@ pub(super) fn row_background(ui: &mut egui::Ui, e: &PlEntry, is_cur: bool) {
             }
             ItemKind::Comment(_) => {
                 Some(if dark { Color32::from_rgba_unmultiplied(200, 170, 40, 50) } else { Color32::from_rgb(255, 248, 205) })
+            }
+            ItemKind::HourInfo { .. } => {
+                Some(if dark { Color32::from_rgba_unmultiplied(220, 80, 160, 40) } else { Color32::from_rgb(252, 232, 244) })
             }
             ItemKind::Track | ItemKind::VoiceTrack => None,
             _ => Some(if dark { Color32::from_rgba_unmultiplied(70, 120, 200, 45) } else { Color32::from_rgb(226, 238, 252) }),

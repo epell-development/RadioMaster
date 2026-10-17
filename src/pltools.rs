@@ -18,6 +18,7 @@ pub(super) enum DlgKind {
     Container,
     TrackList,
     HourMarker,
+    Tts,
 }
 
 impl DlgKind {
@@ -33,6 +34,7 @@ impl DlgKind {
             DlgKind::Container => "Add container",
             DlgKind::TrackList => "Add Track List",
             DlgKind::HourMarker => "Add hour marker",
+            DlgKind::Tts => "Add text to speech",
         }
     }
 }
@@ -54,6 +56,10 @@ pub(super) struct ItemDlg {
     pub wait: bool,
     pub items: Vec<PathBuf>,
     pub random: bool,
+    /// hour marker that only shows where the hour starts
+    pub info: bool,
+    pub voice: String,
+    pub rate: i32,
     pub err: String,
 }
 
@@ -101,6 +107,9 @@ impl App {
             wait: true,
             items: vec![],
             random: false,
+            info: false,
+            voice: String::new(),
+            rate: 0,
             err: String::new(),
         }
     }
@@ -166,6 +175,16 @@ impl App {
             ItemKind::HourMarker { hour, minute, hard, wait } => {
                 let mut d = self.new_item_dlg(DlgKind::HourMarker);
                 (d.hour, d.minute, d.hard, d.wait) = (*hour, *minute, *hard, *wait);
+                d
+            }
+            ItemKind::HourInfo { hour, .. } => {
+                let mut d = self.new_item_dlg(DlgKind::HourMarker);
+                (d.hour, d.minute, d.info) = (*hour, 0, true);
+                d
+            }
+            ItemKind::Tts { text, voice, rate } => {
+                let mut d = self.new_item_dlg(DlgKind::Tts);
+                (d.text, d.voice, d.rate) = (text.clone(), voice.clone(), *rate);
                 d
             }
             ItemKind::TimeAnnounce => self.new_item_dlg(DlgKind::TimeAnnounce),
@@ -241,11 +260,21 @@ impl App {
                 let avg = if sample.is_empty() { 210.0 } else { sample.iter().sum::<f32>() / sample.len() as f32 };
                 PlEntry::special(ItemKind::TrackList { source: src.to_string() }, title, avg)
             }
+            DlgKind::HourMarker if d.info => PlEntry::special(ItemKind::HourInfo { hour: d.hour.min(23), auto: false }, title, 0.0),
             DlgKind::HourMarker => PlEntry::special(
                 ItemKind::HourMarker { hour: d.hour.min(23), minute: d.minute.min(59), hard: d.hard, wait: d.wait },
                 title,
                 0.0,
             ),
+            DlgKind::Tts => {
+                if d.text.trim().is_empty() {
+                    return Err("Type what should be said".into());
+                }
+                let e =
+                    PlEntry::special(ItemKind::Tts { text: d.text.trim().to_string(), voice: d.voice.clone(), rate: d.rate }, title, 0.0);
+                let secs = e.est_secs();
+                PlEntry { track: crate::library::Track { duration: secs, ..e.track }, ..e }
+            }
         })
     }
 
@@ -267,100 +296,100 @@ impl App {
         Self::window_for(ctx, &title, [460.0, 300.0]).id(egui::Id::new("item_dlg")).collapsible(false).open(&mut open).show(ctx, |ui| {
             egui::Grid::new("item_dlg_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                 let name_row = |ui: &mut egui::Ui, d: &mut ItemDlg, hint: &str| {
-                    ui.label("Name");
+                    ui.label(tr("Name"));
                     ui.add(egui::TextEdit::singleline(&mut d.title).hint_text(hint).desired_width(300.0));
                     ui.end_row();
                 };
                 match d.kind {
                     DlgKind::Url => {
-                        ui.label("Stream address");
-                        ui.add(egui::TextEdit::singleline(&mut d.text).hint_text("https://radio.example.com/live.mp3").desired_width(300.0));
+                        ui.label(tr("Stream address"));
+                        ui.add(egui::TextEdit::singleline(&mut d.text).hint_text(tr("https://radio.example.com/live.mp3")).desired_width(300.0));
                         ui.end_row();
                         name_row(ui, &mut d, "shown in the playlist (optional)");
-                        ui.label("Play for");
+                        ui.label(tr("Play for"));
                         Self::mins_secs(ui, &mut d, "until the stream ends / Next");
                         ui.end_row();
                     }
                     DlgKind::LineIn => {
-                        ui.label("Input");
+                        ui.label(tr("Input"));
                         let dev = core.cfg.audio_devices.input.clone();
                         ui.label(if dev.is_empty() { "System default input (Settings → Audio devices)".to_string() } else { dev });
                         ui.end_row();
-                        ui.label("Play for");
+                        ui.label(tr("Play for"));
                         Self::mins_secs(ui, &mut d, "until Next is pressed");
                         ui.end_row();
                         name_row(ui, &mut d, "e.g. Studio 2 live");
                     }
                     DlgKind::Command => {
-                        ui.label("Command");
-                        ui.add(egui::TextEdit::singleline(&mut d.text).hint_text("STOP").desired_width(300.0));
+                        ui.label(tr("Command"));
+                        ui.add(egui::TextEdit::singleline(&mut d.text).hint_text(tr("STOP")).desired_width(300.0));
                         ui.end_row();
                         ui.label("");
                         ui.label(RichText::new(COMMAND_HELP).small().color(GRAY));
                         ui.end_row();
                     }
                     DlgKind::Pause => {
-                        ui.label("Silence for");
+                        ui.label(tr("Silence for"));
                         Self::mins_secs(ui, &mut d, "");
                         ui.end_row();
                     }
                     DlgKind::Teaser => {
-                        ui.label("Upcoming tracks");
+                        ui.label(tr("Upcoming tracks"));
                         ui.add(egui::DragValue::new(&mut d.count).range(1..=10));
                         ui.end_row();
-                        ui.label("Seconds of each");
+                        ui.label(tr("Seconds of each"));
                         ui.add(egui::DragValue::new(&mut d.secs).range(2..=60).suffix(" s"));
                         ui.end_row();
                         ui.label("");
-                        ui.label(RichText::new("Plays a short faded snippet from each of the next tracks after this row.").small().color(GRAY));
+                        ui.label(RichText::new(tr("Plays a short faded snippet from each of the next tracks after this row.")).small().color(GRAY));
                         ui.end_row();
                     }
                     DlgKind::TimeAnnounce => {
                         let a = &mut core.cfg.announce;
-                        ui.label("Spoken text");
+                        ui.label(tr("Spoken text"));
                         ui.add(egui::TextEdit::singleline(&mut a.template).desired_width(300.0));
                         ui.end_row();
                         ui.label("");
                         ui.label(RichText::new(format!("Now: \"{}\"  ·  {{h12}} {{h24}} {{mm}} {{ampm}} {{time}}", crate::live::announce_text(&a.template, &Local::now()))).small().color(GRAY));
                         ui.end_row();
-                        ui.label("Voice");
+                        ui.label(tr("Voice"));
                         if self.voices.is_empty() {
-                            ui.add(egui::TextEdit::singleline(&mut a.voice).hint_text("default voice").desired_width(300.0));
+                            ui.add(egui::TextEdit::singleline(&mut a.voice).hint_text(tr("default voice")).desired_width(300.0));
                         } else {
                             egui::ComboBox::from_id_salt("tts_voice").width(300.0).selected_text(if a.voice.is_empty() { "Default".to_string() } else { a.voice.clone() }).show_ui(ui, |ui| {
-                                ui.selectable_value(&mut a.voice, String::new(), "Default");
+                                ui.selectable_value(&mut a.voice, String::new(), tr("Default"));
                                 for v in &self.voices {
                                     ui.selectable_value(&mut a.voice, v.clone(), v);
                                 }
                             });
                         }
                         ui.end_row();
-                        ui.label("Recordings");
+                        ui.label(tr("Recordings"));
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut a.folder).hint_text("optional folder").desired_width(220.0));
+                            ui.add(egui::TextEdit::singleline(&mut a.folder).hint_text(tr("optional folder")).desired_width(220.0));
                             if ui.button("…").clicked() {
                                 self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AnnounceFolder));
                             }
                         });
                         ui.end_row();
                         ui.label("");
-                        ui.label(RichText::new("With a folder of recordings named H00…H23 and M00…M59 those are played; otherwise the computer's speech voice reads the text.").small().color(GRAY));
+                        ui.label(RichText::new(tr("With a folder of recordings named H00…H23 and M00…M59 those are played; otherwise the computer's speech voice reads the text.")).small().color(GRAY));
                         ui.end_row();
                     }
                     DlgKind::Comment => {
-                        ui.label("Comment");
+                        ui.label(tr("Comment"));
                         ui.add(egui::TextEdit::multiline(&mut d.text).desired_rows(3).desired_width(300.0));
                         ui.end_row();
                     }
                     DlgKind::Container => {
                         name_row(ui, &mut d, "e.g. Station IDs");
-                        ui.label("Plays");
+                        ui.label(tr("Plays"));
                         ui.horizontal(|ui| {
-                            ui.radio_value(&mut d.random, false, "all files in order");
-                            ui.radio_value(&mut d.random, true, "one file at random");
+                            ui.radio_value(&mut d.random, false, tr("all files in order"));
+                            ui.radio_value(&mut d.random, true, tr("one file at random"));
                         });
                         ui.end_row();
-                        ui.label("Files");
+                        ui.label(tr("Files"));
                         ui.vertical(|ui| {
                             let mut del = None;
                             egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
@@ -376,7 +405,7 @@ impl App {
                             if let Some(k) = del {
                                 d.items.remove(k);
                             }
-                            if ui.button("Add files…").clicked() {
+                            if ui.button(tr("Add files…")).clicked() {
                                 self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::ContainerFiles));
                             }
                         });
@@ -384,13 +413,13 @@ impl App {
                     }
                     DlgKind::TrackList => {
                         name_row(ui, &mut d, "e.g. Recurrent");
-                        ui.label("Source");
+                        ui.label(tr("Source"));
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut d.text).hint_text("folder or .m3u").desired_width(200.0));
-                            if ui.button("Folder…").clicked() {
+                            ui.add(egui::TextEdit::singleline(&mut d.text).hint_text(tr("folder or .m3u")).desired_width(200.0));
+                            if ui.button(tr("Folder…")).clicked() {
                                 self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::TrackListSource));
                             }
-                            if ui.button("M3U…").clicked() {
+                            if ui.button(tr("M3U…")).clicked() {
                                 self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::TrackListSource));
                             }
                         });
@@ -408,22 +437,77 @@ impl App {
                         ui.end_row();
                     }
                     DlgKind::HourMarker => {
-                        ui.label("Time");
+                        ui.label(tr("Time"));
                         ui.horizontal(|ui| {
                             ui.add(egui::DragValue::new(&mut d.hour).range(0..=23).custom_formatter(|v, _| format!("{:02}", v as u32)));
                             ui.label(":");
-                            ui.add(egui::DragValue::new(&mut d.minute).range(0..=59).custom_formatter(|v, _| format!("{:02}", v as u32)));
+                            if d.info {
+                                ui.label("00");
+                            } else {
+                                ui.add(egui::DragValue::new(&mut d.minute).range(0..=59).custom_formatter(|v, _| format!("{:02}", v as u32)));
+                            }
                         });
                         ui.end_row();
-                        ui.label("If early");
-                        ui.checkbox(&mut d.wait, "wait (silence) until the time");
-                        ui.end_row();
-                        ui.label("If late");
+                        ui.label(tr("Type"));
                         ui.vertical(|ui| {
-                            ui.radio_value(&mut d.hard, false, "soft: finish the current track, then jump here");
-                            ui.radio_value(&mut d.hard, true, "hard: cut in exactly on time");
+                            ui.radio_value(&mut d.info, false, tr("keep the playlist on time (marker)"));
+                            ui.radio_value(&mut d.info, true, tr("just show where the hour starts — no action"));
                         });
                         ui.end_row();
+                        if !d.info {
+                            ui.label(tr("If early"));
+                            ui.checkbox(&mut d.wait, tr("wait (silence) until the time"));
+                            ui.end_row();
+                            ui.label(tr("If late"));
+                            ui.vertical(|ui| {
+                                ui.radio_value(&mut d.hard, false, tr("soft: finish the current track, then jump here"));
+                                ui.radio_value(&mut d.hard, true, tr("hard: cut in exactly on time"));
+                            });
+                            ui.end_row();
+                        }
+                        if d.edit.is_none() {
+                            ui.label("");
+                            ui.label(RichText::new(tr("It goes into the playlist where that time falls, going by the start times.")).small().color(GRAY));
+                            ui.end_row();
+                        }
+                    }
+                    DlgKind::Tts => {
+                        ui.label(tr("Say"));
+                        ui.add(egui::TextEdit::multiline(&mut d.text).desired_rows(3).desired_width(300.0).hint_text("That was {last}. Coming up: {next}."));
+                        ui.end_row();
+                        ui.label("");
+                        ui.label(
+                            RichText::new("{time} {h12}:{mm} {ampm} · {next} {next_artist} {next_title} · {last} {last_artist} {last_title} · {station}")
+                                .small()
+                                .color(GRAY),
+                        );
+                        ui.end_row();
+                        ui.label(tr("Voice"));
+                        if self.voices.is_empty() {
+                            ui.add(egui::TextEdit::singleline(&mut d.voice).hint_text(tr("same as time announcements")).desired_width(300.0));
+                        } else {
+                            egui::ComboBox::from_id_salt("tts_item_voice")
+                                .width(300.0)
+                                .selected_text(if d.voice.is_empty() { "Same as time announcements".to_string() } else { d.voice.clone() })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut d.voice, String::new(), tr("Same as time announcements"));
+                                    for v in &self.voices {
+                                        ui.selectable_value(&mut d.voice, v.clone(), v);
+                                    }
+                                });
+                        }
+                        ui.end_row();
+                        ui.label(tr("Speed"));
+                        ui.add(egui::Slider::new(&mut d.rate, -10..=10).text("slower ↔ faster"));
+                        ui.end_row();
+                        ui.label("");
+                        if ui.button(tr("▶ Preview")).on_hover_text(tr("Plays through the preview output, not on air")).clicked() {
+                            let text = core.fill_speech(&d.text, core.current.unwrap_or(0));
+                            let voice = if d.voice.is_empty() { core.cfg.announce.voice.clone() } else { d.voice.clone() };
+                            self.preview_speech(core, text, voice, d.rate);
+                        }
+                        ui.end_row();
+                        name_row(ui, &mut d, "shown in the playlist (optional)");
                     }
                 }
             });
@@ -432,8 +516,8 @@ impl App {
             }
             ui.separator();
             ui.horizontal(|ui| {
-                ok = ui.button(RichText::new("  OK  ").strong()).clicked();
-                cancel = ui.button("Cancel").clicked();
+                ok = ui.button(RichText::new(tr("  OK  ")).strong()).clicked();
+                cancel = ui.button(tr("Cancel")).clicked();
             });
         });
         if ok {
@@ -448,6 +532,17 @@ impl App {
                                     r.played = played;
                                 }
                             });
+                        }
+                        None if d.kind == DlgKind::HourMarker => {
+                            // goes where that time falls in the running order
+                            self.view_pl = d.tab;
+                            let on_air = d.tab == core.playing_tab;
+                            let (h, m) = (d.hour.min(23), if d.info { 0 } else { d.minute.min(59) });
+                            let at = core.with_tab(d.tab, |c| c.row_for_time(h, m, on_air));
+                            core.with_tab(d.tab, |c| c.insert_rows(at, vec![e]));
+                            self.sel = std::iter::once(at).collect();
+                            self.anchor = Some(at);
+                            self.scroll_to = Some(at);
                         }
                         None => {
                             self.view_pl = d.tab;
@@ -464,6 +559,22 @@ impl App {
         }
     }
 
+    /// Speak `text` on the preview output (never on air).
+    pub(super) fn preview_speech(&mut self, core: &mut Playout, text: String, voice: String, rate: i32) {
+        let src = crate::live::announce_source(
+            text,
+            String::new(),
+            voice,
+            rate,
+            data_dir().join("tmp").join("preview_speech.wav"),
+            core.log_sink.clone(),
+        );
+        match crate::audio::PreviewPlayer::play_pcm(&core.cfg.audio_devices.preview, Box::new(src), "speech") {
+            Ok(p) => self.preview = Some(p),
+            Err(e) => core.say(format!("Preview: {e}")),
+        }
+    }
+
     // ------------------------------------------------- insert from playlist
     pub(super) fn insert_from_playlist_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         let Some((path, rows, mut pick)) = self.ins_from_pl.take() else { return };
@@ -474,10 +585,10 @@ impl App {
             |ui| {
                 ui.label(RichText::new(path.display().to_string()).small().color(GRAY));
                 ui.horizontal(|ui| {
-                    if ui.small_button("Select all").clicked() {
+                    if ui.small_button(tr("Select all")).clicked() {
                         pick.iter_mut().for_each(|p| *p = true);
                     }
-                    if ui.small_button("Select none").clicked() {
+                    if ui.small_button(tr("Select none")).clicked() {
                         pick.iter_mut().for_each(|p| *p = false);
                     }
                     ui.label(format!("{} of {} selected", pick.iter().filter(|p| **p).count(), rows.len()));
@@ -489,8 +600,8 @@ impl App {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ok = ui.button(RichText::new("Insert").strong()).clicked();
-                    cancel = ui.button("Cancel").clicked();
+                    ok = ui.button(RichText::new(tr("Insert")).strong()).clicked();
+                    cancel = ui.button(tr("Cancel")).clicked();
                 });
             },
         );
@@ -539,7 +650,7 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if recording {
-                        if ui.button(RichText::new("■ Stop").strong()).clicked() {
+                        if ui.button(RichText::new(tr("■ Stop")).strong()).clicked() {
                             vt.stream = None;
                             let dir = data_dir().join("voicetracks");
                             let _ = std::fs::create_dir_all(&dir);
@@ -550,7 +661,7 @@ impl App {
                                 Err(e) => vt.err = format!("Could not save: {e}"),
                             }
                         }
-                    } else if ui.button(RichText::new("● Record").strong().color(RED)).clicked() {
+                    } else if ui.button(RichText::new(tr("● Record")).strong().color(RED)).clicked() {
                         vt.buf.lock().clear();
                         vt.file = None;
                         vt.err.clear();
@@ -569,7 +680,7 @@ impl App {
                         }
                     }
                     if let Some(f) = vt.file.clone() {
-                        if ui.button("Insert after selected row").clicked() {
+                        if ui.button(tr("Insert after selected row")).clicked() {
                             insert = Some(f.clone());
                         }
                         ui.label(
@@ -580,7 +691,7 @@ impl App {
                 if !vt.err.is_empty() {
                     ui.colored_label(RED, &vt.err);
                 }
-                ui.small("Recordings are saved as WAV in the voicetracks folder of your RadioMaster data folder.");
+                ui.small(tr("Recordings are saved as WAV in the voicetracks folder of your RadioMaster data folder."));
             },
         );
         if let Some(f) = insert {
@@ -613,16 +724,16 @@ impl App {
             .collapsible(false)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label("When a Track List row picks a track, skip:");
+                ui.label(tr("When a Track List row picks a track, skip:"));
                 egui::Grid::new("repeat_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-                    ui.label("the same track played in the last");
+                    ui.label(tr("the same track played in the last"));
                     ui.add(egui::DragValue::new(&mut core.cfg.repeat.track_mins).range(0..=10080).suffix(" min"));
                     ui.end_row();
-                    ui.label("the same artist played in the last");
+                    ui.label(tr("the same artist played in the last"));
                     ui.add(egui::DragValue::new(&mut core.cfg.repeat.artist_mins).range(0..=1440).suffix(" min"));
                     ui.end_row();
                 });
-                ui.small("If every track has played recently, the least recently played ones are used.");
+                ui.small(tr("If every track has played recently, the least recently played ones are used."));
             });
         self.show_repeat = open;
     }
@@ -637,7 +748,7 @@ impl App {
         let view = self.view_pl;
         let rows: Vec<(usize, String)> = core.tab_rows(view).iter().enumerate().map(|(i, e)| (i, e.title())).collect();
         Self::window_for(ctx, "Find", [440.0, 380.0]).id(egui::Id::new("find_window")).open(&mut open).show(ctx, |ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut self.find_text).hint_text("text in the title").desired_width(f32::INFINITY));
+            let r = ui.add(egui::TextEdit::singleline(&mut self.find_text).hint_text(tr("text in the title")).desired_width(f32::INFINITY));
             if self.find_focus {
                 r.request_focus();
                 self.find_focus = false;
@@ -676,173 +787,297 @@ impl App {
 
     // ------------------------------------------------------- the menu itself
     pub(super) fn playlist_menu(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        fn item(ui: &mut egui::Ui, text: &str, sc: &str) -> bool {
+        let edit = self.perm.edit_playlists;
+        let tools = self.perm.tools;
+        fn item(ui: &mut egui::Ui, enabled: bool, text: &str, sc: &str) -> bool {
             let mut b = egui::Button::new(text);
             if !sc.is_empty() {
                 b = b.shortcut_text(sc);
             }
-            if ui.add(b).clicked() {
+            if ui.add_enabled(enabled, b).on_disabled_hover_text(tr("Your account isn't allowed to do this")).clicked() {
                 ui.close_menu();
                 true
             } else {
                 false
             }
         }
-        if item(ui, "🎲 Playlist Generator Pro…", "Ctrl+G") {
+        if item(ui, tools, tr("🎲 Playlist Generator Pro…"), "Ctrl+G") {
             self.open_tool(ToolWin::Generator);
         }
         ui.separator();
-        if item(ui, "Add file…", "Alt+F") {
+        if item(ui, edit, tr("Add file…"), "Alt+F") {
             self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
         }
-        if item(ui, "Add folder…", "Alt+D") {
+        if item(ui, edit, tr("Add folder…"), "Alt+D") {
             self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AddFolder));
         }
-        if item(ui, "Add URL…", "Alt+U") {
+        if item(ui, edit, tr("Add URL…"), "Alt+U") {
             self.open_item_dlg(DlgKind::Url);
         }
-        if item(ui, "Add Line Input…", "") {
+        if item(ui, edit, tr("Add Line Input…"), "") {
             self.open_item_dlg(DlgKind::LineIn);
         }
-        if item(ui, "Add command…", "Alt+C") {
+        if item(ui, edit, tr("Add command…"), "Alt+C") {
             self.open_item_dlg(DlgKind::Command);
         }
-        if item(ui, "Add timed pause…", "Ctrl+P") {
+        if item(ui, edit, tr("Add timed pause…"), "Ctrl+P") {
             self.open_item_dlg(DlgKind::Pause);
         }
-        if item(ui, "Add teaser…", "") {
+        if item(ui, edit, tr("Add teaser…"), "") {
             self.open_item_dlg(DlgKind::Teaser);
         }
-        if item(ui, "Add time announcement…", "") {
+        if item(ui, edit, tr("Add time announcement…"), "") {
             if self.voices.is_empty() {
                 self.voices = crate::live::list_voices();
             }
             self.open_item_dlg(DlgKind::TimeAnnounce);
         }
-        if item(ui, "Add comment…", "Alt+W") {
+        if item(ui, edit, tr("Add text to speech…"), "Alt+T") {
+            if self.voices.is_empty() {
+                self.voices = crate::live::list_voices();
+            }
+            self.open_item_dlg(DlgKind::Tts);
+        }
+        if item(ui, edit, tr("Add comment…"), "Alt+W") {
             self.open_item_dlg(DlgKind::Comment);
         }
-        if item(ui, "Add container…", "") {
+        if item(ui, edit, tr("Add container…"), "") {
             self.open_item_dlg(DlgKind::Container);
         }
         ui.separator();
-        if item(ui, "Insert voice track…", "Ctrl+W") {
+        if item(ui, edit, tr("Insert voice track…"), "Ctrl+W") {
             self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
         }
-        if item(ui, "🔴 Record voice track…", "Ctrl+R") {
+        if item(ui, edit, tr("🔴 Record voice track…"), "Ctrl+R") {
             self.show_vt = true;
         }
         ui.separator();
-        if item(ui, "Add Track List…", "") {
+        if item(ui, edit, tr("Add Track List…"), "") {
             self.open_item_dlg(DlgKind::TrackList);
         }
-        if item(ui, "Track List Repeat Protection…", "") {
+        if item(ui, edit, tr("Track List Repeat Protection…"), "") {
             self.show_repeat = true;
         }
         ui.separator();
-        if item(ui, "Insert playlist", "") {
+        if item(ui, edit, tr("Insert playlist"), "") {
             self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::InsertPlaylist));
         }
-        if item(ui, "Insert tracks from playlist…", "") {
+        if item(ui, edit, tr("Insert tracks from playlist…"), "") {
             self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::InsertFromPlaylist));
         }
         ui.separator();
-        ui.menu_button("Extra", |ui| {
+        ui.menu_button(tr("Extra"), |ui| {
             let v = self.view_pl;
-            if item(ui, "Add hour marker…", "") {
+            if item(ui, edit, tr("Add hour marker…"), "") {
                 self.open_item_dlg(DlgKind::HourMarker);
             }
             ui.separator();
-            if item(ui, "Shuffle upcoming", "") {
+            if item(ui, edit, tr("Shuffle upcoming"), "") {
                 core.with_tab(v, |c| c.shuffle());
             }
-            ui.menu_button("Sort by", |ui| {
+            ui.menu_button(tr("Sort by"), |ui| {
                 for (l, k) in [("Artist", "artist"), ("Title", "title"), ("Duration", "dur")] {
-                    if item(ui, l, "") {
+                    if item(ui, edit, l, "") {
                         core.with_tab(v, |c| c.sort_by(k));
                         self.sel.clear();
                     }
                 }
             });
-            if item(ui, "Reverse order", "") {
+            if item(ui, edit, tr("Reverse order"), "") {
                 core.with_tab(v, |c| c.reverse());
                 self.sel.clear();
             }
             ui.separator();
-            if item(ui, "Remove duplicates", "") {
+            if item(ui, edit, tr("Remove duplicates"), "") {
                 let n = core.with_tab(v, |c| c.remove_duplicates());
                 core.say(format!("Removed {n} duplicate(s)"));
                 self.sel.clear();
             }
-            if item(ui, "Remove played", "") {
+            if item(ui, edit, tr("Remove played"), "") {
                 let n = core.with_tab(v, |c| c.remove_played());
                 core.say(format!("Removed {n} played item(s)"));
                 self.sel.clear();
             }
-            if item(ui, "Remove missing files", "") {
+            if item(ui, edit, tr("Remove missing files"), "") {
                 let n = core.with_tab(v, |c| c.remove_missing());
                 core.say(format!("Removed {n} missing file(s)"));
                 self.sel.clear();
             }
             ui.separator();
-            if item(ui, "Select all", "Ctrl+A") {
+            if item(ui, true, tr("Select all"), "Ctrl+A") {
                 self.sel = (0..core.tab_len(v)).collect();
             }
-            if item(ui, "Render playlist to WAV…", "") {
+            if item(ui, true, tr("Render playlist to WAV…"), "") {
                 self.dlg(|| rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_file_name("mix.wav").save_file().map(Dlg::RenderWav));
             }
-            if item(ui, "Export as CSV…", "") {
+            if item(ui, true, tr("Export as CSV…"), "") {
                 self.dlg(|| {
                     rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("playlist.csv").save_file().map(Dlg::ExportCsv)
                 });
             }
-            if item(ui, "Clear playlist", "") {
+            if item(ui, edit, tr("Clear playlist"), "") {
                 core.with_tab(v, |c| c.clear_playlist());
                 self.sel.clear();
             }
         });
-        if item(ui, "📝 Notepad…", "T") {
+        if item(ui, true, tr("📝 Notepad…"), "T") {
             self.open_tool(ToolWin::Notepad);
         }
-        if item(ui, "🔍 Find…", "Ctrl+F") {
+        if item(ui, true, tr("🔍 Find…"), "Ctrl+F") {
             self.show_find = true;
             self.find_focus = true;
         }
     }
 
-    /// Keyboard shortcuts of the Playlist and View menus.
+    /// Keyboard shortcuts. Ignored while typing in a text box; each needs the matching permission.
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context, core: &mut Playout) {
         use egui::{Key, Modifiers};
         if ctx.wants_keyboard_input() {
             return;
         }
+        let p = self.perm;
         let press = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        if press(Modifiers::COMMAND, Key::G) {
-            self.open_tool(ToolWin::Generator);
+        let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
+        // (egui ignores extra Shift/Alt on a shortcut, so the more specific ones are checked first)
+        // ---- playback
+        if p.playback {
+            // Shift+F1 … Shift+F12: cart pads 1–12
+            let fkeys = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6, Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12];
+            for (i, k) in fkeys.into_iter().enumerate() {
+                if press(Modifiers::SHIFT, k) {
+                    core.trigger_cart(i);
+                }
+            }
+            if press(Modifiers::NONE, Key::F5) || press(Modifiers::NONE, Key::Enter) {
+                let s = if self.view_pl == core.playing_tab || self.sel.is_empty() { self.sel.iter().next().copied() } else { None };
+                match s {
+                    Some(i) if self.view_pl != core.playing_tab => {
+                        let xf = if core.state == PlayState::Playing { core.cfg.crossfade_secs } else { 0.0 };
+                        core.with_tab(self.view_pl, |c| c.play_index(i, xf));
+                    }
+                    Some(i) if core.state == PlayState::Playing => {
+                        let xf = core.cfg.crossfade_secs;
+                        core.play_index(i, xf);
+                    }
+                    _ => core.play_pressed(s),
+                }
+            }
+            if press(Modifiers::NONE, Key::F6) {
+                core.pause_toggle();
+            }
+            if press(Modifiers::NONE, Key::F7) {
+                core.stop();
+            }
+            if press(Modifiers::NONE, Key::F8) {
+                core.next();
+            }
+            if press(Modifiers::NONE, Key::F9) {
+                core.prev();
+            }
+            if press(Modifiers::COMMAND, Key::J) {
+                core.stop_carts();
+            }
+            if press(Modifiers::COMMAND, Key::M) {
+                self.toggle_mic(core);
+            }
+            for (k, d) in [(Key::ArrowUp, 0.05f32), (Key::ArrowDown, -0.05)] {
+                if press(Modifiers::ALT, k) {
+                    let v = (core.cfg.volume + d).clamp(0.0, 1.0);
+                    core.set_volume(v);
+                }
+            }
         }
-        if press(Modifiers::ALT, Key::F) {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
+        // ---- playlist editing
+        if p.edit_playlists {
+            if press(Modifiers::ALT, Key::F) || press(Modifiers::NONE, Key::Insert) {
+                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
+            }
+            if press(Modifiers::ALT, Key::D) {
+                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AddFolder));
+            }
+            if press(Modifiers::ALT, Key::U) {
+                self.open_item_dlg(DlgKind::Url);
+            }
+            if press(Modifiers::ALT, Key::C) {
+                self.open_item_dlg(DlgKind::Command);
+            }
+            if press(Modifiers::ALT, Key::T) {
+                if self.voices.is_empty() {
+                    self.voices = crate::live::list_voices();
+                }
+                self.open_item_dlg(DlgKind::Tts);
+            }
+            if press(Modifiers::COMMAND, Key::P) {
+                self.open_item_dlg(DlgKind::Pause);
+            }
+            if press(Modifiers::ALT, Key::W) {
+                self.open_item_dlg(DlgKind::Comment);
+            }
+            if press(Modifiers::COMMAND, Key::H) {
+                self.open_item_dlg(DlgKind::HourMarker);
+            }
+            if press(Modifiers::COMMAND, Key::W) {
+                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
+            }
+            if press(Modifiers::COMMAND, Key::R) {
+                self.show_vt = true;
+            }
+            if press(Modifiers::COMMAND, Key::N) {
+                self.tab_ops.push(super::plview::TabOp::New);
+            }
+            if press(Modifiers::COMMAND, Key::O) {
+                self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::LoadM3u));
+            }
+            if press(Modifiers::COMMAND, Key::S) {
+                let name = format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));
+                self.dlg(move || {
+                    rfd::FileDialog::new().add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u)
+                });
+            }
+            // Ctrl+↑ / Ctrl+↓ move the selected rows
+            for (k, up) in [(Key::ArrowUp, true), (Key::ArrowDown, false)] {
+                if press(Modifiers::COMMAND, k) && !self.sel.is_empty() {
+                    let sel = self.sel.clone();
+                    self.sel = core.with_tab(self.view_pl, |c| c.move_sel(&sel, up));
+                    self.scroll_to = self.sel.iter().next().copied();
+                }
+            }
         }
-        if press(Modifiers::ALT, Key::D) {
-            self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AddFolder));
+        if p.tools {
+            if press(Modifiers::COMMAND, Key::G) {
+                self.open_tool(ToolWin::Generator);
+            }
+            if press(Modifiers::COMMAND, Key::E) {
+                let row = self.sel.iter().next().copied();
+                core.with_tab(self.view_pl, |c| self.open_fade_editor(c, row));
+            }
         }
-        if press(Modifiers::ALT, Key::U) {
-            self.open_item_dlg(DlgKind::Url);
+        // ---- moving around
+        let len = core.tab_len(self.view_pl);
+        for (k, up) in [(Key::ArrowUp, true), (Key::ArrowDown, false)] {
+            let shift = ctx.input(|i| i.modifiers.shift);
+            if (press(Modifiers::NONE, k) || press(Modifiers::SHIFT, k)) && len > 0 {
+                let from = if up { self.sel.iter().next().copied() } else { self.sel.iter().next_back().copied() };
+                let to = match from {
+                    Some(i) if up => i.saturating_sub(1),
+                    Some(i) => (i + 1).min(len - 1),
+                    None => core.current.unwrap_or(0).min(len - 1),
+                };
+                if shift {
+                    self.sel.insert(to);
+                } else {
+                    self.sel.clear();
+                    self.sel.insert(to);
+                    self.anchor = Some(to);
+                }
+                self.scroll_to = Some(to);
+            }
         }
-        if press(Modifiers::ALT, Key::C) {
-            self.open_item_dlg(DlgKind::Command);
+        if press(shift_cmd, Key::Tab) && !core.tabs.is_empty() {
+            self.tab_ops.push(super::plview::TabOp::View((self.view_pl + core.tabs.len() - 1) % core.tabs.len()));
         }
-        if press(Modifiers::COMMAND, Key::P) {
-            self.open_item_dlg(DlgKind::Pause);
-        }
-        if press(Modifiers::ALT, Key::W) {
-            self.open_item_dlg(DlgKind::Comment);
-        }
-        if press(Modifiers::COMMAND, Key::W) {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
-        }
-        if press(Modifiers::COMMAND, Key::R) {
-            self.show_vt = true;
+        if press(Modifiers::COMMAND, Key::Tab) && !core.tabs.is_empty() {
+            self.tab_ops.push(super::plview::TabOp::View((self.view_pl + 1) % core.tabs.len()));
         }
         if press(Modifiers::COMMAND, Key::F) {
             self.show_find = true;
@@ -850,6 +1085,12 @@ impl App {
         }
         if press(Modifiers::NONE, Key::T) {
             self.open_tool(ToolWin::Notepad);
+        }
+        if press(Modifiers::COMMAND, Key::Comma) && p.settings {
+            self.show_settings = true;
+        }
+        if press(Modifiers::COMMAND, Key::Slash) {
+            self.show_keys = !self.show_keys;
         }
         // work zones: Ctrl+1/2/3 = number of panels, Ctrl+4 = new Additional window
         for (k, n) in [(Key::Num1, 1u8), (Key::Num2, 2), (Key::Num3, 3)] {
@@ -876,6 +1117,93 @@ impl App {
             self.fullscreen = !self.fullscreen;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
         }
-        let _ = core;
+    }
+
+    /// Help → Keyboard shortcuts.
+    pub(super) fn keys_window(&mut self, ctx: &egui::Context) {
+        if !self.show_keys {
+            return;
+        }
+        let mut open = true;
+        Self::window_for(ctx, "Keyboard shortcuts", [560.0, 560.0]).id(egui::Id::new("keys_window")).open(&mut open).show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (group, keys) in SHORTCUTS {
+                    ui.add_space(6.0);
+                    ui.strong(*group);
+                    egui::Grid::new(("keys", *group)).num_columns(2).spacing([18.0, 4.0]).striped(true).show(ui, |ui| {
+                        for (k, what) in *keys {
+                            ui.label(RichText::new(*k).monospace().color(ACCENT));
+                            ui.label(*what);
+                            ui.end_row();
+                        }
+                    });
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(tr("Shortcuts don't fire while you're typing in a text box. Some need permission for your account."))
+                        .small()
+                        .color(GRAY),
+                );
+            });
+        });
+        self.show_keys = open;
     }
 }
+
+pub(super) const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Playback",
+        &[
+            ("F5 / Enter", "Play (the selected row, or carry on)"),
+            ("F6", "Pause / resume"),
+            ("F7", "Stop"),
+            ("F8", "Next"),
+            ("F9", "Previous"),
+            ("Alt+↑ / Alt+↓", "Volume up / down"),
+            ("Shift+F1 … F12", "Fire cart pad 1 … 12 (again to stop it)"),
+            ("Ctrl+J", "Stop all jingles"),
+            ("Ctrl+M", "Microphone on / off"),
+        ],
+    ),
+    (
+        "Playlist",
+        &[
+            ("↑ / ↓", "Select the row above / below (Shift adds to the selection)"),
+            ("Ctrl+↑ / Ctrl+↓", "Move the selected rows"),
+            ("Delete", "Remove the selected rows"),
+            ("Ctrl+A", "Select all"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous playlist tab"),
+            ("Ctrl+N", "New playlist"),
+            ("Ctrl+O / Ctrl+S", "Open / save playlist (M3U)"),
+            ("Insert / Alt+F", "Add files"),
+            ("Alt+D", "Add folder"),
+            ("Alt+U", "Add URL"),
+            ("Alt+C", "Add command"),
+            ("Alt+T", "Add text to speech"),
+            ("Alt+W", "Add comment"),
+            ("Ctrl+P", "Add timed pause"),
+            ("Ctrl+H", "Add hour marker"),
+            ("Ctrl+W", "Insert voice track"),
+            ("Ctrl+R", "Record voice track"),
+            ("Ctrl+F", "Find"),
+            ("Drag rows", "Reorder, or drop on another playlist's tab to move them there"),
+        ],
+    ),
+    (
+        "Tools and windows",
+        &[
+            ("Ctrl+G", "Playlist generator"),
+            ("Ctrl+E", "Track editor for the selected row"),
+            ("F4", "Audio processing"),
+            ("T", "Notepad"),
+            ("Ctrl+,", "Settings"),
+            ("Ctrl+1 / 2 / 3", "Work zone with 1, 2 or 3 panels"),
+            ("Ctrl+4", "New Additional window"),
+            ("Ctrl+L", "Left panel on / off"),
+            ("F1 / F2 / F3", "File explorer / Search / Scheduler in the left panel"),
+            ("F11", "Full screen"),
+            ("Ctrl+Shift+P", "Performance numbers"),
+            ("Ctrl+/", "This list"),
+        ],
+    ),
+];

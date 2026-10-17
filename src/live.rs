@@ -335,7 +335,9 @@ pub fn announce_files(folder: &Path, now: &chrono::DateTime<chrono::Local>) -> V
 }
 
 /// Speak `text` into a WAV file with the system's speech engine.
-pub fn tts_to_wav(text: &str, out: &Path, voice: &str) -> Result<()> {
+/// `rate`: -10 (slow) … 10 (fast), 0 = normal.
+pub fn tts_to_wav(text: &str, out: &Path, voice: &str, rate: i32) -> Result<()> {
+    let rate = rate.clamp(-10, 10);
     use std::process::Command;
     #[cfg(windows)]
     let status = {
@@ -343,7 +345,7 @@ pub fn tts_to_wav(text: &str, out: &Path, voice: &str) -> Result<()> {
         let q = |s: &str| s.replace('\'', "''");
         let select = if voice.trim().is_empty() { String::new() } else { format!("$s.SelectVoice('{}'); ", q(voice)) };
         let script = format!(
-            "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; {select}$s.SetOutputToWaveFile('{}'); $s.Speak('{}'); $s.Dispose()",
+            "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; {select}$s.Rate = {rate}; $s.SetOutputToWaveFile('{}'); $s.Speak('{}'); $s.Dispose()",
             q(&out.to_string_lossy()),
             q(text)
         );
@@ -358,6 +360,7 @@ pub fn tts_to_wav(text: &str, out: &Path, voice: &str) -> Result<()> {
         if !voice.trim().is_empty() {
             c.args(["-v", voice]);
         }
+        c.args(["-r", &(175 + rate * 15).to_string()]);
         c.args(["--file-format=WAVE", "--data-format=LEI16@22050", "-o"]).arg(out).arg(text).status()?
     };
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -367,6 +370,7 @@ pub fn tts_to_wav(text: &str, out: &Path, voice: &str) -> Result<()> {
             if !voice.trim().is_empty() {
                 c.args(["-v", voice]);
             }
+            c.args(["-s", &(175 + rate * 15).to_string()]);
             c.arg("-w").arg(out).arg(text).status()
         };
         run("espeak-ng").or_else(|_| run("espeak")).map_err(|_| anyhow!("install espeak-ng for spoken time announcements"))?
@@ -399,14 +403,14 @@ pub fn list_voices() -> Vec<String> {
 }
 
 /// Time announcement as a playable source. Uses recorded files if `folder` has them, otherwise speech.
-pub fn announce_source(text: String, folder: String, voice: String, tmp: PathBuf, sink: LogSink) -> FeedSource {
+pub fn announce_source(text: String, folder: String, voice: String, rate: i32, tmp: PathBuf, sink: LogSink) -> FeedSource {
     let (feeder, src) = feed(64, 1);
     thread::spawn(move || {
         let now = chrono::Local::now();
         let mut files = if folder.trim().is_empty() { vec![] } else { announce_files(Path::new(&folder), &now) };
         if files.is_empty() {
             let _ = std::fs::create_dir_all(tmp.parent().unwrap_or(Path::new(".")));
-            match tts_to_wav(&text, &tmp, &voice) {
+            match tts_to_wav(&text, &tmp, &voice, rate) {
                 Ok(()) => files.push(tmp.clone()),
                 Err(e) => {
                     log(&sink, format!("Time announcement: {e}"));

@@ -44,10 +44,12 @@ pub struct AnnounceCfg {
     pub folder: String,
     /// Speech voice name (empty = default voice).
     pub voice: String,
+    /// Speaking speed, -10 … 10.
+    pub rate: i32,
 }
 impl Default for AnnounceCfg {
     fn default() -> Self {
-        Self { template: "It's {h12}:{mm} {ampm}".into(), folder: String::new(), voice: String::new() }
+        Self { template: "It's {h12}:{mm} {ampm}".into(), folder: String::new(), voice: String::new(), rate: 0 }
     }
 }
 
@@ -152,13 +154,43 @@ pub struct CartPad {
 pub struct Rotation {
     pub name: String,
     pub enabled: bool,
+    /// adverts or jingles (only changes the label and the log)
+    pub adverts: bool,
     pub folder: String,
+    /// chosen files; when not empty these are used instead of the folder
+    pub files: Vec<String>,
     pub every_n: u32,
+    /// how many to play each time
+    pub count: u32,
+    pub pick: RotPick,
+    /// position for `RotPick::InOrder`
+    pub next: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum RotPick {
+    /// different random ones each time
+    #[default]
+    Random,
+    /// one after another through the list, starting again at the end
+    InOrder,
+    /// every file, each time
+    All,
 }
 
 impl Default for Rotation {
     fn default() -> Self {
-        Self { name: "Jingles".into(), enabled: false, folder: String::new(), every_n: 4 }
+        Self {
+            name: "Jingles".into(),
+            enabled: false,
+            adverts: false,
+            folder: String::new(),
+            files: vec![],
+            every_n: 4,
+            count: 1,
+            pick: RotPick::Random,
+            next: 0,
+        }
     }
 }
 
@@ -300,7 +332,7 @@ pub struct RemoteCfg {
 }
 impl Default for RemoteCfg {
     fn default() -> Self {
-        Self { enabled: false, port: 9000, password: String::new() }
+        Self { enabled: false, port: 9258, password: String::new() }
     }
 }
 
@@ -360,12 +392,24 @@ pub struct Config {
     pub rotations: Vec<Rotation>,
     /// Look for a newer RadioMaster release on GitHub at start-up.
     pub check_updates: bool,
+    /// automatic "next hour" lines in the playlist
+    pub hour_lines: bool,
+    /// saved EQ curves (name, gains)
+    pub eq_presets: Vec<(String, [f32; 12])>,
+    /// plugin folders that are switched off
+    pub plugins_off: Vec<String>,
+    /// interface language (a file in the lang folder); empty = English
+    pub language: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             check_updates: true,
+            hour_lines: true,
+            eq_presets: vec![],
+            plugins_off: vec![],
+            language: String::new(),
             audio_devices: AudioDevices::default(),
             announce: AnnounceCfg::default(),
             repeat: RepeatCfg::default(),
@@ -404,6 +448,10 @@ impl Config {
     pub fn load() -> Self {
         let mut c: Config = std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         c.carts.resize(24, CartPad::default());
+        // the remote API's default port moved from 9000 to 9258; follow it unless someone turned it on
+        if !c.remote.enabled && c.remote.port == 9000 {
+            c.remote.port = 9258;
+        }
         c
     }
     pub fn save(&self) {

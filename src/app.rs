@@ -1,7 +1,8 @@
 use crate::azuracast::Client;
 use crate::browser::Browsers;
-use crate::config::{data_dir, Ad, AdBreak, CartPad, Category, Marker, PatternItem, Rotation, ServerKind, Template};
+use crate::config::{data_dir, Ad, AdBreak, CartPad, Category, Marker, PatternItem, ServerKind, Template};
 use crate::dsp::EQ_FREQS;
+use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
 use crate::playout::{PlayState, Playout};
@@ -26,6 +27,20 @@ const AMBER: Color32 = Color32::from_rgb(235, 190, 60);
 const RED: Color32 = Color32::from_rgb(230, 70, 70);
 const GRAY: Color32 = Color32::from_rgb(98, 106, 120);
 const ACCENT: Color32 = Color32::from_rgb(30, 110, 205);
+
+/// Built-in EQ curves (31 Hz … 16 kHz, dB).
+const EQ_PRESETS: &[(&str, [f32; 12])] = &[
+    ("Flat", [0.0; 12]),
+    ("Broadcast (FM warmth)", [2.0, 2.5, 1.5, 0.0, -1.0, -0.5, 0.5, 1.5, 2.0, 2.5, 2.0, 1.0]),
+    ("Bass boost", [5.0, 4.5, 3.5, 2.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+    ("Voice clarity", [-4.0, -3.0, -1.5, 0.0, 1.0, 2.0, 3.0, 3.0, 2.0, 0.5, 0.0, -1.0]),
+    ("Loudness", [4.0, 3.0, 1.5, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 3.5, 3.0]),
+    ("Treble boost", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.5, 4.5]),
+    ("Dance", [4.5, 4.0, 2.0, 0.0, -1.0, -1.5, 0.0, 1.0, 2.0, 3.0, 2.5, 1.5]),
+    ("Rock", [3.0, 2.5, 1.0, -0.5, -1.0, 0.0, 1.5, 2.5, 3.0, 3.0, 2.5, 2.0]),
+    ("Talk / podcast", [-6.0, -4.0, -2.0, 0.0, 1.0, 2.0, 2.5, 2.0, 1.0, 0.0, -1.0, -2.0]),
+    ("Small speakers", [-3.0, -1.0, 2.0, 3.0, 2.0, 1.0, 0.0, 0.5, 1.0, 1.5, 1.0, 0.0]),
+];
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum SettingsPage {
@@ -90,6 +105,7 @@ enum Dlg {
     InsertFromPlaylist(PathBuf),
     ExportCsv(PathBuf),
     AzUpload(Vec<PathBuf>),
+    RotFiles(usize, Vec<PathBuf>),
 }
 
 enum PlAct {
@@ -116,6 +132,27 @@ mod pltools;
 #[path = "plview.rs"]
 mod plview;
 
+/// Presenter notes for the Track Info tab (notes.json in the data folder).
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct TrackNotes {
+    /// by file path
+    songs: BTreeMap<String, String>,
+    /// by artist (lower case)
+    artists: BTreeMap<String, String>,
+}
+
+impl TrackNotes {
+    fn load() -> Self {
+        std::fs::read_to_string(data_dir().join("notes.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+    fn save(&self) {
+        if let Ok(j) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(data_dir().join("notes.json"), j);
+        }
+    }
+}
+
 /// Frame timing shown by Help → Performance (Ctrl+Shift+P), for diagnosing slowness.
 #[derive(Default)]
 struct Perf {
@@ -130,6 +167,8 @@ struct Perf {
 
 pub struct App {
     core: Arc<Mutex<Playout>>,
+    /// the status-bar message (shared with the playout), usable while the playout is locked
+    notify: Arc<Mutex<String>>,
     pub audio: crate::audio::AudioManager,
     dev_outputs: Vec<String>,
     dev_inputs: Vec<String>,
@@ -161,6 +200,10 @@ pub struct App {
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
+    eq_name: String,
+    notes: TrackNotes,
+    notes_dirty: bool,
+    info_pick: usize,
     updates: crate::updater::Shared,
     show_update: bool,
     update_next: Option<std::time::Instant>,
@@ -173,12 +216,18 @@ pub struct App {
     renaming: Option<(usize, String)>,
     tab_ops: Vec<plview::TabOp>,
     scroll_to: Option<usize>,
+    /// (tab, on-air row) the playlist last scrolled to follow
+    followed: Option<(usize, Option<usize>)>,
+    /// when the automatic hour lines were last checked
+    hour_check: Option<std::time::Instant>,
     item_dlg: Option<pltools::ItemDlg>,
     ins_from_pl: Option<(PathBuf, Vec<PlEntry>, Vec<bool>)>,
     show_vt: bool,
     vt: Option<pltools::VoiceRec>,
     show_repeat: bool,
     show_find: bool,
+    show_keys: bool,
+    about_tab: usize,
     find_text: String,
     find_focus: bool,
     voices: Vec<String>,
@@ -198,6 +247,11 @@ pub struct App {
     auth_error: String,
     show_users: bool,
     new_user_admin: bool,
+    /// what the signed-in operator may do (all true for administrators), refreshed every frame
+    perm: crate::auth::Perms,
+    new_user_perms: crate::auth::Perms,
+    user_pw: HashMap<String, String>,
+    user_delete: Option<String>,
     tool_open: std::collections::BTreeSet<ToolWin>,
     fade_edit: Option<tools::FadeEdit>,
     preview: Option<crate::audio::PreviewPlayer>,
@@ -260,7 +314,10 @@ impl App {
             audio.apply(&c.engine, &c.cfg.audio_devices);
         }
         let (dlg_tx, dlg_rx) = mpsc::channel();
+        let notify = core.lock().notify.clone();
+        core.lock().plugin_event("app_start", serde_json::json!({ "version": crate::updater::CURRENT }));
         App {
+            notify,
             core,
             audio,
             dev_outputs: vec![],
@@ -300,6 +357,10 @@ impl App {
             aux_spawn: HashMap::new(),
             layout_checked: std::time::Instant::now(),
             perf: None,
+            eq_name: String::new(),
+            notes: TrackNotes::load(),
+            notes_dirty: false,
+            info_pick: 1,
             updates: Default::default(),
             show_update: false,
             update_next: None,
@@ -312,12 +373,16 @@ impl App {
             renaming: None,
             tab_ops: vec![],
             scroll_to: None,
+            followed: None,
+            hour_check: None,
             item_dlg: None,
             ins_from_pl: None,
             show_vt: false,
             vt: None,
             show_repeat: false,
             show_find: false,
+            show_keys: false,
+            about_tab: 0,
             find_text: String::new(),
             find_focus: false,
             voices: vec![],
@@ -343,6 +408,10 @@ impl App {
             auth_error: String::new(),
             show_users: false,
             new_user_admin: false,
+            perm: crate::auth::Perms::default(),
+            new_user_perms: crate::auth::Perms::presenter(),
+            user_pw: HashMap::new(),
+            user_delete: None,
         }
     }
 
@@ -414,6 +483,11 @@ impl App {
                     }
                 }
                 Dlg::AzUpload(v) => self.az_upload_here(core, v),
+                Dlg::RotFiles(i, v) => {
+                    if let Some(r) = core.cfg.rotations.get_mut(i) {
+                        r.files.extend(v.iter().map(|p| p.to_string_lossy().to_string()));
+                    }
+                }
                 Dlg::LoadM3u(p) => core.with_tab(self.view_pl, |c| c.load_m3u(&p)),
                 Dlg::SaveM3u(p) => core.with_tab(self.view_pl, |c| c.save_m3u(&p)),
                 Dlg::RenderWav(p) => core.with_tab(self.view_pl, |c| c.render_playlist(p)),
@@ -507,16 +581,16 @@ impl App {
         let icon = self.icon_texture(ctx);
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("New playlist").clicked() {
+                ui.menu_button(tr("File"), |ui| {
+                    if ui.button(tr("New playlist")).clicked() {
                         self.tab_ops.push(plview::TabOp::New);
                         ui.close_menu();
                     }
-                    if ui.button("Open playlist…").clicked() {
+                    if ui.button(tr("Open playlist…")).clicked() {
                         self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::LoadM3u));
                         ui.close_menu();
                     }
-                    if ui.button("Save playlist as…").clicked() {
+                    if ui.button(tr("Save playlist as…")).clicked() {
                         let name =
                             format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));
                         self.dlg(move || {
@@ -525,35 +599,35 @@ impl App {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Add library folder…").clicked() {
+                    if ui.button(tr("Add library folder…")).clicked() {
                         self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
                         ui.close_menu();
                     }
-                    if ui.button("Rescan library").clicked() {
+                    if ui.button(tr("Rescan library")).clicked() {
                         core.start_scan();
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Station profiles…").clicked() {
+                    if ui.button(tr("Station profiles…")).clicked() {
                         self.show_profiles = true;
                         ui.close_menu();
                     }
-                    if self.logged_in.as_ref().is_some_and(|a| a.admin) && ui.button("Users…").clicked() {
+                    if self.logged_in.as_ref().is_some_and(|a| a.admin) && ui.button(tr("Users…")).clicked() {
                         self.show_users = true;
                         ui.close_menu();
                     }
-                    if ui.button("Log out").clicked() {
+                    if ui.button(tr("Log out")).clicked() {
                         self.logged_in = None;
                         self.login_password.clear();
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Exit").clicked() {
+                    if ui.button(tr("Exit")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                ui.menu_button("View", |ui| {
-                    ui.menu_button("Work zones", |ui| {
+                ui.menu_button(tr("View"), |ui| {
+                    ui.menu_button(tr("Work zones"), |ui| {
                         for (n, text) in [(1u8, "1   (playlist only)"), (2, "2   (playlist + panel)"), (3, "3   (playlist + two panels)")] {
                             let b = egui::Button::new(text).shortcut_text(format!("Ctrl+{n}")).selected(self.workzones.panels == n);
                             if ui.add(b).clicked() {
@@ -562,13 +636,13 @@ impl App {
                             }
                         }
                         ui.separator();
-                        if ui.add(egui::Button::new("Additional (new window)").shortcut_text("Ctrl+4")).clicked() {
+                        if ui.add(egui::Button::new(tr("Additional (new window)")).shortcut_text("Ctrl+4")).clicked() {
                             self.workzones.new_aux(Tab::AuxPlaylist);
                             ui.close_menu();
                         }
                         if !self.workzones.aux.is_empty() {
                             ui.label(RichText::new(format!("{} Additional window(s) open", self.workzones.aux.len())).small().color(GRAY));
-                            if ui.button("Close all Additional windows").clicked() {
+                            if ui.button(tr("Close all Additional windows")).clicked() {
                                 for a in self.workzones.aux.clone() {
                                     self.browsers.close_window(&crate::workzones::aux_title(a.id));
                                     self.workzones.close_aux(a.id);
@@ -577,7 +651,7 @@ impl App {
                             }
                         }
                     });
-                    ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel")).on_hover_text("Ctrl+L");
+                    ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel")).on_hover_text(tr("Ctrl+L"));
                     ui.separator();
                     for (tab, key) in [(Tab::FileExplorer, "F1"), (Tab::Search, "F2"), (Tab::Scheduler, "F3")] {
                         if ui.add(egui::Button::new(self.tab_name(tab)).shortcut_text(key)).clicked() {
@@ -588,18 +662,18 @@ impl App {
                     }
                     ui.separator();
                     let mut dark = self.workzones.dark;
-                    if ui.checkbox(&mut dark, "Dark theme").changed() {
+                    if ui.checkbox(&mut dark, tr("Dark theme")).changed() {
                         self.workzones.dark = dark;
                         crate::theme::apply(ctx, dark, self.workzones.scale);
                     }
-                    if ui.add(egui::Button::new("Full screen").shortcut_text("F11").selected(self.fullscreen)).clicked() {
+                    if ui.add(egui::Button::new(tr("Full screen")).shortcut_text("F11").selected(self.fullscreen)).clicked() {
                         self.fullscreen = !self.fullscreen;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Playlist", |ui| self.playlist_menu(ui, core));
-                ui.menu_button("Tools", |ui| {
+                ui.menu_button(tr("Playlist"), |ui| self.playlist_menu(ui, core));
+                ui.menu_button(tr("Tools"), |ui| {
                     for w in [
                         ToolWin::FadeEditor,
                         ToolWin::Generator,
@@ -610,6 +684,7 @@ impl App {
                         ToolWin::Reports,
                         ToolWin::History,
                         ToolWin::Notepad,
+                        ToolWin::Plugins,
                     ] {
                         let sc = match w {
                             ToolWin::Generator => "Ctrl+G",
@@ -617,7 +692,7 @@ impl App {
                             ToolWin::Notepad => "T",
                             _ => "",
                         };
-                        if ui.add(egui::Button::new(format!("{}  {}…", w.icon(), w.label())).shortcut_text(sc)).clicked() {
+                        if ui.add(egui::Button::new(format!("{}  {}…", w.icon(), tr(w.label()))).shortcut_text(sc)).clicked() {
                             if w == ToolWin::FadeEditor {
                                 self.open_fade_editor(core, None);
                             } else {
@@ -627,13 +702,13 @@ impl App {
                         }
                     }
                     ui.separator();
-                    if ui.button("🔴 Record voice track…").clicked() {
+                    if ui.button(tr("🔴 Record voice track…")).clicked() {
                         self.show_vt = true;
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Jingles", |ui| {
-                    ui.label(RichText::new("Cart wall").small().color(GRAY));
+                ui.menu_button(tr("Jingles"), |ui| {
+                    ui.label(RichText::new(tr("Cart wall")).small().color(GRAY));
                     let mut fire = None;
                     for (i, c) in core.cfg.carts.iter().enumerate().take(12) {
                         let label = if c.label.is_empty() { format!("{}. (empty)", i + 1) } else { format!("{}. {}", i + 1, c.label) };
@@ -646,44 +721,55 @@ impl App {
                         core.trigger_cart(i);
                     }
                     ui.separator();
-                    if ui.button("Show cart wall").clicked() {
+                    if ui.add(egui::Button::new(tr("■ Stop all jingles")).shortcut_text("Ctrl+J")).clicked() {
+                        core.stop_carts();
+                        ui.close_menu();
+                    }
+                    if ui.button(tr("Show cart wall")).clicked() {
                         self.workzones.show_left = true;
                         self.workzones.left.add(Tab::Carts);
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Settings", |ui| {
-                    if ui.button("⚙ Settings…").clicked() {
+                ui.menu_button(tr("Settings"), |ui| {
+                    if !self.perm.settings {
+                        ui.disable();
+                    }
+                    if ui.add(egui::Button::new(tr("⚙ Settings…")).shortcut_text("Ctrl+,")).clicked() {
                         self.show_settings = true;
                         ui.close_menu();
                     }
-                    if ui.button("Station profiles…").clicked() {
+                    if ui.button(tr("Station profiles…")).clicked() {
                         self.show_profiles = true;
                         ui.close_menu();
                     }
-                    if ui.button("Track List Repeat Protection…").clicked() {
+                    if ui.button(tr("Track List Repeat Protection…")).clicked() {
                         self.show_repeat = true;
                         ui.close_menu();
                     }
                 });
-                ui.menu_button("Help", |ui| {
-                    if ui.add(egui::Button::new("Performance").shortcut_text("Ctrl+Shift+P").selected(self.perf.is_some())).clicked() {
+                ui.menu_button(tr("Help"), |ui| {
+                    if ui.add(egui::Button::new(tr("Performance")).shortcut_text("Ctrl+Shift+P").selected(self.perf.is_some())).clicked() {
                         self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
                         ui.close_menu();
                     }
-                    if ui.button("Check for updates…").clicked() {
+                    if ui.add(egui::Button::new(tr("Keyboard shortcuts")).shortcut_text("Ctrl+/")).clicked() {
+                        self.show_keys = true;
+                        ui.close_menu();
+                    }
+                    if ui.button(tr("Check for updates…")).clicked() {
                         crate::updater::check(self.updates.clone(), ctx.clone(), true);
                         self.show_update = true;
                         ui.close_menu();
                     }
-                    if ui.button("About RadioMaster").clicked() {
+                    if ui.button(tr("About RadioMaster")).clicked() {
                         self.show_about = true;
                         ui.close_menu();
                     }
                 });
                 ui.separator();
                 // quick buttons
-                if ui.button("⚙").on_hover_text("Settings").clicked() {
+                if ui.add_enabled(self.perm.settings, egui::Button::new("⚙")).on_hover_text(tr("Settings")).clicked() {
                     self.show_settings = true;
                 }
                 for (w, short) in [
@@ -694,7 +780,7 @@ impl App {
                     (ToolWin::Streams, "Streams"),
                     (ToolWin::AzuraCast, "AzuraCast"),
                 ] {
-                    if ui.button(short).on_hover_text(w.label()).clicked() {
+                    if ui.add_enabled(w.allowed(&self.perm), egui::Button::new(tr(short))).on_hover_text(tr(w.label())).clicked() {
                         if w == ToolWin::FadeEditor {
                             self.open_fade_editor(core, None);
                         } else {
@@ -712,21 +798,24 @@ impl App {
                         self.workzones.panels = n;
                     }
                 }
-                if ui.button("➕🗗").on_hover_text("Additional window (Ctrl+4) — open as many as you like").clicked() {
+                if ui.button("➕🗗").on_hover_text(tr("Additional window (Ctrl+4) — open as many as you like")).clicked() {
                     self.workzones.new_aux(Tab::AuxPlaylist);
                 }
                 let new_version = self.updates.lock().available.as_ref().map(|a| a.version.clone());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Master").strong().size(15.0).color(Color32::from_rgb(20, 150, 235)));
+                    ui.label(RichText::new(tr("Master")).strong().size(15.0).color(Color32::from_rgb(20, 150, 235)));
                     ui.add_space(-ui.spacing().item_spacing.x);
-                    ui.label(RichText::new("Radio").strong().size(15.0));
+                    ui.label(RichText::new(tr("Radio")).strong().size(15.0));
                     if let Some(t) = &icon {
                         ui.add(egui::Image::new((t.id(), egui::vec2(18.0, 18.0))));
                     }
                     if let Some(v) = &new_version {
                         let b = egui::Button::new(RichText::new(format!("⬆ Update available: v{v}")).strong().color(Color32::WHITE))
                             .fill(Color32::from_rgb(20, 150, 235));
-                        if ui.add(b).on_hover_text("A newer RadioMaster is on GitHub — click to see what's new and install it").clicked()
+                        if ui
+                            .add(b)
+                            .on_hover_text(tr("A newer RadioMaster is on GitHub — click to see what's new and install it"))
+                            .clicked()
                         {
                             self.show_update = true;
                         }
@@ -734,17 +823,124 @@ impl App {
                 });
             });
         });
-        if self.show_about {
-            Self::window_for(ctx, "About RadioMaster", [380.0, 240.0]).open(&mut self.show_about).collapsible(false).show(ctx, |ui| {
-                if let Some(t) = &logo {
-                    let size = t.size_vec2();
-                    ui.add(egui::Image::new((t.id(), egui::vec2(300.0, 300.0 * size.y / size.x))));
-                }
-                ui.heading(format!("RadioMaster {}", env!("CARGO_PKG_VERSION")));
-                ui.label("Radio automation in Rust.");
-                ui.label("Icecast · Shoutcast · AzuraCast");
-            });
+        self.about_window(ctx, logo.as_ref());
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context, logo: Option<&egui::TextureHandle>) {
+        if !self.show_about {
+            return;
         }
+        let mut open = true;
+        let mut ok = false;
+        Self::window_for(ctx, "About RadioMaster", [560.0, 420.0])
+            .id(egui::Id::new("about_window"))
+            .collapsible(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for (k, name) in ["About", "Contributors", "Credits"].into_iter().enumerate() {
+                        ui.selectable_value(&mut self.about_tab, k, name);
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(290.0).show(ui, |ui| match self.about_tab {
+                    0 => {
+                        if let Some(t) = logo {
+                            let size = t.size_vec2();
+                            ui.add(egui::Image::new((t.id(), egui::vec2(280.0, 280.0 * size.y / size.x))));
+                        }
+                        ui.label(tr("RadioMaster — radio automation for Icecast, Shoutcast and AzuraCast, written in Rust."));
+                        ui.label(
+                            RichText::new(format!(
+                                "Version {} ({}, {})",
+                                crate::updater::CURRENT,
+                                env!("RM_GIT_HASH"),
+                                env!("RM_BUILD_DATE")
+                            ))
+                            .monospace(),
+                        );
+                        ui.add_space(10.0);
+                        ui.vertical_centered(|ui| {
+                            let b = egui::Button::new(RichText::new(tr("   Join us on Discord   ")).strong().color(Color32::WHITE))
+                                .fill(Color32::from_rgb(30, 140, 230))
+                                .corner_radius(14);
+                            if ui.add(b).clicked() {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab("https://discord.gg/zVxeUXCjhc"));
+                            }
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.hyperlink_to("RadioMaster website", "https://epell-development.github.io/RadioMaster/");
+                                ui.label("·");
+                                ui.hyperlink_to("GitHub", "https://github.com/epell-development/RadioMaster");
+                                ui.label("·");
+                                ui.hyperlink_to("DovaFM DEG", "https://deg.dovafm.com");
+                            });
+                        });
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new(tr("A DovaFM Digital Entertainment Group brand. Free and open source under the MIT licence."))
+                                .small()
+                                .color(GRAY),
+                        );
+                        ui.label(RichText::new(tr("egui · rodio · symphonia · LAME")).small().color(GRAY));
+                    }
+                    1 => {
+                        let mut section = String::new();
+                        for line in include_str!("../CONTRIBUTORS.md").lines() {
+                            if let Some(h) = line.strip_prefix("## ") {
+                                section = h.to_string();
+                            } else if let Some(entry) = line.strip_prefix("- ") {
+                                if !section.is_empty() {
+                                    ui.add_space(6.0);
+                                    ui.strong(std::mem::take(&mut section));
+                                }
+                                ui.label(entry);
+                            }
+                        }
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new(tr(
+                                "Want to be listed? Contribute code, a translation or testing — see CONTRIBUTORS.md on GitHub.",
+                            ))
+                            .small()
+                            .color(GRAY),
+                        );
+                    }
+                    _ => {
+                        ui.label(tr("RadioMaster is built on these open-source projects:"));
+                        ui.add_space(4.0);
+                        egui::Grid::new("credits").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
+                            for (name, what) in [
+                                ("egui / eframe", "user interface"),
+                                ("rodio · cpal", "audio output and input"),
+                                ("symphonia", "MP3, AAC, FLAC, OGG and WAV decoding"),
+                                ("LAME (mp3lame-encoder)", "MP3 encoding for streaming"),
+                                ("lofty", "tags and album art"),
+                                ("wry · Microsoft Edge WebView2", "embedded web panels"),
+                                ("ureq · rustls", "AzuraCast, updates and HTTP"),
+                                ("tiny_http", "remote control API"),
+                                ("argon2", "password hashing"),
+                                ("serde · chrono · image · rfd", "settings, time, images, file dialogs"),
+                            ] {
+                                ui.strong(name);
+                                ui.label(what);
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(tr("Each keeps its own licence (MIT, Apache-2.0, MPL-2.0 or LGPL for LAME)."))
+                                .small()
+                                .color(GRAY),
+                        );
+                    }
+                });
+                ui.separator();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ok = ui.button(RichText::new(tr("   OK   ")).strong()).clicked();
+                });
+            });
+        self.show_about = open && !ok;
     }
 
     // ----------------------------------------------------------- status bar
@@ -831,20 +1027,20 @@ impl App {
                                     .size(13.0)
                                     .color(Color32::from_rgb(170, 40, 120)),
                             )
-                            .on_hover_text("Time until the next hour marker in the playlist");
+                            .on_hover_text(tr("Time until the next hour marker in the playlist"));
                         }
                     });
                 });
                 tile(ui, Color32::from_rgb(255, 214, 170), tiles[1], &mut |ui| {
-                    ui.label(RichText::new("LAST TRACK").color(Color32::from_rgb(90, 60, 20)).small());
+                    ui.label(RichText::new(tr("LAST TRACK")).color(Color32::from_rgb(90, 60, 20)).small());
                     ui.add(egui::Label::new(RichText::new(previous.clone()).color(Color32::BLACK)).truncate());
                 });
                 tile(ui, Color32::from_rgb(176, 240, 186), tiles[2], &mut |ui| {
-                    ui.label(RichText::new("●  ON AIR").strong().color(Color32::from_rgb(18, 90, 34)).small());
+                    ui.label(RichText::new(tr("●  ON AIR")).strong().color(Color32::from_rgb(18, 90, 34)).small());
                     ui.add(egui::Label::new(RichText::new(title.clone()).color(Color32::BLACK).size(17.0).strong()).truncate());
                 });
                 tile(ui, Color32::from_rgb(245, 246, 190), tiles[3], &mut |ui| {
-                    ui.label(RichText::new("COMING UP NEXT").color(Color32::from_rgb(80, 80, 30)).small());
+                    ui.label(RichText::new(tr("COMING UP NEXT")).color(Color32::from_rgb(80, 80, 30)).small());
                     ui.add(egui::Label::new(RichText::new(coming.clone()).color(Color32::BLACK)).truncate());
                 });
             });
@@ -863,46 +1059,50 @@ impl App {
                 ui.allocate_ui(egui::vec2(transport_w, 78.0), |ui| {
                     ui.vertical(|ui| {
                         let bs = egui::vec2(bw, 34.0);
+                        let may_play = self.perm.playback;
                         ui.horizontal(|ui| {
-                            if ui.add_sized(bs, egui::Button::new("⏮")).on_hover_text("Previous").clicked() {
+                            if !may_play {
+                                ui.disable();
+                            }
+                            if ui.add_sized(bs, egui::Button::new("⏮")).on_hover_text(tr("Previous")).clicked() {
                                 core.prev();
                             }
                             if ui
                                 .add_sized(bs, egui::Button::new(RichText::new("▶").color(Color32::from_rgb(20, 140, 50))))
-                                .on_hover_text("Play")
+                                .on_hover_text(tr("Play"))
                                 .clicked()
                             {
                                 let s = self.sel.iter().next().cloned();
                                 core.play_pressed(s);
                             }
-                            if ui.add_sized(bs, egui::Button::new("⏸")).on_hover_text("Pause").clicked() {
+                            if ui.add_sized(bs, egui::Button::new("⏸")).on_hover_text(tr("Pause")).clicked() {
                                 core.pause_toggle();
                             }
                             if ui
                                 .add_sized(bs, egui::Button::new(RichText::new("⏹").color(Color32::from_rgb(200, 40, 40))))
-                                .on_hover_text("Stop")
+                                .on_hover_text(tr("Stop"))
                                 .clicked()
                             {
                                 core.stop();
                             }
-                            if ui.add_sized(bs, egui::Button::new("⏭")).on_hover_text("Next").clicked() {
+                            if ui.add_sized(bs, egui::Button::new("⏭")).on_hover_text(tr("Next")).clicked() {
                                 core.next();
                             }
                         });
                         ui.spacing_mut().slider_width = (transport_w - 95.0).max(70.0);
                         ui.horizontal(|ui| {
-                            ui.label("Vol ");
+                            ui.label(tr("Vol "));
                             let mut v = core.cfg.volume;
                             if ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false)).changed() {
                                 core.set_volume(v);
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Fade");
+                            ui.label(tr("Fade"));
                             let smart = core.cfg.fade.mode == crate::fade::FadeMode::Smart;
                             if ui
                                 .selectable_label(smart, "Smart")
-                                .on_hover_text("Smart fading: analyse each track and pick the mix point automatically")
+                                .on_hover_text(tr("Smart fading: analyse each track and pick the mix point automatically"))
                                 .clicked()
                             {
                                 core.cfg.fade.mode = if smart { crate::fade::FadeMode::Fixed } else { crate::fade::FadeMode::Smart };
@@ -916,7 +1116,7 @@ impl App {
                 ui.separator();
                 ui.allocate_ui(egui::vec2(elapsed_w, 78.0), |ui| {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new("ELAPSED").small().color(GRAY));
+                        ui.label(RichText::new(tr("ELAPSED")).small().color(GRAY));
                         ui.label(RichText::new(fmt(st.pos)).monospace().size(32.0).strong().color(ACCENT));
                         ui.label(RichText::new(format!("-{}", fmt(st.total - st.pos))).monospace().size(15.0).color(GRAY));
                     });
@@ -954,7 +1154,7 @@ impl App {
                 ui.allocate_ui(egui::vec2(meters_w, 78.0), |ui| {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label("L");
+                            ui.label(tr("L"));
                             vu(ui, st.peak_l, meters_w - 62.0);
                             let (txt, col) = match core.state {
                                 PlayState::Playing => ("PLAY", Color32::from_rgb(20, 140, 50)),
@@ -964,29 +1164,22 @@ impl App {
                             ui.label(RichText::new(txt).small().strong().color(col));
                         });
                         ui.horizontal(|ui| {
-                            ui.label("R");
+                            ui.label(tr("R"));
                             vu(ui, st.peak_r, meters_w - 62.0);
                         });
                         ui.horizontal(|ui| {
-                            let mut on = self.mic_on;
-                            if ui.toggle_value(&mut on, "🎤 Mic").changed() {
-                                if on {
-                                    match crate::mic::start(core.engine.clone(), &core.cfg.audio_devices.input) {
-                                        Ok(s) => {
-                                            self.mic_stream = Some(s);
-                                            self.mic_on = true;
-                                        }
-                                        Err(e) => core.say(format!("Mic error: {e}")),
-                                    }
-                                } else {
-                                    self.mic_stream = None;
-                                    self.mic_on = false;
-                                }
+                            if ui
+                                .add_enabled(self.perm.playback, egui::SelectableLabel::new(self.mic_on, "🎤 Mic"))
+                                .on_hover_text(tr("Microphone on/off (Ctrl+M)"))
+                                .clicked()
+                            {
+                                self.toggle_mic(core);
                             }
                             ui.spacing_mut().slider_width = ((meters_w - 90.0) / 2.0).max(36.0);
-                            ui.add(egui::Slider::new(&mut core.cfg.mic_gain, 0.0..=2.0).show_value(false)).on_hover_text("Mic gain");
+                            ui.add(egui::Slider::new(&mut core.cfg.mic_gain, 0.0..=2.0).show_value(false))
+                                .on_hover_text(tr("Microphone volume"));
                             ui.add(egui::Slider::new(&mut core.cfg.mic_duck, 0.0..=1.0).show_value(false))
-                                .on_hover_text("Music level while mic is on");
+                                .on_hover_text(tr("Music level while the mic is on (left = silent, right = no ducking)"));
                         });
                     });
                 });
@@ -997,8 +1190,8 @@ impl App {
 
     fn tab_queue(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal(|ui| {
-            ui.strong("PLAYBACK QUEUE");
-            if ui.button("Add files…").clicked() {
+            ui.strong(tr("PLAYBACK QUEUE"));
+            if ui.button(tr("Add files…")).clicked() {
                 self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
             }
         });
@@ -1006,7 +1199,7 @@ impl App {
         let mut play = None;
         for (index, entry) in core.playlist.iter().enumerate().skip(start).take(50) {
             ui.horizontal(|ui| {
-                if ui.small_button("▶").on_hover_text("Play this item next").clicked() {
+                if ui.small_button("▶").on_hover_text(tr("Play this item next")).clicked() {
                     play = Some(index);
                 }
                 ui.label(RichText::new(format!("{:03}", index + 1)).monospace().color(GRAY));
@@ -1021,22 +1214,24 @@ impl App {
             core.play_index(i, fade);
         }
         if start >= core.playlist.len() {
-            ui.label("Queue is empty. Add music to the playlist.");
+            ui.label(tr("Queue is empty. Add music to the playlist."));
         }
     }
 
     fn tab_search(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal(|ui| {
-            ui.strong("SEARCH LIBRARY");
-            if ui.button("Rescan").clicked() {
+            ui.strong(tr("SEARCH LIBRARY"));
+            if ui.button(tr("Rescan")).clicked() {
                 core.start_scan();
             }
         });
         ui.add(
-            egui::TextEdit::singleline(&mut self.lib_filter).hint_text("Search artist, title, album, genre…").desired_width(f32::INFINITY),
+            egui::TextEdit::singleline(&mut self.lib_filter)
+                .hint_text(tr("Search artist, title, album, genre…"))
+                .desired_width(f32::INFINITY),
         );
         if self.lib_filter.trim().is_empty() {
-            ui.label("Enter a search to find music in your library.");
+            ui.label(tr("Enter a search to find music in your library."));
             return;
         }
         let needle = self.lib_filter.to_lowercase();
@@ -1058,7 +1253,7 @@ impl App {
         for i in hits {
             let track = &core.library[i];
             ui.horizontal(|ui| {
-                if ui.small_button("➕").on_hover_text("Add to playlist").clicked() {
+                if ui.small_button("➕").on_hover_text(tr("Add to playlist")).clicked() {
                     append = Some(i);
                 }
                 ui.add(egui::Label::new(track.label()).truncate());
@@ -1073,7 +1268,7 @@ impl App {
     }
 
     fn tab_statistics(&mut self, ui: &mut egui::Ui, core: &Playout) {
-        ui.strong("STATION STATISTICS");
+        ui.strong(tr("STATION STATISTICS"));
         ui.separator();
         ui.label(format!("Playlist tracks: {}", core.playlist.len()));
         ui.label(format!("Total playlist length: {}", fmt(core.total_secs())));
@@ -1083,16 +1278,16 @@ impl App {
         if let Some(np) = &core.azura.lock().np {
             ui.label(format!("Listeners: {} ({} unique)", np.listeners.current, np.listeners.unique));
         } else {
-            ui.label("Listeners: not available from AzuraCast");
+            ui.label(tr("Listeners: not available from AzuraCast"));
         }
         ui.separator();
-        ui.small("Live station status; historical audience graphs require a stats source.");
+        ui.small(tr("Live station status; historical audience graphs require a stats source."));
     }
 
     fn tab_clock(&mut self, ui: &mut egui::Ui, core: &Playout) {
         ui.vertical_centered(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("STUDIO CLOCK").small().color(GRAY));
+            ui.label(RichText::new(tr("STUDIO CLOCK")).small().color(GRAY));
             ui.label(RichText::new(Local::now().format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
             ui.label(Local::now().format("%A, %d %B %Y").to_string());
             if let Some(m) = core.secs_to_next_marker() {
@@ -1107,7 +1302,7 @@ impl App {
         let on = core.on_air_text();
         ui.label(if on.is_empty() { "Silence / idle".to_string() } else { on });
         ui.separator();
-        ui.strong("Projected start times");
+        ui.strong(tr("Projected start times"));
         let starts = core.projected_starts(true);
         let next = core.current.map(|n| n + 1).unwrap_or(0);
         for (i, e) in core.playlist.iter().enumerate().skip(next).take(14) {
@@ -1125,22 +1320,27 @@ impl App {
 
     fn tab_segment(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal(|ui| {
-            ui.strong("SEGMENT / SCRIPT");
-            if ui.button("Save").clicked() {
+            ui.strong(tr("SEGMENT / SCRIPT"));
+            if ui.button(tr("Save")).clicked() {
                 let _ = std::fs::write(data_dir().join("segment.txt"), &self.segment_text);
                 core.say("Segment saved");
             }
-            if ui.button("New").clicked() {
+            if ui.button(tr("New")).clicked() {
                 self.segment_text.clear();
             }
         });
         ui.add(egui::TextEdit::singleline(&mut self.segment_name).desired_width(220.0));
         ui.add(egui::TextEdit::multiline(&mut self.segment_text).desired_width(f32::INFINITY).desired_rows(20));
-        ui.small("Presenter notes are local text; they are not automatically broadcast.");
+        ui.small(tr("Presenter notes are local text; they are not automatically broadcast."));
     }
 
     fn settings_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         if !self.show_settings {
+            return;
+        }
+        if !self.perm.settings {
+            self.show_settings = false;
+            core.say("Your account isn't allowed to change settings");
             return;
         }
         let mut open = self.show_settings;
@@ -1150,56 +1350,87 @@ impl App {
                 // footer first so Save / Close can never be pushed off-screen
                 egui::TopBottomPanel::bottom("settings_footer").exact_height(40.0).show_inside(ui,|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
-                        if ui.button("Close").clicked() {close=true;}
-                        if ui.button("Save configuration").clicked() {core.save_all(); let _=self.workzones.save();}
+                        if ui.button(tr("Close")).clicked() {close=true;}
+                        if ui.button(tr("Save configuration")).clicked() {core.save_all(); let _=self.workzones.save();}
                     });
                 });
                 egui::SidePanel::left("settings_pages").resizable(false).exact_width(178.0).show_inside(ui,|ui| {
-                    ui.heading("Settings");
+                    ui.heading(tr("Settings"));
                     ui.separator();
                     egui::ScrollArea::vertical().id_salt("settings_pages_scroll").show(ui,|ui| {
                         for page in SettingsPage::ALL {
-                            if ui.selectable_label(self.settings_page==page,page.label()).clicked() {
+                            if ui.selectable_label(self.settings_page==page,tr(page.label())).clicked() {
                                 self.settings_page=page;
                             }
                         }
                     });
                 });
                 egui::CentralPanel::default().show_inside(ui,|ui| {
-                    ui.heading(self.settings_page.label());
+                    ui.heading(tr(self.settings_page.label()));
                     ui.separator();
                     egui::ScrollArea::both().id_salt("settings_content").auto_shrink([false,false]).show(ui,|ui| {
                         match self.settings_page {
                             SettingsPage::General=>{
-                                ui.label("Radio automation, playback and studio settings.");
+                                ui.label(tr("Radio automation, playback and studio settings."));
                                 ui.label(format!("Data folder: {}",data_dir().display()));
                                 ui.label(format!("Active profile: {}",self.profile_name));
-                                if ui.button("Station profiles…").clicked(){self.show_profiles=true;}
+                                if ui.button(tr("Station profiles…")).clicked(){self.show_profiles=true;}
                                 ui.separator();
-                                ui.checkbox(&mut core.cfg.check_updates, "Check for updates when RadioMaster starts");
+                                ui.checkbox(&mut core.cfg.check_updates, tr("Check for updates when RadioMaster starts"));
+                                ui.separator();
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(tr("Language"));
+                                    let before = core.cfg.language.clone();
+                                    egui::ComboBox::from_id_salt("language")
+                                        .selected_text(if core.cfg.language.is_empty() { "English".to_string() } else { core.cfg.language.clone() })
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut core.cfg.language, String::new(), "English");
+                                            for l in crate::i18n::languages() {
+                                                ui.selectable_value(&mut core.cfg.language, l.clone(), l);
+                                            }
+                                        });
+                                    if core.cfg.language != before {
+                                        match crate::i18n::load(&core.cfg.language) {
+                                            Ok(n) => core.say(format!("{}: {n}", tr("Language loaded, translated texts"))),
+                                            Err(e) => core.say(e),
+                                        }
+                                    }
+                                    if ui.button(tr("Export translation template")).on_hover_text(tr("Writes a file with every text to translate into the lang folder of your data folder")).clicked() {
+                                        match crate::i18n::export_template(&core.cfg.language) {
+                                            Ok(p) => {
+                                                core.say(format!("{} {}", tr("Saved"), p.display()));
+                                                if let Some(d) = p.parent() {
+                                                    crate::plugins::open_folder(d);
+                                                }
+                                            }
+                                            Err(e) => core.say(e),
+                                        }
+                                    }
+                                });
+                                ui.label(RichText::new(tr("Translate RadioMaster: export the template, fill in the right-hand side of each line, save it as e.g. Deutsch.json in the lang folder, then pick it here. Share it on GitHub so everyone gets it.")).small().color(GRAY));
                                 ui.label(RichText::new(format!("This is version {}. Help → Check for updates looks right now.", crate::updater::CURRENT)).small().color(GRAY));
                             },
                             SettingsPage::Library=>{
-                                ui.label("Music folders scanned by the library");
+                                ui.label(tr("Music folders scanned by the library"));
                                 let mut remove=None;
                                 for (i,path) in core.cfg.library_folders.iter().enumerate() {
                                     ui.horizontal(|ui| {
                                         ui.label(path);
-                                        if ui.small_button("Remove").clicked(){remove=Some(i);}
+                                        if ui.small_button(tr("Remove")).clicked(){remove=Some(i);}
                                     });
                                 }
                                 if let Some(i)=remove {core.cfg.library_folders.remove(i);}
-                                if ui.button("Add folder…").clicked() {
+                                if ui.button(tr("Add folder…")).clicked() {
                                     self.dlg(||rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
                                 }
-                                if ui.button("Rescan").clicked(){core.start_scan();}
+                                if ui.button(tr("Rescan")).clicked(){core.start_scan();}
                             },
                             SettingsPage::Playback=>{
                                 ui.checkbox(&mut core.cfg.loop_playlist,"Loop the playlist");
                                 ui.checkbox(&mut core.cfg.auto_enabled,"Enable automated playlist top-up");
                                 ui.checkbox(&mut core.cfg.random_fill,"Fill from music library");
                                 ui.separator();
-                                ui.heading("Transitions");
+                                ui.heading(tr("Transitions"));
                                 self.smart_fade_settings(ui, core);
                             },
                             SettingsPage::Streaming=>self.tab_streaming(ui,core),
@@ -1207,10 +1438,10 @@ impl App {
                             SettingsPage::Devices=>self.tab_devices(ui,core),
                             SettingsPage::Automation=>self.tab_settings(ui,core),
                             SettingsPage::Remote=>{
-                                ui.label("Remote control API (restart required)");
+                                ui.label(tr("Remote control API (restart required)"));
                                 ui.checkbox(&mut core.cfg.remote.enabled,"Enable remote API");
                                 ui.add(egui::DragValue::new(&mut core.cfg.remote.port).range(1..=65535).prefix("Port "));
-                                ui.add(egui::TextEdit::singleline(&mut core.cfg.remote.password).password(true).hint_text("API password"));
+                                ui.add(egui::TextEdit::singleline(&mut core.cfg.remote.password).password(true).hint_text(tr("API password")));
                                 ui.colored_label(AMBER,"Set a strong password before enabling network access.");
                             },
                             SettingsPage::Appearance=>{
@@ -1218,27 +1449,27 @@ impl App {
                                     crate::theme::apply(ctx, self.workzones.dark, self.workzones.scale);
                                 }
                                 ui.horizontal(|ui| {
-                                    ui.label("Interface size");
+                                    ui.label(tr("Interface size"));
                                     let r = ui.add(egui::Slider::new(&mut self.workzones.scale, 0.8..=1.6).show_value(false));
                                     ui.label(format!("{}%", (self.workzones.scale * 100.0).round() as i32));
                                     if (r.drag_stopped() || (r.changed() && !r.dragged())) && !ui.input(|i| i.pointer.any_down()) {
                                         crate::theme::apply(ctx, self.workzones.dark, self.workzones.scale);
                                     }
-                                    if ui.button("Reset").clicked() {
+                                    if ui.button(tr("Reset")).clicked() {
                                         self.workzones.scale = 1.0;
                                         crate::theme::apply(ctx, self.workzones.dark, 1.0);
                                     }
                                 });
-                                ui.small("Make everything larger or smaller if the text is hard to read.");
+                                ui.small(tr("Make everything larger or smaller if the text is hard to read."));
                                 ui.separator();
                                 ui.horizontal(|ui| {
-                                    ui.label("Work zone");
+                                    ui.label(tr("Work zone"));
                                     for n in 1..=3u8 {
                                         ui.selectable_value(&mut self.workzones.panels, n, format!("{n} panel(s)"));
                                     }
                                 });
-                                ui.small("View → Work zones (Ctrl+1/2/3) sets how many panels the main window has; Ctrl+4 opens another Additional window.");
-                                if ui.button("Reset panel layout").clicked() {
+                                ui.small(tr("View → Work zones (Ctrl+1/2/3) sets how many panels the main window has; Ctrl+4 opens another Additional window."));
+                                if ui.button(tr("Reset panel layout")).clicked() {
                                     let d = WorkzoneSet::default();
                                     self.workzones.left = d.left;
                                     self.workzones.top = d.top;
@@ -1249,9 +1480,9 @@ impl App {
                             },
                             SettingsPage::Accounts=>{
                                 let admin=self.logged_in.as_ref().is_some_and(|u|u.admin);
-                                if admin && ui.button("Manage operator accounts…").clicked(){self.show_users=true;}
-                                if !admin {ui.label("Only administrators can manage user accounts.");}
-                                ui.small("Accounts gate the local UI; secure your Windows account and streaming API separately.");
+                                if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.show_users=true;}
+                                if !admin {ui.label(tr("Only administrators can manage user accounts."));}
+                                ui.small(tr("Accounts gate the local UI; secure your Windows account and streaming API separately."));
                             },
                         }
 
@@ -1270,21 +1501,23 @@ impl App {
                     ui.add(egui::Image::new((t.id(), egui::vec2(340.0, 340.0 * size.y / size.x))));
                     ui.add_space(10.0);
                 }
-                ui.heading("Studio Access");
+                ui.heading(tr("Studio Access"));
                 ui.add_space(18.0);
                 if self.accounts.users.is_empty() {
-                    ui.label("First run: create your administrator account.");
+                    ui.label(tr("First run: create your administrator account."));
                 } else {
-                    ui.label("Sign in to access station controls.");
+                    ui.label(tr("Sign in to access station controls."));
                 }
-                ui.add_sized([300.0, 26.0], egui::TextEdit::singleline(&mut self.login_name).hint_text("Username"));
+                ui.add_sized([300.0, 26.0], egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("Username")));
                 ui.add_sized(
                     [300.0, 26.0],
-                    egui::TextEdit::singleline(&mut self.login_password).password(true).hint_text("Password (12+ characters for setup)"),
+                    egui::TextEdit::singleline(&mut self.login_password)
+                        .password(true)
+                        .hint_text(tr("Password (12+ characters for setup)")),
                 );
                 let enter =
                     ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.login_name.trim().is_empty() && !self.login_password.is_empty();
-                if ui.button(if self.accounts.users.is_empty() { "Create administrator" } else { "Sign in" }).clicked() || enter {
+                if ui.button(if self.accounts.users.is_empty() { tr("Create administrator") } else { tr("Sign in") }).clicked() || enter {
                     if self.accounts.users.is_empty() {
                         match self.accounts.add(&self.login_name, &self.login_password, true) {
                             Ok(()) => {
@@ -1298,37 +1531,157 @@ impl App {
                         self.auth_error = if self.logged_in.is_some() { String::new() } else { "Invalid username or password".into() };
                     }
                     self.login_password.clear();
+                    if self.logged_in.is_some() {
+                        self.login_name.clear(); // the "add a user" form reuses this box
+                    }
                 }
                 ui.colored_label(RED, &self.auth_error);
             });
         });
     }
 
+    /// Microphone on / off.
+    fn toggle_mic(&mut self, core: &mut Playout) {
+        if self.mic_on {
+            self.mic_stream = None;
+            self.mic_on = false;
+        } else {
+            match crate::mic::start(core.engine.clone(), &core.cfg.audio_devices.input) {
+                Ok(s) => {
+                    self.mic_stream = Some(s);
+                    self.mic_on = true;
+                }
+                Err(e) => core.say(format!("Mic error: {e}")),
+            }
+        }
+    }
+
     fn users_window(&mut self, ctx: &egui::Context) {
         if !self.show_users || !self.logged_in.as_ref().map(|u| u.admin).unwrap_or(false) {
             return;
         }
+        use crate::auth::Perms;
         let mut open = self.show_users;
-        Self::window_for(ctx, "Access control — operators", [520.0, 380.0]).open(&mut open).show(ctx, |ui| {
-            ui.label("Existing operators");
-            for u in &self.accounts.users {
-                ui.label(format!("{} — {}", u.name, if u.admin { "Administrator" } else { "Operator" }));
-            }
+        let me = self.logged_in.as_ref().map(|u| u.name.clone()).unwrap_or_default();
+        let mut changes: Vec<(String, bool, Perms, bool)> = vec![];
+        let mut reset: Option<(String, String)> = None;
+        let mut delete: Option<String> = None;
+        Self::window_for(ctx, "Users and permissions", [860.0, 520.0]).id(egui::Id::new("users_window")).open(&mut open).show(ctx, |ui| {
+            ui.label(
+                RichText::new(tr(
+                    "Administrators can do everything, including managing users. Other operators only get the ticked permissions.",
+                ))
+                .small()
+                .color(GRAY),
+            );
+            ui.add_space(4.0);
+            egui::ScrollArea::both().max_height(300.0).show(ui, |ui| {
+                egui::Grid::new("users_grid").striped(true).num_columns(11).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.strong(tr("User"));
+                    ui.strong(tr("Admin"));
+                    for (name, help) in Perms::LIST {
+                        ui.strong(name).on_hover_text(help);
+                    }
+                    ui.strong(tr("Disabled"));
+                    ui.strong(tr("New password"));
+                    ui.label("");
+                    ui.end_row();
+                    for u in &self.accounts.users {
+                        let (mut admin, mut perms, mut disabled) = (u.admin, u.perms, u.disabled);
+                        ui.label(if u.name == me { RichText::new(format!("{} (you)", u.name)).strong() } else { RichText::new(&u.name) });
+                        ui.checkbox(&mut admin, "");
+                        for k in 0..Perms::LIST.len() {
+                            ui.add_enabled(!admin, egui::Checkbox::without_text(perms.get_mut(k)));
+                        }
+                        ui.add_enabled(u.name != me, egui::Checkbox::without_text(&mut disabled))
+                            .on_disabled_hover_text(tr("You can't disable your own account"));
+                        let pw = self.user_pw.entry(u.name.clone()).or_default();
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(pw).password(true).hint_text(tr("12+ characters")).desired_width(120.0));
+                            if ui.add_enabled(pw.len() >= 12, egui::Button::new(tr("Set"))).clicked() {
+                                reset = Some((u.name.clone(), pw.clone()));
+                            }
+                        });
+                        if self.user_delete.as_deref() == Some(&u.name) {
+                            ui.horizontal(|ui| {
+                                if ui.button(RichText::new(tr("Delete!")).color(RED)).clicked() {
+                                    delete = Some(u.name.clone());
+                                }
+                                if ui.button(tr("Keep")).clicked() {
+                                    self.user_delete = None;
+                                }
+                            });
+                        } else if ui.add_enabled(u.name != me, egui::Button::new("🗑")).on_hover_text(tr("Delete this user")).clicked() {
+                            self.user_delete = Some(u.name.clone());
+                        }
+                        ui.end_row();
+                        if (admin, perms, disabled) != (u.admin, u.perms, u.disabled) {
+                            changes.push((u.name.clone(), admin, perms, disabled));
+                        }
+                    }
+                });
+            });
             ui.separator();
-            ui.label("Create operator");
-            ui.add(egui::TextEdit::singleline(&mut self.login_name).desired_width(220.0));
-            ui.add(egui::TextEdit::singleline(&mut self.login_password).password(true).hint_text("New password"));
-            ui.checkbox(&mut self.new_user_admin, "Administrator");
-            if ui.button("Create user").clicked() {
-                if let Err(e) = self.accounts.add(&self.login_name, &self.login_password, self.new_user_admin) {
-                    self.auth_error = e;
-                } else {
-                    self.auth_error.clear();
+            ui.strong(tr("Add a user"));
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("username")).desired_width(150.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.login_password)
+                        .password(true)
+                        .hint_text(tr("password (12+ characters)"))
+                        .desired_width(190.0),
+                );
+                ui.checkbox(&mut self.new_user_admin, tr("Administrator"));
+            });
+            if !self.new_user_admin {
+                ui.horizontal_wrapped(|ui| {
+                    for (k, (name, help)) in Perms::LIST.iter().enumerate() {
+                        ui.checkbox(self.new_user_perms.get_mut(k), *name).on_hover_text(*help);
+                    }
+                });
+            }
+            if ui.button(RichText::new(tr("Create user")).strong()).clicked() {
+                let perms = if self.new_user_admin { Perms::default() } else { self.new_user_perms };
+                match self.accounts.add_with(&self.login_name, &self.login_password, self.new_user_admin, perms) {
+                    Ok(()) => {
+                        self.auth_error = format!("Created {}", self.login_name.trim());
+                        self.login_name.clear();
+                    }
+                    Err(e) => self.auth_error = e,
                 }
                 self.login_password.clear();
             }
-            ui.colored_label(RED, &self.auth_error);
+            if !self.auth_error.is_empty() {
+                ui.colored_label(
+                    if self.auth_error.starts_with("Created") || self.auth_error.starts_with("Saved") { GREEN } else { RED },
+                    &self.auth_error,
+                );
+            }
         });
+        for (name, admin, perms, disabled) in changes {
+            self.auth_error = match self.accounts.update(&name, admin, perms, disabled) {
+                Ok(()) => format!("Saved {name}"),
+                Err(e) => e,
+            };
+        }
+        if let Some((name, pw)) = reset {
+            self.auth_error = match self.accounts.set_password(&name, &pw) {
+                Ok(()) => format!("Saved a new password for {name}"),
+                Err(e) => e,
+            };
+            self.user_pw.remove(&name);
+        }
+        if let Some(name) = delete {
+            self.auth_error = match self.accounts.delete(&name) {
+                Ok(()) => format!("Saved: {name} deleted"),
+                Err(e) => e,
+            };
+            self.user_delete = None;
+        }
+        // keep the signed-in snapshot in step with edits to your own account
+        if let Some(u) = self.logged_in.as_ref().and_then(|me| self.accounts.users.iter().find(|x| x.name == me.name)).cloned() {
+            self.logged_in = Some(u);
+        }
         self.show_users = open;
     }
 
@@ -1338,11 +1691,11 @@ impl App {
         }
         let mut open = self.show_profiles;
         Self::window_for(ctx, "Station profiles", [460.0, 380.0]).open(&mut open).show(ctx, |ui| {
-            ui.label("Save or load individual station settings (including encoder passwords). Keep the profile directory private.");
+            ui.label(tr("Save or load individual station settings (including encoder passwords). Keep the profile directory private."));
             ui.horizontal(|ui| {
-                ui.label("Profile:");
+                ui.label(tr("Profile:"));
                 ui.add(egui::TextEdit::singleline(&mut self.profile_name).desired_width(220.0));
-                if ui.button("Save snapshot").clicked() {
+                if ui.button(tr("Save snapshot")).clicked() {
                     let safe: String = self.profile_name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
                     if !safe.is_empty() {
                         let path = data_dir().join("profiles");
@@ -1375,13 +1728,13 @@ impl App {
 
     fn tab_library(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal_wrapped(|ui| {
-            if ui.button("➕ Folder…").clicked() {
+            if ui.button(tr("➕ Folder…")).clicked() {
                 self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
             }
-            if ui.add_enabled(!core.scanning, egui::Button::new("⟳")).on_hover_text("Rescan").clicked() {
+            if ui.add_enabled(!core.scanning, egui::Button::new("⟳")).on_hover_text(tr("Rescan")).clicked() {
                 core.start_scan();
             }
-            if ui.button("Add all").on_hover_text("Add all shown tracks to the playlist").clicked() {
+            if ui.button(tr("Add all")).on_hover_text(tr("Add all shown tracks to the playlist")).clicked() {
                 let paths = self.lib_filtered.iter().map(|&i| core.library[i].path.clone()).collect();
                 let v = self.view_pl;
                 core.with_tab(v, |c| c.add_paths(paths));
@@ -1393,7 +1746,9 @@ impl App {
                 ui.label(RichText::new(format!("{} tracks", core.library.len())).color(GRAY));
             }
         });
-        ui.add(egui::TextEdit::singleline(&mut self.lib_filter).desired_width(f32::INFINITY).hint_text("🔍 search artist, title, album"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.lib_filter).desired_width(f32::INFINITY).hint_text(tr("🔍 search artist, title, album")),
+        );
         let key = (self.lib_filter.to_lowercase(), core.library_ver);
         if key != self.lib_key {
             let f = key.0.clone();
@@ -1421,14 +1776,14 @@ impl App {
             .id_salt(("library_table", (lib_w / 24.0) as i32))
             .striped(true)
             .resizable(true)
-            .sense(egui::Sense::click())
+            .sense(egui::Sense::click_and_drag())
             .column(Column::initial((lib_w * 0.38).max(70.0)).at_least(40.0).clip(true))
             .column(Column::remainder().at_least(60.0).clip(true))
             .column(Column::exact(58.0))
             .header(20.0, |mut h| {
                 for t in ["Artist", "Title", "Length"] {
                     h.col(|ui| {
-                        ui.strong(t);
+                        ui.strong(tr(t));
                     });
                 }
             })
@@ -1449,6 +1804,10 @@ impl App {
                     let r = row.response();
                     if r.clicked() || r.secondary_clicked() {
                         *lsel = Some(li);
+                    }
+                    if r.drag_started() {
+                        *lsel = Some(li);
+                        r.dnd_set_drag_payload(plview::DragFiles(vec![t.path.clone()]));
                     }
                     if r.double_clicked() {
                         act = Some((li, "add"));
@@ -1482,7 +1841,7 @@ impl App {
                     core.insert_next(vec![t.path]);
                     core.next();
                 }
-                "tags" => self.open_track_editor_for(core, t),
+                "tags" => self.open_track_editor_for(core, t, Some(li)),
                 _ => Self::upload(core, vec![t.path]),
             }
         }
@@ -1493,26 +1852,50 @@ impl App {
             let cols = ((ui.available_width() / 116.0) as usize).clamp(1, 6);
             let pad_width = ((ui.available_width() - (cols.saturating_sub(1)) as f32 * 6.0) / cols as f32 - 8.0).max(86.0);
             let mut trigger = None;
+            let may_play = self.perm.playback;
+            let playing = core.engine.carts_playing();
+            if !playing.is_empty() {
+                ui.ctx().request_repaint_after(Duration::from_millis(200));
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(may_play && !playing.is_empty(), egui::Button::new(RichText::new(tr("■ Stop jingles")).strong()))
+                    .on_hover_text(tr("Fade out every jingle that is playing (Ctrl+J)"))
+                    .clicked()
+                {
+                    core.stop_carts();
+                }
+                if !playing.is_empty() {
+                    ui.label(RichText::new(format!("{} playing", playing.len())).color(GREEN));
+                }
+            });
             egui::Grid::new("carts").spacing([6.0, 6.0]).show(ui, |ui| {
                 for i in 0..core.cfg.carts.len() {
                     let pad: &mut CartPad = &mut core.cfg.carts[i];
                     let loaded = !pad.path.is_empty();
+                    let on = loaded && playing.iter().any(|p| p.as_path() == std::path::Path::new(&pad.path));
                     let label = if loaded { pad.label.clone() } else { format!("Pad {}", i + 1) };
-                    let fill = if loaded { Color32::from_rgb(40, 80, 130) } else { Color32::from_gray(48) };
+                    let fill = if on {
+                        Color32::from_rgb(200, 60, 60)
+                    } else if loaded {
+                        Color32::from_rgb(40, 80, 130)
+                    } else {
+                        Color32::from_gray(48)
+                    };
                     let b = ui.add_sized([pad_width, 54.0], egui::Button::new(RichText::new(label).strong()).fill(fill).wrap());
-                    if b.clicked() && loaded {
+                    if b.clicked() && loaded && may_play {
                         trigger = Some(i);
                     }
                     b.context_menu(|ui| {
-                        if ui.button("Assign audio file…").clicked() {
+                        if ui.button(tr("Assign audio file…")).clicked() {
                             self.dlg(move || {
                                 rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::Cart(i, p))
                             });
                             ui.close_menu();
                         }
-                        ui.label("Label:");
+                        ui.label(tr("Label:"));
                         ui.add(egui::TextEdit::singleline(&mut pad.label).desired_width(220.0));
-                        if ui.button("Clear pad").clicked() {
+                        if ui.button(tr("Clear pad")).clicked() {
                             *pad = CartPad::default();
                             ui.close_menu();
                         }
@@ -1526,13 +1909,15 @@ impl App {
                 core.trigger_cart(i);
             }
             ui.label(
-                RichText::new("Click to fire (plays over the main program). Right-click a pad to assign or relabel.").small().color(GRAY),
+                RichText::new(tr("Click to fire (plays over the main program); click a red, playing pad to stop it. Right-click a pad to assign or relabel."))
+                    .small()
+                    .color(GRAY),
             );
         });
     }
 
     fn tab_scheduler(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        if ui.button("➕ Add event").clicked() {
+        if ui.button(tr("➕ Add event")).clicked() {
             core.cfg.events.push(Event::default());
         }
         let mut del = None;
@@ -1562,7 +1947,7 @@ impl App {
                         });
                         if e.action.needs_path() {
                             ui.add(egui::TextEdit::singleline(&mut e.path).desired_width(360.0));
-                            if ui.button("Browse…").clicked() {
+                            if ui.button(tr("Browse…")).clicked() {
                                 let pl = e.action == ActionKind::LoadPlaylistAndPlay;
                                 self.dlg(move || {
                                     let d = rfd::FileDialog::new();
@@ -1580,10 +1965,10 @@ impl App {
                                 ui.add(egui::Slider::new(&mut e.arg, 0.0..=1.0));
                             } else {
                                 let mut k = e.arg as usize;
-                                ui.label("encoder #");
+                                ui.label(tr("encoder #"));
                                 ui.add(egui::DragValue::new(&mut k).range(0..=n_enc.saturating_sub(1)));
                                 e.arg = k as f32;
-                                ui.label(RichText::new("(0 = first)").small().color(GRAY));
+                                ui.label(RichText::new(tr("(0 = first)")).small().color(GRAY));
                             }
                         }
                     });
@@ -1618,17 +2003,17 @@ impl App {
             self.refresh_devices(core);
         }
         ui.horizontal(|ui| {
-            if ui.button("⟳ Refresh devices").clicked() {
+            if ui.button(tr("⟳ Refresh devices")).clicked() {
                 self.refresh_devices(core);
             }
-            if ui.button("Apply outputs").clicked() {
+            if ui.button(tr("Apply outputs")).clicked() {
                 self.audio.apply(&core.engine, &core.cfg.audio_devices);
                 core.say("Audio outputs applied");
             }
         });
         ui.add_space(4.0);
-        ui.heading("Outputs");
-        ui.label("Tick every device that should play the on-air mix. The first working device is the primary; the others get a copy (monitor / headphones / second sound card). Each has its own volume.");
+        ui.heading(tr("Outputs"));
+        ui.label(tr("Tick every device that should play the on-air mix. The first working device is the primary; the others get a copy (monitor / headphones / second sound card). Each has its own volume."));
         let mut changed = false;
         let mut to_top = None;
         let n = core.cfg.audio_devices.outputs.len();
@@ -1649,7 +2034,7 @@ impl App {
                     ui.add(egui::Label::new(t).truncate());
                 });
                 if !present {
-                    ui.label(RichText::new("(not connected)").small().color(GRAY));
+                    ui.label(RichText::new(tr("(not connected)")).small().color(GRAY));
                 }
                 if let Some(r) = role {
                     ui.label(RichText::new(r.to_uppercase()).small().strong().color(if r == "primary" {
@@ -1663,7 +2048,7 @@ impl App {
                     self.audio.set_gain(&name, o.gain);
                 }
                 ui.label(format!("{}%", (o.gain * 100.0).round() as i32));
-                if i > 0 && ui.small_button("⬆ primary").on_hover_text("Make this the primary output").clicked() {
+                if i > 0 && ui.small_button(tr("⬆ primary")).on_hover_text(tr("Make this the primary output")).clicked() {
                     to_top = Some(i);
                 }
             });
@@ -1684,23 +2069,23 @@ impl App {
         }
         ui.add_space(8.0);
         ui.separator();
-        ui.heading("Input (microphone / line in)");
+        ui.heading(tr("Input (microphone / line in)"));
         let cur = if core.cfg.audio_devices.input.is_empty() { "System default".to_string() } else { core.cfg.audio_devices.input.clone() };
         egui::ComboBox::from_id_salt("input_device").width(340.0).selected_text(cur).show_ui(ui, |ui| {
-            ui.selectable_value(&mut core.cfg.audio_devices.input, String::new(), "System default");
+            ui.selectable_value(&mut core.cfg.audio_devices.input, String::new(), tr("System default"));
             for n in &self.dev_inputs {
                 ui.selectable_value(&mut core.cfg.audio_devices.input, n.clone(), n);
             }
         });
-        ui.small("Switch the Mic button off and on again after changing the input.");
+        ui.small(tr("Switch the Mic button off and on again after changing the input."));
         ui.add_space(8.0);
         ui.separator();
-        ui.heading("Preview (track editor)");
-        ui.label("Where ▶ Play / Preview mix in the track editor is heard. It is never sent to the stream, but if it is the same device as your on-air output, it will be heard in the room.");
+        ui.heading(tr("Preview (track editor)"));
+        ui.label(tr("Where ▶ Play / Preview mix in the track editor is heard. It is never sent to the stream, but if it is the same device as your on-air output, it will be heard in the room."));
         let cur =
             if core.cfg.audio_devices.preview.is_empty() { "System default".to_string() } else { core.cfg.audio_devices.preview.clone() };
         egui::ComboBox::from_id_salt("preview_device").width(340.0).selected_text(cur).show_ui(ui, |ui| {
-            ui.selectable_value(&mut core.cfg.audio_devices.preview, String::new(), "System default");
+            ui.selectable_value(&mut core.cfg.audio_devices.preview, String::new(), tr("System default"));
             for n in &self.dev_outputs {
                 ui.selectable_value(&mut core.cfg.audio_devices.preview, n.clone(), n);
             }
@@ -1709,7 +2094,7 @@ impl App {
 
     fn tab_streaming(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let mut act: Option<(usize, &'static str)> = None;
-        if ui.button("➕ Add encoder").clicked() {
+        if ui.button(tr("➕ Add encoder")).clicked() {
             core.add_encoder();
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1733,65 +2118,65 @@ impl App {
                     .default_open(i == 0)
                     .show(ui, |ui| {
                         egui::Grid::new(("encgrid", i)).num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
-                            ui.label("Name");
+                            ui.label(tr("Name"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.name));
-                            ui.label("Server type");
+                            ui.label(tr("Server type"));
                             egui::ComboBox::from_id_salt(("kind", i)).selected_text(format!("{:?}", enc.kind)).show_ui(ui, |ui| {
-                                ui.selectable_value(&mut enc.kind, ServerKind::Icecast, "Icecast");
-                                ui.selectable_value(&mut enc.kind, ServerKind::Shoutcast, "Shoutcast (v2 DJ)");
+                                ui.selectable_value(&mut enc.kind, ServerKind::Icecast, tr("Icecast"));
+                                ui.selectable_value(&mut enc.kind, ServerKind::Shoutcast, tr("Shoutcast (v2 DJ)"));
                             });
                             ui.end_row();
-                            ui.label("Host");
+                            ui.label(tr("Host"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.host));
-                            ui.label("Port");
+                            ui.label(tr("Port"));
                             ui.add(egui::DragValue::new(&mut enc.port).range(1..=65535));
                             ui.end_row();
-                            ui.label("Mount");
+                            ui.label(tr("Mount"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.mount));
-                            ui.label("Bitrate (kbps)");
+                            ui.label(tr("Bitrate (kbps)"));
                             egui::ComboBox::from_id_salt(("br", i)).selected_text(enc.bitrate_kbps.to_string()).show_ui(ui, |ui| {
                                 for b in [64, 96, 128, 160, 192, 256, 320] {
                                     ui.selectable_value(&mut enc.bitrate_kbps, b, b.to_string());
                                 }
                             });
                             ui.end_row();
-                            ui.label("Username");
+                            ui.label(tr("Username"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.username));
-                            ui.label("Password");
+                            ui.label(tr("Password"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.password).password(true));
                             ui.end_row();
-                            ui.label("Stream name");
+                            ui.label(tr("Stream name"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.stream_name));
-                            ui.label("Genre");
+                            ui.label(tr("Genre"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.genre));
                             ui.end_row();
-                            ui.label("Description");
+                            ui.label(tr("Description"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.description));
-                            ui.label("Website");
+                            ui.label(tr("Website"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.url));
                             ui.end_row();
                         });
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut enc.public, "List publicly");
-                            ui.checkbox(&mut enc.send_metadata, "Send track titles");
-                            ui.checkbox(&mut enc.start_with_app, "Connect on startup");
+                            ui.checkbox(&mut enc.public, tr("List publicly"));
+                            ui.checkbox(&mut enc.send_metadata, tr("Send track titles"));
+                            ui.checkbox(&mut enc.start_with_app, tr("Connect on startup"));
                         });
                         ui.horizontal(|ui| {
                             if running {
-                                if ui.button(RichText::new("⏹ Disconnect").color(RED)).clicked() {
+                                if ui.button(RichText::new(tr("⏹ Disconnect")).color(RED)).clicked() {
                                     act = Some((i, "stop"));
                                 }
-                            } else if ui.button(RichText::new("▶ Connect").color(GREEN)).clicked() {
+                            } else if ui.button(RichText::new(tr("▶ Connect")).color(GREEN)).clicked() {
                                 act = Some((i, "start"));
                             }
                             if ui
                                 .button("AzuraCast DJ preset")
-                                .on_hover_text("Icecast, mount “/”, user/pass = AzuraCast Streamer account, port = station DJ port")
+                                .on_hover_text(tr("Icecast, mount “/”, user/pass = AzuraCast Streamer account, port = station DJ port"))
                                 .clicked()
                             {
                                 act = Some((i, "preset"));
                             }
-                            if ui.button("🗑 Remove").clicked() {
+                            if ui.button(tr("🗑 Remove")).clicked() {
                                 act = Some((i, "remove"));
                             }
                             if running {
@@ -1830,32 +2215,35 @@ impl App {
         let err = core.azura.lock().error.clone();
         ui.columns(2, |cols| {
             let ui = &mut cols[0];
-            ui.strong("Connection");
+            ui.strong(tr("Connection"));
             let a = &mut core.cfg.azuracast;
             egui::Grid::new("az").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-                ui.label("Enable polling");
+                ui.label(tr("Enable polling"));
                 ui.checkbox(&mut a.enabled, "");
                 ui.end_row();
-                ui.label("Base URL");
-                ui.add(egui::TextEdit::singleline(&mut a.base_url).hint_text("https://radio.example.com").desired_width(260.0));
+                ui.label(tr("Base URL"));
+                ui.add(egui::TextEdit::singleline(&mut a.base_url).hint_text(tr("https://radio.example.com")).desired_width(260.0));
                 ui.end_row();
-                ui.label("Station");
-                ui.add(egui::TextEdit::singleline(&mut a.station).hint_text("short name or ID").desired_width(260.0));
+                ui.label(tr("Station"));
+                ui.add(egui::TextEdit::singleline(&mut a.station).hint_text(tr("short name or ID")).desired_width(260.0));
                 ui.end_row();
-                ui.label("API key");
+                ui.label(tr("API key"));
                 ui.add(
-                    egui::TextEdit::singleline(&mut a.api_key).password(true).hint_text("id:secret (for skip/upload)").desired_width(260.0),
+                    egui::TextEdit::singleline(&mut a.api_key)
+                        .password(true)
+                        .hint_text(tr("id:secret (for skip/upload)"))
+                        .desired_width(260.0),
                 );
                 ui.end_row();
-                ui.label("Upload folder");
-                ui.add(egui::TextEdit::singleline(&mut a.upload_dir).hint_text("optional").desired_width(260.0));
+                ui.label(tr("Upload folder"));
+                ui.add(egui::TextEdit::singleline(&mut a.upload_dir).hint_text(tr("optional")).desired_width(260.0));
                 ui.end_row();
-                ui.label("Poll every (s)");
+                ui.label(tr("Poll every (s)"));
                 ui.add(egui::DragValue::new(&mut a.poll_secs).range(2..=60));
                 ui.end_row();
             });
             ui.horizontal(|ui| {
-                if ui.button("⏭ Skip AutoDJ song").clicked() {
+                if ui.button(tr("⏭ Skip AutoDJ song")).clicked() {
                     let (c, n) = (core.cfg.azuracast.clone(), core.notify.clone());
                     thread::spawn(move || {
                         *n.lock() = match Client::new(&c).skip() {
@@ -1864,7 +2252,7 @@ impl App {
                         };
                     });
                 }
-                if ui.button("Use for encoder #0").on_hover_text("Copies host + server type into the first encoder").clicked() {
+                if ui.button(tr("Use for encoder #0")).on_hover_text(tr("Copies host + server type into the first encoder")).clicked() {
                     let host = host_of(&core.cfg.azuracast.base_url);
                     let kind = np.as_ref().map(|n| n.station.frontend.clone()).unwrap_or_default();
                     if let Some(e) = core.cfg.encoders.first_mut() {
@@ -1878,17 +2266,23 @@ impl App {
                 ui.colored_label(RED, e);
             }
             ui.label(
-                RichText::new("Tip: create a Streamer/DJ account in AzuraCast, then use the “AzuraCast DJ preset” on the Streaming tab.")
-                    .small()
-                    .color(GRAY),
+                RichText::new(tr(
+                    "Tip: create a Streamer/DJ account in AzuraCast, then use the “AzuraCast DJ preset” on the Streaming tab.",
+                ))
+                .small()
+                .color(GRAY),
             );
 
             let ui = &mut cols[1];
-            ui.strong("On air");
+            ui.strong(tr("On air"));
             match &np {
                 Some(n) => {
                     ui.label(RichText::new(&n.station.name).heading());
-                    ui.label(if n.is_online { RichText::new("● online").color(GREEN) } else { RichText::new("● offline").color(RED) });
+                    ui.label(if n.is_online {
+                        RichText::new(tr("● online")).color(GREEN)
+                    } else {
+                        RichText::new(tr("● offline")).color(RED)
+                    });
                     if n.live.is_live {
                         ui.label(RichText::new(format!("🎙 Live DJ: {}", n.live.streamer_name)).color(AMBER));
                     }
@@ -1898,7 +2292,7 @@ impl App {
                         ui.label(RichText::new(format!("Next: {} — {}", p.song.artist, p.song.title)).color(GRAY));
                     }
                     ui.separator();
-                    ui.strong("Recent");
+                    ui.strong(tr("Recent"));
                     egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
                         for h in n.song_history.iter().take(15) {
                             ui.label(format!("{} — {}", h.song.artist, h.song.title));
@@ -1906,14 +2300,14 @@ impl App {
                     });
                 }
                 None => {
-                    ui.label(RichText::new("No data yet — enable polling and fill in URL + station.").color(GRAY));
+                    ui.label(RichText::new(tr("No data yet — enable polling and fill in URL + station.")).color(GRAY));
                 }
             }
         });
     }
 
     fn tab_history(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        ui.label(RichText::new("Also appended to history.csv in the RadioMaster data folder.").small().color(GRAY));
+        ui.label(RichText::new(tr("Also appended to history.csv in the RadioMaster data folder.")).small().color(GRAY));
         egui::ScrollArea::vertical().show(ui, |ui| {
             for h in core.history.iter().rev() {
                 ui.horizontal(|ui| {
@@ -1926,7 +2320,7 @@ impl App {
 
     fn tab_settings(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.strong("Library folders");
+            ui.strong(tr("Library folders"));
             let mut del = None;
             for (i, f) in core.cfg.library_folders.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -1940,42 +2334,22 @@ impl App {
                 core.cfg.library_folders.remove(i);
             }
             ui.separator();
-            ui.strong("Rotations (insert jingles / ads / sweepers every N songs)");
-            let mut rdel = None;
-            for i in 0..core.cfg.rotations.len() {
-                let r = &mut core.cfg.rotations[i];
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut r.enabled, "");
-                    ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(100.0));
-                    ui.label("every");
-                    ui.add(egui::DragValue::new(&mut r.every_n).range(1..=50));
-                    ui.label("songs from");
-                    ui.add(egui::TextEdit::singleline(&mut r.folder).desired_width(220.0));
-                    if ui.button("Browse…").clicked() {
-                        self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::RotFolder(i, p)));
-                    }
-                    if ui.small_button("🗑").clicked() {
-                        rdel = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = rdel {
-                core.cfg.rotations.remove(i);
-            }
-            if ui.button("➕ Add rotation").clicked() {
-                core.cfg.rotations.push(Rotation::default());
-            }
-            ui.label(RichText::new("The rotation folder must be inside a scanned library folder.").small().color(GRAY));
+            ui.horizontal(|ui| {
+                ui.label(tr("Adverts and jingles every N songs are set up in"));
+                if ui.link("Tools → Advertisement scheduler").clicked() {
+                    self.open_tool(ToolWin::Ads);
+                }
+            });
             ui.separator();
-            ui.strong("Export now-playing metadata");
+            ui.strong(tr("Export now-playing metadata"));
             egui::Grid::new("exp").num_columns(2).show(ui, |ui| {
-                ui.label("Text file");
+                ui.label(tr("Text file"));
                 ui.add(egui::TextEdit::singleline(&mut core.cfg.export.text_file).desired_width(380.0));
                 ui.end_row();
-                ui.label("XML file");
+                ui.label(tr("XML file"));
                 ui.add(egui::TextEdit::singleline(&mut core.cfg.export.xml_file).desired_width(380.0));
                 ui.end_row();
-                ui.label("HTTP GET URL");
+                ui.label(tr("HTTP GET URL"));
                 ui.add(
                     egui::TextEdit::singleline(&mut core.cfg.export.http_url)
                         .desired_width(380.0)
@@ -1984,18 +2358,21 @@ impl App {
                 ui.end_row();
             });
             ui.separator();
-            ui.strong("Remote control API  (restart required)");
+            ui.strong(tr("Remote control API  (restart required)"));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut core.cfg.remote.enabled, "Enable");
-                ui.label("port");
+                ui.checkbox(&mut core.cfg.remote.enabled, tr("Enable"));
+                ui.label(tr("port"));
                 ui.add(egui::DragValue::new(&mut core.cfg.remote.port).range(1..=65535));
-                ui.label("password");
+                ui.label(tr("password"));
                 ui.add(egui::TextEdit::singleline(&mut core.cfg.remote.password).password(true).desired_width(120.0));
             });
             ui.label(
-                RichText::new("e.g. http://localhost:9000/api/status  ·  /api/next  ·  /api/volume?v=0.8  (add &pw=… if set)")
-                    .small()
-                    .color(GRAY),
+                RichText::new(format!(
+                    "e.g. http://localhost:{}/api/status  ·  /api/next  ·  /api/volume?v=0.8  (add &pw=… if set)",
+                    core.cfg.remote.port
+                ))
+                .small()
+                .color(GRAY),
             );
         });
     }
@@ -2005,29 +2382,29 @@ impl App {
         let tpl_names: Vec<String> = core.cfg.templates.iter().map(|t| t.name.clone()).collect();
         let mut gen: Option<(String, bool)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.strong("Auto-playlist");
+            ui.strong(tr("Auto-playlist"));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut core.cfg.auto_enabled, "Keep the playlist filled automatically");
-                ui.label("using");
+                ui.checkbox(&mut core.cfg.auto_enabled, tr("Keep the playlist filled automatically"));
+                ui.label(tr("using"));
                 name_combo(ui, "autotpl", &mut core.cfg.auto_template, &tpl_names);
-                ui.label("when under");
+                ui.label(tr("when under"));
                 ui.add(egui::DragValue::new(&mut core.cfg.auto_min_mins).range(1..=600).suffix(" min left"));
             });
             ui.separator();
-            ui.strong("Categories  (what each pool of tracks is made from)");
+            ui.strong(tr("Categories  (what each pool of tracks is made from)"));
             let mut del = None;
             for i in 0..core.cfg.categories.len() {
                 let c = &mut core.cfg.categories[i];
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(100.0));
-                    ui.label("folder");
-                    ui.add(egui::TextEdit::singleline(&mut c.folder).desired_width(260.0).hint_text("any"));
+                    ui.label(tr("folder"));
+                    ui.add(egui::TextEdit::singleline(&mut c.folder).desired_width(260.0).hint_text(tr("any")));
                     if ui.button("…").clicked() {
                         self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::CatFolder(i, p)));
                     }
-                    ui.label("genre");
-                    ui.add(egui::TextEdit::singleline(&mut c.genre).desired_width(90.0).hint_text("any"));
-                    ui.label("length");
+                    ui.label(tr("genre"));
+                    ui.add(egui::TextEdit::singleline(&mut c.genre).desired_width(90.0).hint_text(tr("any")));
+                    ui.label(tr("length"));
                     ui.add(egui::DragValue::new(&mut c.min_secs).range(0.0..=3600.0).suffix("s"));
                     ui.label("–");
                     ui.add(egui::DragValue::new(&mut c.max_secs).range(0.0..=7200.0).suffix("s"));
@@ -2039,16 +2416,16 @@ impl App {
             if let Some(i) = del {
                 core.cfg.categories.remove(i);
             }
-            if ui.button("➕ Add category").clicked() {
+            if ui.button(tr("➕ Add category")).clicked() {
                 core.cfg.categories.push(Category { name: format!("Category {}", core.cfg.categories.len() + 1), ..Default::default() });
             }
             ui.separator();
-            ui.strong("Templates");
+            ui.strong(tr("Templates"));
             ui.horizontal(|ui| {
                 for (i, n) in tpl_names.iter().enumerate() {
                     ui.selectable_value(&mut self.tpl_sel, i, n);
                 }
-                if ui.button("➕ New").clicked() {
+                if ui.button(tr("➕ New")).clicked() {
                     core.cfg.templates.push(Template { name: format!("Template {}", core.cfg.templates.len() + 1), ..Default::default() });
                     self.tpl_sel = core.cfg.templates.len() - 1;
                 }
@@ -2059,14 +2436,14 @@ impl App {
             let mut del_tpl = false;
             if let Some(t) = core.cfg.templates.get_mut(self.tpl_sel) {
                 ui.horizontal(|ui| {
-                    ui.label("Name");
+                    ui.label(tr("Name"));
                     ui.add(egui::TextEdit::singleline(&mut t.name).desired_width(140.0));
-                    ui.label("Length");
+                    ui.label(tr("Length"));
                     ui.add(egui::DragValue::new(&mut t.minutes).range(5..=1440).suffix(" min"));
-                    ui.label("Artist separation");
+                    ui.label(tr("Artist separation"));
                     ui.add(egui::DragValue::new(&mut t.artist_gap).range(0..=50).suffix(" tracks"));
                 });
-                ui.label(RichText::new("Pattern (repeats until the length is reached):").color(GRAY));
+                ui.label(RichText::new(tr("Pattern (repeats until the length is reached):")).color(GRAY));
                 let mut pdel = None;
                 for (k, p) in t.pattern.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
@@ -2081,16 +2458,16 @@ impl App {
                 if let Some(k) = pdel {
                     t.pattern.remove(k);
                 }
-                if ui.button("➕ Add pattern step").clicked() {
+                if ui.button(tr("➕ Add pattern step")).clicked() {
                     t.pattern.push(PatternItem::default());
                 }
-                ui.label(RichText::new("Markers (jingles / ads / hour markers inserted at intervals):").color(GRAY));
+                ui.label(RichText::new(tr("Markers (jingles / ads / hour markers inserted at intervals):")).color(GRAY));
                 let mut mdel = None;
                 for (k, m) in t.markers.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        ui.label("every");
+                        ui.label(tr("every"));
                         ui.add(egui::DragValue::new(&mut m.every_mins).range(1..=600).suffix(" min"));
-                        ui.label("insert from");
+                        ui.label(tr("insert from"));
                         name_combo(ui, ("mk", k), &mut m.category, &cat_names);
                         if ui.small_button("✖").clicked() {
                             mdel = Some(k);
@@ -2100,17 +2477,17 @@ impl App {
                 if let Some(k) = mdel {
                     t.markers.remove(k);
                 }
-                if ui.button("➕ Add marker").clicked() {
+                if ui.button(tr("➕ Add marker")).clicked() {
                     t.markers.push(Marker::default());
                 }
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("▶ Generate (replace playlist)").color(GREEN)).clicked() {
+                    if ui.button(RichText::new(tr("▶ Generate (replace playlist)")).color(GREEN)).clicked() {
                         gen = Some((t.name.clone(), false));
                     }
-                    if ui.button("Append to playlist").clicked() {
+                    if ui.button(tr("Append to playlist")).clicked() {
                         gen = Some((t.name.clone(), true));
                     }
-                    if ui.button("🗑 Delete template").clicked() {
+                    if ui.button(tr("🗑 Delete template")).clicked() {
                         del_tpl = true;
                     }
                 });
@@ -2127,25 +2504,224 @@ impl App {
         }
     }
 
+    /// Song-count rules: "after every 5 songs play 2 adverts" (and the same for jingles).
+    fn rotation_rules_ui(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        use crate::config::RotPick;
+        ui.strong(tr("Every N songs"));
+        ui.label(
+            RichText::new(tr(
+                "After every N songs, these are added straight after the song that is starting. Adverts and jingles don't count as songs.",
+            ))
+            .small()
+            .color(GRAY),
+        );
+        let mut rdel = None;
+        for i in 0..core.cfg.rotations.len() {
+            let r = &mut core.cfg.rotations[i];
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut r.enabled, "");
+                    ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(110.0));
+                    ui.selectable_value(&mut r.adverts, true, tr("Adverts"));
+                    ui.selectable_value(&mut r.adverts, false, tr("Jingles"));
+                    ui.label(tr("· every"));
+                    ui.add(egui::DragValue::new(&mut r.every_n).range(1..=100));
+                    ui.label(tr("songs play"));
+                    if r.pick == RotPick::All {
+                        ui.label(tr("all of them"));
+                    } else {
+                        ui.add(egui::DragValue::new(&mut r.count).range(1..=20));
+                    }
+                    if ui.small_button("🗑").on_hover_text(tr("Delete this rule")).clicked() {
+                        rdel = Some(i);
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(tr("Which:"));
+                    ui.radio_value(&mut r.pick, RotPick::Random, tr("random"));
+                    ui.radio_value(&mut r.pick, RotPick::InOrder, tr("in order (takes turns)"));
+                    ui.radio_value(&mut r.pick, RotPick::All, tr("all"));
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(tr("From:"));
+                    if r.files.is_empty() {
+                        ui.add(egui::TextEdit::singleline(&mut r.folder).desired_width(240.0).hint_text(tr("folder")));
+                        if ui.button(tr("Folder…")).clicked() {
+                            self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::RotFolder(i, p)));
+                        }
+                        ui.label(tr("or"));
+                    }
+                    if ui.button(tr("Choose files…")).clicked() {
+                        self.dlg(move || {
+                            rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(|v| Dlg::RotFiles(i, v))
+                        });
+                    }
+                });
+                if !r.files.is_empty() {
+                    let mut fdel = None;
+                    let mut up = None;
+                    for (k, f) in r.files.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("✖").clicked() {
+                                fdel = Some(k);
+                            }
+                            if k > 0 && ui.small_button("⬆").on_hover_text(tr("Play earlier (in order)")).clicked() {
+                                up = Some(k);
+                            }
+                            let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            let mark = if r.pick == RotPick::InOrder && k == r.next % r.files.len().max(1) { "▶ " } else { "" };
+                            ui.label(format!("{mark}{name}"));
+                        });
+                    }
+                    if let Some(k) = fdel {
+                        r.files.remove(k);
+                    }
+                    if let Some(k) = up {
+                        r.files.swap(k, k - 1);
+                    }
+                    ui.label(
+                        RichText::new(tr("These files are used instead of a folder. Remove them all to go back to a folder."))
+                            .small()
+                            .color(GRAY),
+                    );
+                }
+            });
+        }
+        if let Some(i) = rdel {
+            core.cfg.rotations.remove(i);
+        }
+        ui.horizontal(|ui| {
+            if ui.button(tr("➕ Advert rule")).clicked() {
+                core.cfg.rotations.push(crate::config::Rotation {
+                    name: "Adverts".into(),
+                    adverts: true,
+                    every_n: 5,
+                    count: 2,
+                    enabled: true,
+                    ..Default::default()
+                });
+            }
+            if ui.button(tr("➕ Jingle rule")).clicked() {
+                core.cfg.rotations.push(crate::config::Rotation { enabled: true, ..Default::default() });
+            }
+        });
+    }
+
+    fn tab_plugins(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        ui.label(tr("Plugins are small programs, in any language, that RadioMaster runs when something happens on air — a song starts, the hour changes, an encoder drops. They can also send station commands back."));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr("📂 Open plugins folder")).clicked() {
+                match crate::plugins::write_example() {
+                    Ok(dir) => crate::plugins::open_folder(&dir),
+                    Err(e) => core.say(format!("Plugins folder: {e}")),
+                }
+            }
+            if ui.button(tr("⟳ Reload plugins")).clicked() {
+                let off = core.cfg.plugins_off.clone();
+                core.plugins.reload(&off);
+                core.say(format!("{} plugin(s) loaded", core.plugins.defs.len()));
+            }
+            if ui.button(tr("How to write one")).clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/epell-development/RadioMaster/blob/main/PLUGINS.md"));
+            }
+        });
+        ui.label(RichText::new(format!("Folder: {}", crate::plugins::folder().display())).small().color(GRAY));
+        ui.separator();
+        if core.plugins.defs.is_empty() {
+            ui.label(RichText::new(tr("No plugins yet. \"Open plugins folder\" adds a working example to start from.")).color(GRAY));
+        }
+        let mut toggle: Option<(String, bool)> = None;
+        let mut test: Option<usize> = None;
+        for (i, d) in core.plugins.defs.iter().enumerate() {
+            let id = crate::plugins::Plugins::id_of(d);
+            let mut on = !core.cfg.plugins_off.contains(&id);
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut on, RichText::new(&d.name).strong()).changed() {
+                        toggle = Some((id.clone(), on));
+                    }
+                    let (txt, col) = match (&d.error, d.is_service(), core.plugins.running(d)) {
+                        (Some(_), _, _) => ("problem", RED),
+                        (None, true, true) => ("running", GREEN),
+                        (None, true, false) => ("service · not running", GRAY),
+                        (None, false, _) => ("runs on events", GRAY),
+                    };
+                    ui.label(RichText::new(txt).small().color(col));
+                    if ui.small_button(tr("Send a test event")).clicked() {
+                        test = Some(i);
+                    }
+                });
+                if !d.description.is_empty() {
+                    ui.label(&d.description);
+                }
+                ui.label(
+                    RichText::new(format!("{} {}  ·  events: {}", d.command, d.args.join(" "), d.events.join(", ")))
+                        .small()
+                        .monospace()
+                        .color(GRAY),
+                );
+                if let Some(e) = &d.error {
+                    ui.colored_label(RED, e);
+                }
+            });
+        }
+        if let Some(i) = test {
+            let ev = core.plugins.defs[i].events.first().cloned().unwrap_or_else(|| "track_started".into());
+            let ev = if ev == "*" { "track_started".to_string() } else { ev };
+            core.plugin_event(
+                &ev,
+                serde_json::json!({ "title": "Test song", "artist": "RadioMaster", "text": "RadioMaster - Test song", "test": true }),
+            );
+            core.say(format!("Sent a test \"{ev}\" event — see the Log tab for what the plugin printed"));
+        }
+        if let Some((id, on)) = toggle {
+            core.cfg.plugins_off.retain(|x| *x != id);
+            if !on {
+                core.cfg.plugins_off.push(id);
+            }
+            let off = core.cfg.plugins_off.clone();
+            core.plugins.reload(&off);
+        }
+        ui.separator();
+        ui.strong(tr("Events"));
+        egui::Grid::new("plugin_events").num_columns(2).spacing([14.0, 2.0]).show(ui, |ui| {
+            for (e, what) in crate::plugins::EVENTS {
+                ui.label(RichText::new(e).monospace());
+                ui.label(what);
+                ui.end_row();
+            }
+        });
+        ui.label(
+            RichText::new(tr("A plugin controls RadioMaster by printing lines such as  RM: VOLUME 60  or  RM: PLAYLIST Evening."))
+                .small()
+                .color(GRAY),
+        );
+        ui.label(RichText::new(tr("Plugins run with your account's rights — only add ones you trust.")).small().color(AMBER));
+    }
+
     fn tab_ads(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.strong("Commercials");
+            self.rotation_rules_ui(ui, core);
+            ui.separator();
+            ui.strong(tr("Commercials at set times"));
             let mut del = None;
             for i in 0..core.cfg.ads.len() {
                 let a: &mut Ad = &mut core.cfg.ads[i];
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut a.enabled, "");
                     ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(110.0));
-                    ui.add(egui::TextEdit::singleline(&mut a.path).desired_width(280.0).hint_text("audio file"));
+                    ui.add(egui::TextEdit::singleline(&mut a.path).desired_width(280.0).hint_text(tr("audio file")));
                     if ui.button("…").clicked() {
                         self.dlg(move || {
                             rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::AdPath(i, p))
                         });
                     }
-                    ui.label("from");
-                    ui.add(egui::TextEdit::singleline(&mut a.start_date).desired_width(80.0).hint_text("YYYY-MM-DD"));
-                    ui.label("to");
-                    ui.add(egui::TextEdit::singleline(&mut a.end_date).desired_width(80.0).hint_text("YYYY-MM-DD"));
+                    ui.label(tr("from"));
+                    ui.add(egui::TextEdit::singleline(&mut a.start_date).desired_width(80.0).hint_text(tr("YYYY-MM-DD")));
+                    ui.label(tr("to"));
+                    ui.add(egui::TextEdit::singleline(&mut a.end_date).desired_width(80.0).hint_text(tr("YYYY-MM-DD")));
                     for (d, l) in a.days.iter_mut().zip(["M", "T", "W", "T", "F", "S", "S"]) {
                         ui.checkbox(d, l);
                     }
@@ -2157,11 +2733,11 @@ impl App {
             if let Some(i) = del {
                 core.cfg.ads.remove(i);
             }
-            if ui.button("➕ Add commercial").clicked() {
+            if ui.button(tr("➕ Add commercial")).clicked() {
                 core.cfg.ads.push(Ad::default());
             }
             ui.separator();
-            ui.strong("Commercial breaks  (queues the active ads right after the current track)");
+            ui.strong(tr("Commercial breaks  (queues the active ads right after the current track)"));
             let mut del = None;
             for i in 0..core.cfg.ad_breaks.len() {
                 let b: &mut AdBreak = &mut core.cfg.ad_breaks[i];
@@ -2174,9 +2750,9 @@ impl App {
                     for (d, l) in b.days.iter_mut().zip(["M", "T", "W", "T", "F", "S", "S"]) {
                         ui.checkbox(d, l);
                     }
-                    ui.label("max spots");
+                    ui.label(tr("max spots"));
                     ui.add(egui::DragValue::new(&mut b.max_ads).range(0..=50));
-                    ui.label(RichText::new("(0 = all)").small().color(GRAY));
+                    ui.label(RichText::new(tr("(0 = all)")).small().color(GRAY));
                     if ui.small_button("🗑").clicked() {
                         del = Some(i);
                     }
@@ -2185,7 +2761,7 @@ impl App {
             if let Some(i) = del {
                 core.cfg.ad_breaks.remove(i);
             }
-            if ui.button("➕ Add break").clicked() {
+            if ui.button(tr("➕ Add break")).clicked() {
                 core.cfg.ad_breaks.push(AdBreak::default());
             }
         });
@@ -2193,70 +2769,119 @@ impl App {
 
     fn tab_dsp(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let d = &mut core.cfg.dsp;
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut d.eq_enabled, "12-band equalizer");
-                if ui.button("Reset").clicked() {
-                    d.eq_gains = [0.0; 12];
-                }
-            });
-            ui.horizontal(|ui| {
-                for i in 0..12 {
-                    ui.vertical(|ui| {
-                        ui.add(egui::Slider::new(&mut d.eq_gains[i], -12.0..=12.0).vertical().show_value(false));
-                        let f = EQ_FREQS[i];
-                        ui.label(RichText::new(if f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") }).small());
+            // ---- equalizer: sliders, exact values under them, presets
+            let mut save_preset = false;
+            let mut delete_preset: Option<usize> = None;
+            {
+                let custom = core.cfg.eq_presets.clone();
+                let d = &mut core.cfg.dsp;
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut d.eq_enabled, tr("12-band equalizer"));
+                    egui::ComboBox::from_id_salt("eq_preset").selected_text("Presets…").width(150.0).show_ui(ui, |ui| {
+                        for (name, g) in EQ_PRESETS {
+                            if ui.selectable_label(false, *name).clicked() {
+                                d.eq_gains = *g;
+                                d.eq_enabled = true;
+                            }
+                        }
+                        if !custom.is_empty() {
+                            ui.separator();
+                            for (k, (name, g)) in custom.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    if ui.selectable_label(false, name).clicked() {
+                                        d.eq_gains = *g;
+                                        d.eq_enabled = true;
+                                    }
+                                    if ui.small_button("🗑").on_hover_text(tr("Delete this preset")).clicked() {
+                                        delete_preset = Some(k);
+                                    }
+                                });
+                            }
+                        }
                     });
-                }
-            });
+                    ui.add(egui::TextEdit::singleline(&mut self.eq_name).hint_text(tr("preset name")).desired_width(110.0));
+                    save_preset = ui.add_enabled(!self.eq_name.trim().is_empty(), egui::Button::new(tr("Save preset"))).clicked();
+                    if ui.button(tr("Flat")).clicked() {
+                        d.eq_gains = [0.0; 12];
+                    }
+                });
+                ui.horizontal(|ui| {
+                    for i in 0..12 {
+                        ui.vertical(|ui| {
+                            ui.set_width(46.0);
+                            ui.add(egui::Slider::new(&mut d.eq_gains[i], -12.0..=12.0).vertical().show_value(false));
+                            // exact value in dB: drag it, or double-click to type
+                            ui.add_sized(
+                                [46.0, 20.0],
+                                egui::DragValue::new(&mut d.eq_gains[i]).range(-12.0..=12.0).speed(0.05).fixed_decimals(1),
+                            )
+                            .on_hover_text(tr("Drag, or double-click to type an exact value"));
+                            let f = EQ_FREQS[i];
+                            ui.label(RichText::new(if f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") }).small());
+                        });
+                    }
+                });
+            }
+            if save_preset {
+                let name = self.eq_name.trim().to_string();
+                let g = core.cfg.dsp.eq_gains;
+                core.cfg.eq_presets.retain(|(n, _)| *n != name);
+                core.cfg.eq_presets.push((name.clone(), g));
+                core.say(format!("EQ preset \"{name}\" saved"));
+                self.eq_name.clear();
+            }
+            if let Some(k) = delete_preset {
+                core.cfg.eq_presets.remove(k);
+            }
+            let d = &mut core.cfg.dsp;
             ui.separator();
-            ui.checkbox(&mut d.comp_enabled, "Compressor");
+            ui.checkbox(&mut d.comp_enabled, tr("Compressor"));
             egui::Grid::new("comp").num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
-                ui.label("Threshold");
+                ui.label(tr("Threshold"));
                 ui.add(egui::Slider::new(&mut d.comp_threshold_db, -60.0..=0.0).suffix(" dB"));
-                ui.label("Ratio");
+                ui.label(tr("Ratio"));
                 ui.add(egui::Slider::new(&mut d.comp_ratio, 1.0..=20.0).suffix(" :1"));
                 ui.end_row();
-                ui.label("Attack");
+                ui.label(tr("Attack"));
                 ui.add(egui::Slider::new(&mut d.comp_attack_ms, 1.0..=200.0).suffix(" ms"));
-                ui.label("Release");
+                ui.label(tr("Release"));
                 ui.add(egui::Slider::new(&mut d.comp_release_ms, 20.0..=2000.0).suffix(" ms"));
                 ui.end_row();
-                ui.label("Make-up gain");
+                ui.label(tr("Make-up gain"));
                 ui.add(egui::Slider::new(&mut d.comp_makeup_db, 0.0..=18.0).suffix(" dB"));
                 ui.end_row();
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.checkbox(&mut d.agc_enabled, "Automatic volume leveling");
-                ui.label("target");
+                ui.checkbox(&mut d.agc_enabled, tr("Automatic volume leveling"));
+                ui.label(tr("target"));
                 ui.add(egui::Slider::new(&mut d.agc_target_db, -30.0..=-6.0).suffix(" dB"));
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut d.silence_trim, "Trim silence");
-                ui.label("below");
+                ui.checkbox(&mut d.silence_trim, tr("Trim silence"));
+                ui.label(tr("below"));
                 ui.add(egui::Slider::new(&mut d.silence_thresh_db, -80.0..=-20.0).suffix(" dB"));
-                ui.label("cut tail after");
+                ui.label(tr("cut tail after"));
                 ui.add(egui::Slider::new(&mut d.silence_max_secs, 0.2..=5.0).suffix(" s"));
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("Teaser mode — play only the first");
+                ui.label(tr("Teaser mode — play only the first"));
                 ui.add(egui::DragValue::new(&mut core.cfg.teaser_secs).range(0.0..=120.0).suffix(" s"));
-                ui.label(RichText::new("of each track (0 = off)").color(GRAY));
+                ui.label(RichText::new(tr("of each track (0 = off)")).color(GRAY));
             });
         });
     }
 
     fn tab_reports(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal(|ui| {
-            ui.label("From");
+            ui.label(tr("From"));
             ui.add(egui::TextEdit::singleline(&mut self.report_from).desired_width(90.0));
-            ui.label("To");
+            ui.label(tr("To"));
             ui.add(egui::TextEdit::singleline(&mut self.report_to).desired_width(90.0));
-            ui.label("Exclude containing");
-            ui.add(egui::TextEdit::singleline(&mut self.report_excl).desired_width(180.0).hint_text("jingle, ad, …"));
-            if ui.button("Generate").clicked() {
+            ui.label(tr("Exclude containing"));
+            ui.add(egui::TextEdit::singleline(&mut self.report_excl).desired_width(180.0).hint_text(tr("jingle, ad, …")));
+            if ui.button(tr("Generate")).clicked() {
                 let text = std::fs::read_to_string(data_dir().join("history.csv")).unwrap_or_default();
                 let excl: Vec<String> = self.report_excl.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
                 let mut map: BTreeMap<String, (u32, String)> = BTreeMap::new();
@@ -2279,7 +2904,7 @@ impl App {
                 rows.sort_by(|a, b| b.1.cmp(&a.1));
                 self.report_rows = rows;
             }
-            if ui.button("Export CSV…").clicked() {
+            if ui.button(tr("Export CSV…")).clicked() {
                 self.dlg(|| {
                     rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("report.csv").save_file().map(Dlg::SaveReport)
                 });
@@ -2297,7 +2922,7 @@ impl App {
             .header(20.0, |mut h| {
                 for t in ["Track", "Plays", "Last played"] {
                     h.col(|ui| {
-                        ui.strong(t);
+                        ui.strong(tr(t));
                     });
                 }
             })
@@ -2336,17 +2961,17 @@ impl App {
                 (_, Phase::Checking) => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Checking GitHub for a newer version…");
+                        ui.label(tr("Checking GitHub for a newer version…"));
                     });
                 }
                 (None, Phase::UpToDate) => {
-                    ui.label(RichText::new("✔ RadioMaster is up to date.").color(GREEN).strong());
+                    ui.label(RichText::new(tr("✔ RadioMaster is up to date.")).color(GREEN).strong());
                 }
                 (None, Phase::Failed(e)) => {
                     ui.colored_label(RED, format!("Couldn't check for updates: {e}"));
                 }
                 (None, _) => {
-                    ui.label("No update information yet.");
+                    ui.label(tr("No update information yet."));
                 }
                 (Some(a), phase) => {
                     ui.label(RichText::new(format!("Version {} is available — {}", a.version, a.title)).strong().size(16.0));
@@ -2361,8 +2986,8 @@ impl App {
                             ui.add(egui::ProgressBar::new(f).text(format!("Downloading… {:.1} / {:.1} MB", *done as f32 / 1e6, *total as f32 / 1e6)));
                         }
                         Phase::Ready(p) => {
-                            ui.label("Downloaded. RadioMaster will close, update and start again.");
-                            if ui.button(RichText::new("Install now").strong()).clicked() {
+                            ui.label(tr("Downloaded. RadioMaster will close, update and start again."));
+                            if ui.button(RichText::new(tr("Install now")).strong()).clicked() {
                                 install = Some(p.clone());
                             }
                         }
@@ -2372,23 +2997,23 @@ impl App {
                             }
                             ui.horizontal(|ui| {
                                 if installed && a.installer.is_some() {
-                                    if ui.button(RichText::new("⬇ Download and install").strong()).clicked() {
+                                    if ui.button(RichText::new(tr("⬇ Download and install")).strong()).clicked() {
                                         start_download = true;
                                     }
-                                } else if ui.button(RichText::new("⬇ Open the download page").strong()).clicked() {
+                                } else if ui.button(RichText::new(tr("⬇ Open the download page")).strong()).clicked() {
                                     ui.ctx().open_url(egui::OpenUrl::new_tab(a.page.clone()));
                                 }
-                                if ui.button("Release page").clicked() {
+                                if ui.button(tr("Release page")).clicked() {
                                     ui.ctx().open_url(egui::OpenUrl::new_tab(a.page.clone()));
                                 }
                             });
                             if !installed {
-                                ui.label(RichText::new("This copy wasn't installed with the setup program, so download the new zip (or the installer) from the page.").small().color(GRAY));
+                                ui.label(RichText::new(tr("This copy wasn't installed with the setup program, so download the new zip (or the installer) from the page.")).small().color(GRAY));
                             }
                         }
                     }
                     if core.state == PlayState::Playing {
-                        ui.label(RichText::new("Playback stops while the update installs — best done between shows.").small().color(AMBER));
+                        ui.label(RichText::new(tr("Playback stops while the update installs — best done between shows.")).small().color(AMBER));
                     }
                 }
             }
@@ -2414,22 +3039,22 @@ impl App {
             Self::window_for(ctx, "Edit tags", [460.0, 260.0]).collapsible(false).show(ctx, |ui| {
                 ui.label(RichText::new(t.path.display().to_string()).small().color(GRAY));
                 egui::Grid::new("tags").num_columns(2).show(ui, |ui| {
-                    ui.label("Artist");
+                    ui.label(tr("Artist"));
                     ui.add(egui::TextEdit::singleline(&mut t.artist).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Title");
+                    ui.label(tr("Title"));
                     ui.add(egui::TextEdit::singleline(&mut t.title).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Album");
+                    ui.label(tr("Album"));
                     ui.add(egui::TextEdit::singleline(&mut t.album).desired_width(220.0));
                     ui.end_row();
-                    ui.label("Genre");
+                    ui.label(tr("Genre"));
                     ui.add(egui::TextEdit::singleline(&mut t.genre).desired_width(220.0));
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {
-                    save = ui.button("Save").clicked();
-                    close = ui.button("Cancel").clicked();
+                    save = ui.button(tr("Save")).clicked();
+                    close = ui.button(tr("Cancel")).clicked();
                 });
             });
         }
@@ -2449,7 +3074,9 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        ctx.request_repaint_after(Duration::from_millis(100));
+        // redraw ~10×/s while audio is moving (VU meters, elapsed time), ~3×/s when idle (the clock)
+        let busy = self.mic_on || self.core.try_lock().is_none_or(|c| c.state == PlayState::Playing);
+        ctx.request_repaint_after(Duration::from_millis(if busy { 100 } else { 330 }));
         self.browsers.set_main(frame);
         self.browsers.start_frame();
         // If an embedded web view kept keyboard focus, take it back as soon as the user clicks our UI.
@@ -2463,6 +3090,18 @@ impl eframe::App for App {
             return;
         }
         let t0 = std::time::Instant::now();
+        self.perm = match &self.logged_in {
+            Some(u) if u.admin => crate::auth::Perms::default(),
+            Some(u) => u.perms,
+            None => crate::auth::Perms {
+                playback: false,
+                edit_playlists: false,
+                tools: false,
+                streaming: false,
+                azuracast: false,
+                settings: false,
+            },
+        };
         let arc = self.core.clone();
         let mut core = arc.lock();
         let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -2471,7 +3110,7 @@ impl eframe::App for App {
         }
         self.handle_dialogs(&mut core);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
-        if !dropped.is_empty() {
+        if !dropped.is_empty() && self.perm.edit_playlists {
             let rows: Vec<PlEntry> = dropped
                 .iter()
                 .flat_map(|p| if p.is_dir() { crate::library::audio_files_in(p) } else { vec![p.clone()] })
@@ -2485,6 +3124,23 @@ impl eframe::App for App {
         self.menu(ctx, &mut core);
         self.status_bar(ctx, &core);
         self.player(ctx, &mut core);
+        // automatic hour lines: kept where each new hour starts (not while something is being dragged)
+        if self.hour_check.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) && !ctx.input(|i| i.pointer.any_down()) {
+            self.hour_check = Some(std::time::Instant::now());
+            let mut tabs = vec![core.playing_tab];
+            if self.view_pl < core.tabs.len() && self.view_pl != core.playing_tab {
+                tabs.push(self.view_pl);
+            }
+            for t in tabs {
+                let on_air = t == core.playing_tab;
+                let lines = core.cfg.hour_lines;
+                let map = core.with_tab(t, |c| if lines { c.refresh_hour_info(on_air) } else { c.clear_hour_info() });
+                if let (Some(m), true) = (map, t == self.view_pl) {
+                    self.sel = self.sel.iter().filter_map(|&i| m.get(i).copied().flatten()).collect();
+                    self.anchor = self.anchor.and_then(|a| m.get(a).copied().flatten());
+                }
+            }
+        }
         self.right_workspace(ctx, &mut core);
         self.left_workspace(ctx, &mut core);
         self.playlist(ctx, &mut core);
@@ -2503,6 +3159,8 @@ impl eframe::App for App {
             self.find_window(ctx, c);
         });
         self.repeat_window(ctx, &mut core);
+        self.keys_window(ctx);
+        self.az_take_downloads(&mut core);
         if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
             // at start-up, then every 6 hours for stations that run for weeks
             self.update_next = Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
@@ -2519,6 +3177,10 @@ impl eframe::App for App {
         // save the layout when it changed, at most every 2 seconds (never while a window is being dragged)
         if self.layout_checked.elapsed() >= Duration::from_secs(2) && !ctx.input(|i| i.pointer.any_down()) {
             self.layout_checked = std::time::Instant::now();
+            if self.notes_dirty {
+                self.notes.save();
+                self.notes_dirty = false;
+            }
             let serialized = serde_json::to_string(&self.workzones).unwrap_or_default();
             if serialized != self.saved_layout && self.workzones.save().is_ok() {
                 self.saved_layout = serialized;
@@ -2559,11 +3221,16 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let mut c = self.core.lock();
+        c.plugin_event("app_exit", serde_json::json!({}));
         for i in 0..c.cfg.encoders.len() {
             c.stop_encoder(i);
         }
         c.save_all();
+        c.plugins.stop_services();
         drop(c);
+        if self.notes_dirty {
+            self.notes.save();
+        }
         crate::playout::flush_writes();
     }
 }

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="img/icon.png">
+<title>RadioMaster Updates</title>
+<meta name="description" content="What changed in each RadioMaster release.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="img/icon.png" alt=""><span>Radio<b>Master</b></span></a>
+    <nav class="links" aria-label="Sections">
+      <a class="hide-sm" href="index.html#features">Features</a>
+      <a class="hide-sm" href="index.html#playlist">Playlist</a>
+      <a class="hide-sm" href="index.html#azuracast">AzuraCast</a>
+      <a class="hide-sm active" href="updates.html">Updates</a>
+      <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a class="hide-sm" href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a class="btn primary small" href="index.html#download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="wrap" style="padding-block:56px 24px">
+    <p class="eyebrow">Updates</p>
+    <h1 style="margin-top:14px;font-size:clamp(2.8rem,6vw,4.6rem);text-transform:uppercase;font-weight:800">What's new</h1>
+    <p class="lede" style="margin-top:16px">Every RadioMaster release and what changed. RadioMaster tells you when a new version is out — installed copies update themselves in one click.</p>
+  </section>
+  <section class="wrap" style="padding-bottom:64px">
+<!-- RELEASES -->
+<article class="release" id="v0.2.3">
+  <div class="ver"><span class="tag-latest">Latest</span><b>v0.2.3</b><span>2026-10-17</span></div>
+  <div><h3>New</h3><ul><li>Drag and drop in playlists: reorder rows, drop them on another playlist&#x27;s tab, or drag songs in from the Library and File Explorer</li><li>The playlist follows the on-air track (the last played song stays in view; you can still scroll up)</li><li>Hour lines: &quot;08:00 — new hour&quot; rows are placed automatically where each hour starts (Playlist → Hour lines), plus information-only hour markers you can add yourself</li><li>New hour markers go where that time falls in the running order</li><li>Text to speech playlist rows with {next}, {last}, {time} and more; voice and speed; preview</li><li>Song-count rules for adverts and jingles: e.g. every 5 songs play 2 adverts — random, in order, or all, from a folder or a hand-picked list</li><li>Stop jingles (Ctrl+J, Jingles menu, or click a playing pad); playing pads light up red</li><li>EQ: exact values under each slider, 10 built-in presets, save your own</li><li>Users and permissions: edit, disable or delete operators, reset passwords, and choose what each may do (playback, playlists, tools, streaming, AzuraCast, settings)</li><li>About window with contributors and credits</li><li>Track Info panel tab: last / on air / next with details and your own notes about each song and artist</li><li>Track editor from the Library, stepping through the library list</li><li>Add AzuraCast media straight to the playlist (downloaded and cached)</li><li>Plugins: run your own scripts on events (song started, hour, encoder…) and let them send commands</li><li>Translations: every text can be translated (Settings → General → Language), template included</li><li>Many more keyboard shortcuts (Help → Keyboard shortcuts, Ctrl+/)</li><li>macOS build (RadioMaster.app) and Linux build on every release</li></ul><h3>Fixed</h3><ul><li>Web panels: &quot;WebView2 error: Access is denied (0x80070005)&quot; when installed in Program Files</li><li>Streaming: &quot;connection aborted (os error 10053)&quot; — RadioMaster now logs in the classic Icecast way (SOURCE) that AzuraCast DJ ports and Icecast both accept, falls back to PUT, explains early disconnects and backs off between retries</li></ul><h3>Changed</h3><ul><li>The remote control API&#x27;s default port is now 9258</li><li>The program and installer are published by DovaFM Digital Entertainment Group</li><li>Less redrawing while idle</li></ul>
+    <div class="dl-row"><a class="btn primary small" href="https://github.com/epell-development/RadioMaster/releases/tag/v0.2.3">Download v0.2.3</a></div>
+  </div>
+</article>
+<article class="release" id="v0.2.2">
+  <div class="ver"><b>v0.2.2</b><span>2026-10-17</span></div>
+  <div><ul><li>Update checker: when a newer release is on GitHub, an &quot;Update available&quot; button appears next to the RadioMaster logo. Installed copies download the new setup and update themselves (RadioMaster closes, updates and starts again); portable copies open the download page.</li><li>Help → Check for updates, and Settings → General → &quot;Check for updates when RadioMaster starts&quot;</li></ul>
+    <div class="dl-row"><a class="btn ghost small" href="https://github.com/epell-development/RadioMaster/releases/tag/v0.2.2">Download v0.2.2</a></div>
+  </div>
+</article>
+<article class="release" id="v0.2.1">
+  <div class="ver"><b>v0.2.1</b><span>2026-10-17</span></div>
+  <div><p class="lede" style="margin-bottom:14px">Performance fixes.</p><ul><li>Additional windows no longer get moved/resized and the layout file rewritten on every frame (the main cause of lag on Windows with an Additional window open)</li><li>Turned off vsync so several windows don&#x27;t each wait for the screen in turn</li><li>Missing-file checks for playlist rows run in the background (fast with OneDrive / network music folders)</li><li>File Explorer reads a folder once instead of every frame and no longer probes every drive letter</li><li>Playlists, cues and play counts are saved on a background thread</li><li>AUX Playlist no longer copies the whole playlist every frame</li><li>Help → Performance (Ctrl+Shift+P) shows frame timings for bug reports</li></ul>
+    <div class="dl-row"><a class="btn ghost small" href="https://github.com/epell-development/RadioMaster/releases/tag/v0.2.1">Download v0.2.1</a></div>
+  </div>
+</article>
+<article class="release" id="v0.2.0">
+  <div class="ver"><b>v0.2.0</b><span>2026-10-17</span></div>
+  <div><p class="lede" style="margin-bottom:14px">First public release.</p><ul><li>Windows installer (<code>RadioMaster-Setup-0.2.0.exe</code>) and portable zip</li><li>Multiple playlist tabs (one on air), projected start times, last-played column</li><li>Full Playlist menu: URL relays, Line Input, commands, timed pauses, teasers, time announcements, comments, containers, Track Lists with repeat protection, hour markers (wait / soft / hard), voice tracks (insert or record), insert playlist / tracks from playlist, Notepad, Find</li><li>Work zones 1/2/3 panels plus unlimited Additional windows for extra screens</li><li>AzuraCast station manager (optional, API key): services, queue, requests, playlists, media, streamers/DJs, listeners, history, schedule</li><li>Smart fading and a waveform track editor</li><li>Icecast / Shoutcast encoders, cart wall, mic ducking, multiple outputs, audio processing, ad and event schedulers, reports, remote API, embedded web panels (WebView2)</li></ul>
+    <div class="dl-row"><a class="btn ghost small" href="https://github.com/epell-development/RadioMaster/releases/tag/v0.2.0">Download v0.2.0</a></div>
+  </div>
+</article>
+<!-- /RELEASES -->
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="index.html" style="font-size:1.2rem"><img src="img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="updates.html">Updates</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS) or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+
+</body>
+</html>

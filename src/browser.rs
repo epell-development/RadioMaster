@@ -11,7 +11,7 @@ mod native {
     use wry::{
         dpi::{PhysicalPosition, PhysicalSize},
         raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle},
-        Rect, WebView, WebViewBuilder,
+        Rect, WebContext, WebView, WebViewBuilder,
     };
 
     #[link(name = "user32")]
@@ -51,11 +51,16 @@ mod native {
         panes: HashMap<String, Pane>,
         main: Option<RawWindowHandle>,
         blocked: HashSet<String>,
+        /// WebView2 keeps cookies and cache in this folder. By default it would use a folder next to
+        /// the .exe, which fails with "Access is denied" (0x80070005) when installed in Program Files.
+        context: WebContext,
     }
 
     impl Browsers {
         pub fn new() -> Self {
-            Browsers { panes: HashMap::new(), main: None, blocked: HashSet::new() }
+            let dir = crate::config::data_dir().join("webview2");
+            let _ = std::fs::create_dir_all(&dir);
+            Browsers { panes: HashMap::new(), main: None, blocked: HashSet::new(), context: WebContext::new(Some(dir)) }
         }
 
         pub fn set_main(&mut self, frame: &eframe::Frame) {
@@ -98,6 +103,7 @@ mod native {
 
         pub fn finish(&mut self) {
             let main = self.main;
+            let context = &mut self.context;
             for p in self.panes.values_mut() {
                 let blocked = self.blocked.contains(&p.window);
                 let want = p.want.clone().filter(|(_, px, _)| px.width() >= 80.0 && px.height() >= 60.0);
@@ -105,7 +111,7 @@ mod native {
                 if p.view.is_none() && p.error.is_none() && want.is_some() && !blocked {
                     let parent = if p.window.is_empty() { main } else { find_window(&p.window) };
                     if let (Some(parent), Some((_, px, url))) = (parent, want.as_ref()) {
-                        let built = WebViewBuilder::new()
+                        let built = WebViewBuilder::with_web_context(&mut *context)
                             .with_url(url)
                             .with_visible(false)
                             .with_focused(false) // never steal keyboard focus from egui

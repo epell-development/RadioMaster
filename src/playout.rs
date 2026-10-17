@@ -16,6 +16,7 @@ use chrono::{DateTime, Duration as CDur, Local, NaiveDate, TimeZone};
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -180,6 +181,11 @@ pub struct Playout {
     pub status: Status,
     triggered_next: bool,
     pub handles: Vec<Option<EncoderHandle>>,
+    pub plugins: crate::plugins::Plugins,
+    /// hour of the last "hour" plugin event
+    plugin_hour: u32,
+    /// last state of each encoder, for "encoder" plugin events
+    enc_states: Vec<String>,
     pub now_text: Arc<Mutex<String>>,
     pub azura: Arc<Mutex<AzuraState>>,
     azura_shared: Arc<Mutex<AzuraConfig>>,
@@ -228,7 +234,7 @@ pub struct Playout {
     plays_dirty: bool,
     // ---- log
     pub log: Vec<LogLine>,
-    log_sink: LogSink,
+    pub log_sink: LogSink,
 }
 
 impl Playout {
@@ -238,6 +244,11 @@ impl Playout {
         let azura_shared = Arc::new(Mutex::new(cfg.azuracast.clone()));
         let azura = Arc::new(Mutex::new(AzuraState::default()));
         azuracast::spawn_poller(azura_shared.clone(), azura.clone());
+        let log_sink: LogSink = Arc::new(Mutex::new(vec![]));
+        let mut plugins = crate::plugins::Plugins::new(log_sink.clone());
+        if !cfg.plugins_off.is_empty() {
+            plugins.reload(&cfg.plugins_off);
+        }
         let library: Vec<Track> =
             std::fs::read_to_string(data_dir().join("library.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         let n_enc = cfg.encoders.len();
@@ -282,6 +293,8 @@ impl Playout {
             songs_since: vec![],
             notify: Arc::new(Mutex::new(String::new())),
             last_save: Instant::now(),
+            plugin_hour: chrono::Timelike::hour(&Local::now()),
+            enc_states: vec![],
             dsp_shared,
             fired_ads: HashMap::new(),
             auto_check: Instant::now(),
@@ -308,7 +321,8 @@ impl Playout {
             artist_plays: HashMap::new(),
             plays_dirty: false,
             log: vec![],
-            log_sink: Arc::new(Mutex::new(vec![])),
+            log_sink,
+            plugins,
         };
         p.reindex();
         p.load_tabs();
@@ -446,6 +460,39 @@ impl Playout {
                     self.say("Auto-playlist: queue topped up");
                 }
             }
+        }
+
+        // plugins: commands they sent, the hourly event, encoder changes
+        for (from, cmd) in self.plugins.take_commands() {
+            self.say(format!("{from}: {cmd}"));
+            self.run_command(&cmd);
+        }
+        let h = chrono::Timelike::hour(&now);
+        if h != self.plugin_hour {
+            self.plugin_hour = h;
+            self.plugin_event("hour", json!({ "hour": h }));
+        }
+        let states: Vec<String> = self
+            .handles
+            .iter()
+            .map(|h| match h {
+                Some(h) => match &h.status.lock().state {
+                    crate::stream::EncState::Live => "connected".to_string(),
+                    crate::stream::EncState::Error(e) => format!("error: {e}"),
+                    crate::stream::EncState::Connecting => "connecting".to_string(),
+                    crate::stream::EncState::Idle => "stopped".to_string(),
+                },
+                None => "stopped".to_string(),
+            })
+            .collect();
+        if states != self.enc_states {
+            for (i, st) in states.iter().enumerate() {
+                if self.enc_states.get(i) != Some(st) && st != "connecting" && !(self.enc_states.get(i).is_none() && st == "stopped") {
+                    let name = self.cfg.encoders.get(i).map(|e| e.name.clone()).unwrap_or_default();
+                    self.plugin_event("encoder", json!({ "encoder": i + 1, "name": name, "state": st }));
+                }
+            }
+            self.enc_states = states;
         }
 
         if self.last_save.elapsed().as_secs() >= 60 {
@@ -774,6 +821,7 @@ impl Playout {
                     text.clone(),
                     a.folder.clone(),
                     a.voice.clone(),
+                    a.rate,
                     data_dir().join("tmp").join("time.wav"),
                     self.log_sink.clone(),
                 );
@@ -781,7 +829,22 @@ impl Playout {
                 self.started_other(format!("Time announcement — {text}"));
                 true
             }
-            ItemKind::Comment(_) => false,
+            ItemKind::Comment(_) | ItemKind::HourInfo { .. } => false,
+            ItemKind::Tts { text, voice, rate } => {
+                let said = self.fill_speech(&text, i);
+                let voice = if voice.is_empty() { self.cfg.announce.voice.clone() } else { voice };
+                let src = live::announce_source(
+                    said.clone(),
+                    String::new(),
+                    voice,
+                    rate,
+                    data_dir().join("tmp").join(format!("speech{}.wav", i % 4)),
+                    self.log_sink.clone(),
+                );
+                self.engine.play_source(Box::new(src), None, 0.0, CueSpec::default(), Some(xf), false);
+                self.started_other(format!("Speech — {said}"));
+                true
+            }
             ItemKind::Container { items, random } => {
                 let mut files: Vec<PathBuf> = items.into_iter().filter(|p| p.exists()).collect();
                 if files.is_empty() {
@@ -859,7 +922,18 @@ impl Playout {
             self.artist_plays.insert(t.artist.trim().to_lowercase(), now);
         }
         self.plays_dirty = true;
+        let data = json!({
+            "title": t.title, "artist": t.artist, "album": t.album, "genre": t.genre, "year": t.year,
+            "path": t.path.to_string_lossy(), "duration": t.duration, "text": text,
+        });
+        self.plugin_event("track_started", data);
         true
+    }
+
+    /// Send an event to the plugins.
+    pub fn plugin_event(&mut self, event: &str, data: serde_json::Value) {
+        let off = self.cfg.plugins_off.clone();
+        self.plugins.emit(event, data, &off);
     }
 
     /// Something other than a file started (stream, line input, teaser…).
@@ -868,6 +942,7 @@ impl Playout {
         self.on_air = None;
         self.after_start(label.clone());
         self.push_metadata(&label);
+        self.plugin_event("item_started", json!({ "text": label, "title": label }));
     }
 
     fn after_start(&mut self, label: String) {
@@ -989,6 +1064,122 @@ impl Playout {
         out
     }
 
+    /// Where a row for time `h:m` belongs: before the first upcoming row that starts at or after it.
+    pub fn row_for_time(&self, h: u32, m: u32, on_air: bool) -> usize {
+        let starts = self.projected_starts(on_air);
+        let target = marker_target(h, m, Local::now());
+        let from = if on_air { self.current.map(|c| c + 1).unwrap_or(0) } else { 0 };
+        (from..self.playlist.len()).find(|&i| starts[i].is_some_and(|s| !s.skipped && s.at >= target)).unwrap_or(self.playlist.len())
+    }
+
+    /// Keep automatic "next hour" rows where each new hour starts. Returns, when something moved,
+    /// the new index of every old row (None = an automatic row that was removed).
+    pub fn refresh_hour_info(&mut self, on_air: bool) -> Option<Vec<Option<usize>>> {
+        let is_auto = |e: &PlEntry| matches!(e.kind, ItemKind::HourInfo { auto: true, .. });
+        let starts = self.projected_starts(on_air);
+        let from = if on_air && self.state != PlayState::Stopped { self.current.map(|c| c + 1).unwrap_or(0) } else { 0 };
+        // wanted: (index of the real row it goes before, hour)
+        let mut want: Vec<(usize, u32)> = vec![];
+        let mut prev: Option<DateTime<Local>> = if on_air && self.state != PlayState::Stopped {
+            self.current.and_then(|c| starts.get(c).copied().flatten()).map(|s| s.at)
+        } else {
+            None
+        };
+        for i in from..self.playlist.len() {
+            let e = &self.playlist[i];
+            if is_auto(e) || matches!(e.kind, ItemKind::HourMarker { .. } | ItemKind::HourInfo { .. }) {
+                continue;
+            }
+            let Some(st) = starts[i].filter(|s| !s.skipped) else { continue };
+            if let Some(p) = prev {
+                let hour_of = |t: DateTime<Local>| t.format("%Y%m%d%H").to_string();
+                if hour_of(p) != hour_of(st.at) {
+                    // only one row per hour change, and none right after a manual marker for that hour
+                    let manual =
+                        i > 0 && matches!(self.playlist[i - 1].kind, ItemKind::HourMarker { .. } | ItemKind::HourInfo { auto: false, .. });
+                    if !manual {
+                        want.push((i, chrono::Timelike::hour(&st.at)));
+                    }
+                }
+            }
+            prev = Some(st.at);
+        }
+        // what is there now
+        let mut have: Vec<(usize, u32)> = vec![];
+        for (i, e) in self.playlist.iter().enumerate() {
+            if let ItemKind::HourInfo { hour, auto: true } = e.kind {
+                if let Some(next) = (i + 1..self.playlist.len()).find(|&j| !is_auto(&self.playlist[j])) {
+                    have.push((next, hour));
+                }
+            }
+        }
+        let stray = self.playlist.iter().enumerate().any(|(i, e)| is_auto(e) && i < from);
+        if want == have && !stray {
+            return None;
+        }
+        // rebuild: drop automatic rows, then insert the wanted ones
+        let old = std::mem::take(&mut self.playlist);
+        let mut map: Vec<Option<usize>> = vec![None; old.len()];
+        let mut out: Vec<PlEntry> = Vec::with_capacity(old.len() + want.len());
+        let mut w = want.iter().peekable();
+        for (i, e) in old.into_iter().enumerate() {
+            if is_auto(&e) {
+                continue;
+            }
+            while let Some(&&(at, hour)) = w.peek() {
+                if at == i {
+                    out.push(PlEntry::special(ItemKind::HourInfo { hour, auto: true }, "", 0.0));
+                    w.next();
+                } else {
+                    break;
+                }
+            }
+            map[i] = Some(out.len());
+            out.push(e);
+        }
+        self.playlist = out;
+        self.current = self.current.and_then(|c| map.get(c).copied().flatten());
+        self.pending_jump = self.pending_jump.and_then(|j| map.get(j).copied().flatten());
+        Some(map)
+    }
+
+    /// Remove every automatic hour row (when the option is turned off).
+    pub fn clear_hour_info(&mut self) -> Option<Vec<Option<usize>>> {
+        if !self.playlist.iter().any(|e| matches!(e.kind, ItemKind::HourInfo { auto: true, .. })) {
+            return None;
+        }
+        let old = std::mem::take(&mut self.playlist);
+        let mut map = vec![None; old.len()];
+        for (i, e) in old.into_iter().enumerate() {
+            if !matches!(e.kind, ItemKind::HourInfo { auto: true, .. }) {
+                map[i] = Some(self.playlist.len());
+                self.playlist.push(e);
+            }
+        }
+        self.current = self.current.and_then(|c| map.get(c).copied().flatten());
+        self.pending_jump = self.pending_jump.and_then(|j| map.get(j).copied().flatten());
+        Some(map)
+    }
+
+    /// Move the rows in `sel` so they sit just before row `to` (an index in the list before the
+    /// move; `len` = the end). Returns the rows' new indices.
+    pub fn move_rows(&mut self, sel: &BTreeSet<usize>, to: usize) -> BTreeSet<usize> {
+        let n = self.playlist.len();
+        let picked: Vec<usize> = sel.iter().copied().filter(|&i| i < n).collect();
+        if picked.is_empty() {
+            return BTreeSet::new();
+        }
+        let mut order: Vec<usize> = (0..n).filter(|i| !sel.contains(i)).collect();
+        let at = order.iter().position(|&i| i >= to).unwrap_or(order.len());
+        order.splice(at..at, picked.iter().copied());
+        let mut slots: Vec<Option<PlEntry>> = std::mem::take(&mut self.playlist).into_iter().map(Some).collect();
+        self.playlist = order.iter().map(|&i| slots[i].take().unwrap()).collect();
+        let pos = |o: usize| order.iter().position(|&i| i == o);
+        self.current = self.current.and_then(pos);
+        self.pending_jump = self.pending_jump.and_then(pos);
+        (at..at + picked.len()).collect()
+    }
+
     /// Seconds until the next hour marker in the on-air list (if any).
     pub fn secs_to_next_marker(&self) -> Option<i64> {
         let starts = self.projected_starts(true);
@@ -997,6 +1188,31 @@ impl Playout {
             .find(|&i| matches!(self.playlist[i].kind, ItemKind::HourMarker { .. }))
             .and_then(|i| starts[i])
             .map(|s| (s.at - Local::now()).num_seconds().max(0))
+    }
+
+    /// Fill in a speech row's text: the time placeholders plus {next}, {next_artist}, {next_title},
+    /// {last}, {last_artist}, {last_title} and {station}.
+    pub fn fill_speech(&self, text: &str, row: usize) -> String {
+        let now = Local::now();
+        let mut out = live::announce_text(text, &now);
+        let next = self.playlist.iter().skip(row + 1).find(|e| e.is_file()).map(|e| e.track.clone());
+        let last = self.playlist[..row.min(self.playlist.len())].iter().rev().find(|e| e.is_file()).map(|e| e.track.clone());
+        let parts = |t: &Option<Track>| t.as_ref().map(|t| (t.label(), t.artist.clone(), t.title.clone())).unwrap_or_default();
+        let (n, na, nt) = parts(&next);
+        let (l, la, lt) = parts(&last);
+        let station = self.cfg.encoders.first().map(|e| e.stream_name.clone()).unwrap_or_default();
+        for (k, v) in [
+            ("{next}", n),
+            ("{next_artist}", na),
+            ("{next_title}", nt),
+            ("{last}", l),
+            ("{last_artist}", la),
+            ("{last_title}", lt),
+            ("{station}", station),
+        ] {
+            out = out.replace(k, &v);
+        }
+        out
     }
 
     /// Text for the On Air box.
@@ -1227,29 +1443,64 @@ impl Playout {
         }
     }
 
-    fn apply_rotations(&mut self, idx: usize, t: &Track) {
-        let rules = self.cfg.rotations.clone();
-        if self.songs_since.len() < rules.len() {
-            self.songs_since.resize(rules.len(), 0);
+    /// The files a song-count rule plays from.
+    fn rotation_pool(r: &crate::config::Rotation) -> Vec<PathBuf> {
+        if !r.files.is_empty() {
+            r.files.iter().map(PathBuf::from).filter(|p| p.exists()).collect()
+        } else if !r.folder.trim().is_empty() {
+            library::audio_files_in(Path::new(&r.folder))
+        } else {
+            vec![]
         }
-        let is_rot = rules.iter().any(|r| !r.folder.is_empty() && t.path.starts_with(&r.folder));
+    }
+
+    /// Song-count rules: after every N songs, insert adverts / jingles after the row that just started.
+    fn apply_rotations(&mut self, idx: usize, t: &Track) {
+        use crate::config::RotPick;
+        let n_rules = self.cfg.rotations.len();
+        if self.songs_since.len() < n_rules {
+            self.songs_since.resize(n_rules, 0);
+        }
+        // an advert or jingle doesn't count as a song
+        let is_rot = self
+            .cfg
+            .rotations
+            .iter()
+            .any(|r| (!r.folder.is_empty() && t.path.starts_with(&r.folder)) || r.files.iter().any(|f| Path::new(f) == t.path));
         if is_rot {
             return;
         }
-        for (k, r) in rules.iter().enumerate() {
-            if !r.enabled || r.folder.is_empty() {
+        let mut insert: Vec<PlEntry> = vec![];
+        for k in 0..n_rules {
+            let r = self.cfg.rotations[k].clone();
+            if !r.enabled {
                 continue;
             }
             self.songs_since[k] += 1;
-            if self.songs_since[k] >= r.every_n.max(1) {
-                let pool: Vec<&Track> = self.library.iter().filter(|x| x.path.starts_with(&r.folder)).collect();
-                if let Some(pick) = pool.choose(&mut rand::thread_rng()) {
-                    let e = PlEntry::file((*pick).clone());
-                    self.playlist.insert(idx + 1, e);
-                    self.songs_since[k] = 0;
-                    return; // one insert per song
-                }
+            if self.songs_since[k] < r.every_n.max(1) {
+                continue;
             }
+            let pool = Self::rotation_pool(&r);
+            if pool.is_empty() {
+                continue;
+            }
+            self.songs_since[k] = 0;
+            let want = (r.count.max(1) as usize).min(pool.len());
+            let picked: Vec<PathBuf> = match r.pick {
+                RotPick::All => pool.clone(),
+                RotPick::Random => pool.choose_multiple(&mut rand::thread_rng(), want).cloned().collect(),
+                RotPick::InOrder => {
+                    let start = r.next % pool.len();
+                    let v: Vec<PathBuf> = (0..want).map(|j| pool[(start + j) % pool.len()].clone()).collect();
+                    self.cfg.rotations[k].next = (start + want) % pool.len();
+                    v
+                }
+            };
+            self.say(format!("{}: {} after this song", r.name, picked.len()));
+            insert.extend(picked.iter().map(|p| self.entry_for(p)));
+        }
+        if !insert.is_empty() {
+            self.insert_rows(idx + 1, insert);
         }
     }
 
@@ -1284,6 +1535,9 @@ impl Playout {
 
     pub fn stop(&mut self) {
         self.engine.stop(1.0);
+        if self.state != PlayState::Stopped {
+            self.plugin_event("playback_stopped", json!({}));
+        }
         self.state = PlayState::Stopped;
         self.wait_until = None;
         self.sub_queue.clear();
@@ -1311,13 +1565,25 @@ impl Playout {
         self.engine.set_volume(v);
     }
 
+    /// Fire a cart pad; pressing a pad that is already playing stops it.
     pub fn trigger_cart(&self, idx: usize) {
         if let Some(p) = self.cfg.carts.get(idx).map(|c| c.path.clone()) {
             if !p.is_empty() {
+                if self.engine.stop_carts(Some(Path::new(&p)), 0.4) > 0 {
+                    return;
+                }
                 if let Err(e) = self.engine.trigger_cart(Path::new(&p)) {
                     self.say(format!("Cart error: {e}"));
                 }
             }
+        }
+    }
+
+    /// Stop every jingle that is playing (quick fade).
+    pub fn stop_carts(&self) {
+        let n = self.engine.stop_carts(None, 0.4);
+        if n > 0 {
+            self.say(format!("Stopped {n} jingle(s)"));
         }
     }
 
@@ -1825,6 +2091,98 @@ mod tests {
 
     fn marker(t: DateTime<Local>, hard: bool, wait: bool) -> PlEntry {
         PlEntry::special(ItemKind::HourMarker { hour: t.hour(), minute: t.minute(), hard, wait }, "", 0.0)
+    }
+
+    #[test]
+    fn adverts_every_n_songs_in_order() {
+        use crate::config::{RotPick, Rotation};
+        let mut p = playout();
+        let dir = std::env::temp_dir().join("rm_test_ads");
+        let _ = std::fs::create_dir_all(&dir);
+        let ads: Vec<String> = (0..3)
+            .map(|i| {
+                let f = dir.join(format!("ad{i}.wav"));
+                crate::engine::write_wav(&f, &vec![0.0; 4410 * 2], 2, 44100).unwrap();
+                f.to_string_lossy().to_string()
+            })
+            .collect();
+        p.cfg.rotations = vec![Rotation {
+            name: "Adverts".into(),
+            enabled: true,
+            adverts: true,
+            files: ads.clone(),
+            every_n: 2,
+            count: 2,
+            pick: RotPick::InOrder,
+            ..Default::default()
+        }];
+        for i in 0..4 {
+            p.playlist.push(file(&format!("song{i}"), 200.0));
+        }
+        let song = p.playlist[0].track.clone();
+        p.apply_rotations(0, &song); // 1st song: nothing yet
+        assert_eq!(p.playlist.len(), 4);
+        p.apply_rotations(1, &song); // 2nd song: two adverts after row 1
+        let names: Vec<String> = p.playlist.iter().map(|e| e.track.path.file_name().unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(&names[2..4], ["ad0.wav", "ad1.wav"]);
+        // an advert starting doesn't count as a song
+        let ad = p.playlist[2].track.clone();
+        p.apply_rotations(2, &ad);
+        p.apply_rotations(3, &ad);
+        assert_eq!(p.playlist.len(), 6);
+        // next time it carries on where it stopped
+        p.apply_rotations(4, &song);
+        p.apply_rotations(5, &song);
+        let names: Vec<String> = p.playlist.iter().map(|e| e.track.path.file_name().unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(&names[6..8], ["ad2.wav", "ad0.wav"]);
+    }
+
+    #[test]
+    fn dragging_rows_keeps_the_on_air_row() {
+        let mut p = playout();
+        for i in 0..6 {
+            p.playlist.push(file(&format!("t{i}"), 60.0));
+        }
+        p.current = Some(1);
+        let sel: BTreeSet<usize> = [3, 4].into_iter().collect();
+        let new = p.move_rows(&sel, 1);
+        let names: Vec<String> = p.playlist.iter().map(|e| e.track.title.clone()).collect();
+        assert_eq!(names, ["t0", "t3", "t4", "t1", "t2", "t5"]);
+        assert_eq!(new, [1, 2].into_iter().collect());
+        assert_eq!(p.current, Some(3), "the playing row moved down with the insert");
+        // to the end
+        let sel: BTreeSet<usize> = [0].into_iter().collect();
+        p.move_rows(&sel, 6);
+        assert_eq!(p.playlist.last().unwrap().track.title, "t0");
+    }
+
+    #[test]
+    fn hour_lines_go_where_the_hour_changes() {
+        let mut p = playout();
+        // 30 rows of 5 minutes = 2.5 hours from now (stopped: starts are projected from now)
+        for i in 0..30 {
+            p.playlist.push(file(&format!("t{i}"), 300.0 + p.cfg.crossfade_secs.min(150.0)));
+        }
+        let map = p.refresh_hour_info(false).expect("lines added");
+        assert_eq!(map.len(), 30);
+        let lines: Vec<usize> = p
+            .playlist
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.kind, ItemKind::HourInfo { auto: true, .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(lines.len() >= 2 && lines.len() <= 3, "{lines:?}");
+        // each line's following row starts in a new hour
+        let starts = p.projected_starts(false);
+        for &l in &lines {
+            let (a, b) = (starts[l - 1].unwrap().at, starts[l + 1].unwrap().at);
+            assert_ne!(a.format("%H").to_string(), b.format("%H").to_string());
+        }
+        // nothing to do the second time
+        assert!(p.refresh_hour_info(false).is_none());
+        assert!(p.clear_hour_info().is_some());
+        assert_eq!(p.playlist.len(), 30);
     }
 
     #[test]

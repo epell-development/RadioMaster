@@ -138,6 +138,27 @@ impl Client {
         }
     }
 
+    /// Download a station media file (path relative to the media folder) into `dest`.
+    pub fn download(&self, remote: &str, dest: &Path) -> Result<()> {
+        if self.key.is_empty() {
+            bail!("an API key is required to download media");
+        }
+        let resp = self
+            .req("GET", &format!("/api/station/{}/files/download", self.station))
+            .query("file", remote)
+            .call()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Some(dir) = dest.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = dest.with_extension("part");
+        let mut f = std::fs::File::create(&tmp)?;
+        std::io::copy(&mut resp.into_reader(), &mut f)?;
+        drop(f);
+        std::fs::rename(&tmp, dest)?;
+        Ok(())
+    }
+
     /// Skip the current AutoDJ song (requires an API key with station permissions).
     pub fn skip(&self) -> Result<()> {
         self.req("POST", &format!("/api/station/{}/backend/skip", self.station)).call()?;
