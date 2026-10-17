@@ -202,14 +202,17 @@ impl App {
         let mut closed = vec![];
         for w in wins {
             let title = aux_title(w.id);
+            // The builder must stay identical frame to frame: egui turns any change into a move/resize
+            // command, so the window is placed once from the saved layout and then left alone.
+            let (size0, pos0) = *self.aux_spawn.entry(w.id).or_insert((w.size.unwrap_or([520.0, 600.0]), w.pos));
             let mut builder = ViewportBuilder::default()
                 .with_title(title.clone())
-                .with_inner_size(w.size.unwrap_or([520.0, 600.0]))
+                .with_inner_size(size0)
                 .with_min_inner_size([260.0, 200.0]);
             if let Some(icon) = self.icon.clone() {
                 builder = builder.with_icon(icon);
             }
-            if let Some(p) = w.pos {
+            if let Some(p) = pos0 {
                 builder = builder.with_position(p);
             }
             let id = egui::ViewportId::from_hash_of(("aux_window", w.id));
@@ -237,12 +240,19 @@ impl App {
                 self.guard_web_views(ctx, &title, false);
                 let (close, outer, inner) =
                     ctx.input(|i| (i.viewport().close_requested(), i.viewport().outer_rect, i.viewport().inner_rect));
+                // remember where the user put it (rounded, so sub-pixel jitter doesn't count as a change)
                 if let Some(a) = self.workzones.aux.iter_mut().find(|a| a.id == w.id) {
                     if let Some(r) = outer {
-                        a.pos = Some([r.min.x, r.min.y]);
+                        let p = [r.min.x.round(), r.min.y.round()];
+                        if a.pos != Some(p) {
+                            a.pos = Some(p);
+                        }
                     }
                     if let Some(r) = inner {
-                        a.size = Some([r.width(), r.height()]);
+                        let sz = [r.width().round(), r.height().round()];
+                        if a.size != Some(sz) {
+                            a.size = Some(sz);
+                        }
                     }
                 }
                 if close {
@@ -251,6 +261,7 @@ impl App {
             });
         }
         for id in closed {
+            self.aux_spawn.remove(&id);
             self.browsers.close_window(&aux_title(id));
             self.workzones.close_aux(id);
         }
@@ -361,11 +372,9 @@ impl App {
                     go = Some(p.to_path_buf());
                 }
             }
-            #[cfg(windows)]
-            for c in b'C'..=b'Z' {
-                let root = PathBuf::from(format!("{}:\\", c as char));
-                if root.exists() && ui.small_button(format!("{}:", c as char)).clicked() {
-                    go = Some(root);
+            for root in crate::library::drive_roots() {
+                if ui.small_button(root.display().to_string().trim_end_matches('\\')).clicked() {
+                    go = Some(root.clone());
                 }
             }
             if ui.small_button("Add folder to playlist").clicked() {
@@ -375,15 +384,21 @@ impl App {
         });
         ui.label(RichText::new(dir.display().to_string()).small().color(GRAY));
         ui.separator();
-        let mut entries: Vec<(bool, PathBuf)> = std::fs::read_dir(&dir)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .map(|e| (e.path().is_dir(), e.path()))
-                    .filter(|(d, p)| *d || crate::library::is_audio(p))
-                    .collect()
-            })
-            .unwrap_or_default();
-        entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.file_name().cmp(&b.1.file_name())));
+        // the folder is listed when it changes, on Refresh, or every few seconds — not every frame
+        let stale = self.fx_list.get(&key).is_none_or(|(d, t, _)| *d != dir || t.elapsed() > Duration::from_secs(5));
+        if stale {
+            let mut list: Vec<(bool, PathBuf)> = std::fs::read_dir(&dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| (e.file_type().map(|t| t.is_dir()).unwrap_or(false), e.path()))
+                        .filter(|(d, p)| *d || crate::library::is_audio(p))
+                        .collect()
+                })
+                .unwrap_or_default();
+            list.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.file_name().cmp(&b.1.file_name())));
+            self.fx_list.insert(key.clone(), (dir.clone(), std::time::Instant::now(), list));
+        }
+        let entries = self.fx_list.get(&key).map(|(_, _, l)| l.clone()).unwrap_or_default();
         let mut add: Vec<PathBuf> = vec![];
         for (is_dir, p) in entries.iter().take(2000) {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -466,12 +481,15 @@ impl App {
         });
         self.aux_pl.insert(key.clone(), which);
         let on_air = which == core.playing_tab;
-        let (rows, starts, cur): (Vec<PlEntry>, Vec<Option<crate::playout::Start>>, Option<usize>) =
-            core.with_tab(which, |c| (c.playlist.clone(), c.projected_starts(on_air), c.current));
+        let (starts, cur): (Vec<Option<crate::playout::Start>>, Option<usize>) =
+            core.with_tab(which, |c| (c.projected_starts(on_air), c.current));
+        let state = core.state;
+        let rows = core.tab_rows(which);
         let sel = self.aux_sel.entry(key.clone()).or_default();
         let mut play: Option<usize> = None;
         let mut remove = false;
-        let playing = core.state != PlayState::Stopped;
+        let playing = state != PlayState::Stopped;
+        let dark = ui_dark(&self.workzones);
         TableBuilder::new(ui)
             .id_salt(("aux_pl", key.clone()))
             .striped(true)
@@ -494,7 +512,7 @@ impl App {
                     let is_cur = on_air && playing && cur == Some(i);
                     row.set_selected(sel.contains(&i));
                     let st = starts.get(i).copied().flatten();
-                    let col = row_text_color(e, is_cur, st.is_some_and(|s| s.skipped), ui_dark(&self.workzones));
+                    let col = row_text_color(e, is_cur, st.is_some_and(|s| s.skipped), dark);
                     row.col(|ui| {
                         row_background(ui, e, is_cur);
                         ui.label(RichText::new(if is_cur { "▶".to_string() } else { (i + 1).to_string() }).color(col));
@@ -562,7 +580,7 @@ pub(super) fn row_text_color(e: &PlEntry, is_cur: bool, skipped: bool, dark: boo
     if skipped || e.played {
         return Color32::from_gray(140);
     }
-    if e.is_file() && !e.track.path.as_os_str().is_empty() && !e.track.path.exists() {
+    if e.is_file() && crate::library::file_missing(&e.track.path) {
         return Color32::from_rgb(200, 50, 50);
     }
     match e.kind {

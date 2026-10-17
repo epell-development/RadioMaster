@@ -65,6 +65,8 @@ fn main() -> eframe::Result<()> {
     if let Some(icon) = app_icon() {
         viewport = viewport.with_icon(Arc::new(icon));
     }
-    let opts = eframe::NativeOptions { viewport, ..Default::default() };
+    // vsync off: with Additional windows open, each window would otherwise wait for its own screen refresh
+    // in turn and the whole UI would slow down. egui only redraws when something changes, so this costs nothing.
+    let opts = eframe::NativeOptions { viewport, vsync: false, ..Default::default() };
     eframe::run_native("RadioMaster", opts, Box::new(move |cc| Ok(Box::new(app::App::new(cc, core)))))
 }

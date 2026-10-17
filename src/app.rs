@@ -116,6 +116,18 @@ mod pltools;
 #[path = "plview.rs"]
 mod plview;
 
+/// Frame timing shown by Help → Performance (Ctrl+Shift+P), for diagnosing slowness.
+#[derive(Default)]
+struct Perf {
+    frame_ms: f32,
+    lock_ms: f32,
+    worst_ms: f32,
+    worst_lock_ms: f32,
+    fps: f32,
+    frames: u32,
+    window: Option<std::time::Instant>,
+}
+
 pub struct App {
     core: Arc<Mutex<Playout>>,
     pub audio: crate::audio::AudioManager,
@@ -145,6 +157,10 @@ pub struct App {
     browsers: Browsers,
     web_state: HashMap<String, panes::WebState>,
     fx_dir: HashMap<String, PathBuf>,
+    fx_list: HashMap<String, (PathBuf, std::time::Instant, Vec<(bool, PathBuf)>)>,
+    aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
+    layout_checked: std::time::Instant,
+    perf: Option<Perf>,
     aux_pl: HashMap<String, usize>,
     aux_sel: HashMap<String, BTreeSet<usize>>,
     icon: Option<Arc<egui::IconData>>,
@@ -277,6 +293,10 @@ impl App {
             browsers: Browsers::new(),
             web_state: HashMap::new(),
             fx_dir: HashMap::new(),
+            fx_list: HashMap::new(),
+            aux_spawn: HashMap::new(),
+            layout_checked: std::time::Instant::now(),
+            perf: None,
             aux_pl: HashMap::new(),
             aux_sel: HashMap::new(),
             icon: crate::app_icon().map(Arc::new),
@@ -641,6 +661,10 @@ impl App {
                     }
                 });
                 ui.menu_button("Help", |ui| {
+                    if ui.add(egui::Button::new("Performance").shortcut_text("Ctrl+Shift+P").selected(self.perf.is_some())).clicked() {
+                        self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
+                        ui.close_menu();
+                    }
                     if ui.button("About RadioMaster").clicked() {
                         self.show_about = true;
                         ui.close_menu();
@@ -2324,8 +2348,13 @@ impl eframe::App for App {
             self.authentication(ctx);
             return;
         }
+        let t0 = std::time::Instant::now();
         let arc = self.core.clone();
         let mut core = arc.lock();
+        let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
+            self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
+        }
         self.handle_dialogs(&mut core);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() {
@@ -2366,9 +2395,39 @@ impl eframe::App for App {
         let force = self.show_settings || self.show_users || self.show_profiles || self.show_about || self.tag_edit.is_some();
         self.guard_web_views(ctx, "", force);
         self.browsers.finish();
-        let serialized = serde_json::to_string(&self.workzones).unwrap_or_default();
-        if serialized != self.saved_layout && self.workzones.save().is_ok() {
-            self.saved_layout = serialized;
+        // save the layout when it changed, at most every 2 seconds (never while a window is being dragged)
+        if self.layout_checked.elapsed() >= Duration::from_secs(2) && !ctx.input(|i| i.pointer.any_down()) {
+            self.layout_checked = std::time::Instant::now();
+            let serialized = serde_json::to_string(&self.workzones).unwrap_or_default();
+            if serialized != self.saved_layout && self.workzones.save().is_ok() {
+                self.saved_layout = serialized;
+            }
+        }
+        drop(core);
+        let frame_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        if let Some(p) = self.perf.as_mut() {
+            p.frame_ms = p.frame_ms * 0.9 + frame_ms * 0.1;
+            p.lock_ms = p.lock_ms * 0.9 + lock_ms * 0.1;
+            p.frames += 1;
+            let w = p.window.get_or_insert_with(std::time::Instant::now);
+            if w.elapsed() >= Duration::from_secs(2) {
+                p.fps = p.frames as f32 / w.elapsed().as_secs_f32();
+                p.frames = 0;
+                p.window = Some(std::time::Instant::now());
+                p.worst_ms = 0.0;
+                p.worst_lock_ms = 0.0;
+            }
+            p.worst_ms = p.worst_ms.max(frame_ms);
+            p.worst_lock_ms = p.worst_lock_ms.max(lock_ms);
+            let txt = format!(
+                "UI work {:.1} ms (worst {:.0})  ·  waiting for playout {:.1} ms (worst {:.0})  ·  {:.0} frames/s  ·  {} window(s)",
+                p.frame_ms, p.worst_ms, p.lock_ms, p.worst_lock_ms, p.fps, 1 + self.workzones.aux.len()
+            );
+            egui::Area::new(egui::Id::new("perf_overlay")).anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -30.0]).show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(RichText::new(txt).monospace().small());
+                });
+            });
         }
     }
 
@@ -2378,5 +2437,7 @@ impl eframe::App for App {
             c.stop_encoder(i);
         }
         c.save_all();
+        drop(c);
+        crate::playout::flush_writes();
     }
 }

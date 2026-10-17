@@ -67,6 +67,59 @@ struct SavedTabs {
     playing: usize,
 }
 
+enum WriteJob {
+    Write(PathBuf, String),
+    Flush(mpsc::Sender<()>),
+}
+
+fn writer() -> Option<std::sync::MutexGuard<'static, mpsc::Sender<WriteJob>>> {
+    use std::sync::OnceLock;
+    static TX: OnceLock<std::sync::Mutex<mpsc::Sender<WriteJob>>> = OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<WriteJob>();
+        thread::spawn(move || {
+            while let Ok(job) = rx.recv() {
+                match job {
+                    WriteJob::Write(p, d) => {
+                        let tmp = p.with_extension("tmp");
+                        if std::fs::write(&tmp, d).is_ok() {
+                            let _ = std::fs::rename(&tmp, &p);
+                        }
+                    }
+                    WriteJob::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+        std::sync::Mutex::new(tx)
+    })
+    .lock()
+    .ok()
+}
+
+/// Write a file off the playout lock (the disk can be slow; playback and the UI must not wait).
+/// Writes go through one thread, in order, and land atomically via a temporary file.
+fn write_in_background(path: PathBuf, data: String) {
+    if let Some(tx) = writer() {
+        if tx.send(WriteJob::Write(path.clone(), data.clone())).is_ok() {
+            return;
+        }
+    }
+    let _ = std::fs::write(path, data);
+}
+
+/// Wait until every queued write has reached the disk (used when the program closes).
+pub fn flush_writes() {
+    let (tx, rx) = mpsc::channel();
+    if let Some(w) = writer() {
+        if w.send(WriteJob::Flush(tx)).is_err() {
+            return;
+        }
+    }
+    let _ = rx.recv_timeout(std::time::Duration::from_secs(10));
+}
+
 /// Projected air time of a playlist row.
 #[derive(Clone, Copy, Debug)]
 pub struct Start {
@@ -405,13 +458,13 @@ impl Playout {
         if self.cues_dirty {
             let v: Vec<(&PathBuf, &Cues)> = self.cues.iter().collect();
             if let Ok(j) = serde_json::to_string(&v) {
-                let _ = std::fs::write(data_dir().join("cues.json"), j);
+                write_in_background(data_dir().join("cues.json"), j);
             }
             self.cues_dirty = false;
         }
         if self.plays_dirty {
             if let Ok(j) = serde_json::to_string(&self.plays) {
-                let _ = std::fs::write(data_dir().join("plays.json"), j);
+                write_in_background(data_dir().join("plays.json"), j);
             }
             self.plays_dirty = false;
         }
@@ -456,7 +509,7 @@ impl Playout {
             })
             .collect();
         if let Ok(j) = serde_json::to_string(&SavedTabs { tabs, playing: self.playing_tab }) {
-            let _ = std::fs::write(data_dir().join("playlists.json"), j);
+            write_in_background(data_dir().join("playlists.json"), j);
         }
     }
 
@@ -1772,6 +1825,24 @@ mod tests {
 
     fn marker(t: DateTime<Local>, hard: bool, wait: bool) -> PlEntry {
         PlEntry::special(ItemKind::HourMarker { hour: t.hour(), minute: t.minute(), hard, wait }, "", 0.0)
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_projected_starts() {
+        let mut p = playout();
+        let now = Local::now();
+        for i in 0..2000 {
+            p.playlist.push(file(&format!("t{i}"), 200.0));
+            if i % 15 == 0 {
+                p.playlist.push(marker(now + chrono::Duration::minutes(i as i64 * 3), false, true));
+            }
+        }
+        let t = std::time::Instant::now();
+        for _ in 0..20 {
+            std::hint::black_box(p.projected_starts(true));
+        }
+        eprintln!("projected_starts x{} rows: {:?} each", p.playlist.len(), t.elapsed() / 20);
     }
 
     #[test]

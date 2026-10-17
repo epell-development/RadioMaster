@@ -143,3 +143,74 @@ pub fn cover_bytes(p: &Path) -> Option<Vec<u8>> {
     }
     None
 }
+
+// ------------------------------------------------------------------ fast checks for the UI
+use std::collections::HashMap;
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+struct MissingCache {
+    seen: Mutex<HashMap<PathBuf, (bool, Instant)>>,
+    tx: Mutex<mpsc::Sender<PathBuf>>,
+}
+
+fn missing_cache() -> &'static MissingCache {
+    static CACHE: OnceLock<MissingCache> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<PathBuf>();
+        std::thread::spawn(move || {
+            while let Ok(p) = rx.recv() {
+                let missing = !p.exists();
+                if let Some(c) = CACHE.get() {
+                    c.seen.lock().unwrap().insert(p, (missing, Instant::now()));
+                }
+            }
+        });
+        MissingCache { seen: Mutex::new(HashMap::new()), tx: Mutex::new(tx) }
+    })
+}
+
+/// Whether a playlist file is missing, without touching the disk on the UI thread: files are checked
+/// in the background (slow on network / cloud drives) and re-checked every 30 s.
+pub fn file_missing(p: &Path) -> bool {
+    if p.as_os_str().is_empty() {
+        return false;
+    }
+    let c = missing_cache();
+    let mut seen = c.seen.lock().unwrap();
+    match seen.get_mut(p) {
+        Some((missing, at)) => {
+            if at.elapsed() > Duration::from_secs(30) {
+                *at = Instant::now(); // keep the old answer until the new check lands
+                let _ = c.tx.lock().unwrap().send(p.to_path_buf());
+            }
+            *missing
+        }
+        None => {
+            seen.insert(p.to_path_buf(), (false, Instant::now()));
+            let _ = c.tx.lock().unwrap().send(p.to_path_buf());
+            false
+        }
+    }
+}
+
+/// Drive letters for the file explorer (Windows), read once without probing each drive.
+pub fn drive_roots() -> &'static [PathBuf] {
+    static ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    ROOTS.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetLogicalDrives() -> u32;
+            }
+            // SAFETY: no arguments; returns a bitmask of drive letters.
+            let mask = unsafe { GetLogicalDrives() };
+            (0..26u8).filter(|i| mask & (1 << i) != 0).map(|i| PathBuf::from(format!("{}:\\", (b'A' + i) as char))).collect()
+        }
+        #[cfg(not(windows))]
+        {
+            Vec::new()
+        }
+    })
+}

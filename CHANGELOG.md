@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.1 — 2026-10-17
+Performance fixes.
+
+- Additional windows no longer get moved/resized and the layout file rewritten on every frame
+  (the main cause of lag on Windows with an Additional window open)
+- Turned off vsync so several windows don't each wait for the screen in turn
+- Missing-file checks for playlist rows run in the background (fast with OneDrive / network music folders)
+- File Explorer reads a folder once instead of every frame and no longer probes every drive letter
+- Playlists, cues and play counts are saved on a background thread
+- AUX Playlist no longer copies the whole playlist every frame
+- Help → Performance (Ctrl+Shift+P) shows frame timings for bug reports
+
 ## v0.2.0 — 2026-10-17
 First public release.
 
