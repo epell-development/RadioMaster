@@ -24,7 +24,8 @@ From the [latest release](../../releases/latest):
   (install just for you, no admin needed, or for all users), or
 - **`RadioMaster-<version>-windows-x64.zip`** — portable: unzip anywhere and run `RadioMaster.exe`.
 
-On first start you create the local administrator account.
+On first start you create the local administrator account. RadioMaster tells you when a new version is out
+(the button next to the logo); installed copies update themselves in one click.
 Embedded web panels use the Microsoft Edge WebView2 runtime, which Windows 10/11 already include.
 
 ## Build from source (Windows)

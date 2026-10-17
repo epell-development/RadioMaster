@@ -161,6 +161,9 @@ pub struct App {
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
+    updates: crate::updater::Shared,
+    show_update: bool,
+    update_next: Option<std::time::Instant>,
     aux_pl: HashMap<String, usize>,
     aux_sel: HashMap<String, BTreeSet<usize>>,
     icon: Option<Arc<egui::IconData>>,
@@ -297,6 +300,9 @@ impl App {
             aux_spawn: HashMap::new(),
             layout_checked: std::time::Instant::now(),
             perf: None,
+            updates: Default::default(),
+            show_update: false,
+            update_next: None,
             aux_pl: HashMap::new(),
             aux_sel: HashMap::new(),
             icon: crate::app_icon().map(Arc::new),
@@ -665,6 +671,11 @@ impl App {
                         self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
                         ui.close_menu();
                     }
+                    if ui.button("Check for updates…").clicked() {
+                        crate::updater::check(self.updates.clone(), ctx.clone(), true);
+                        self.show_update = true;
+                        ui.close_menu();
+                    }
                     if ui.button("About RadioMaster").clicked() {
                         self.show_about = true;
                         ui.close_menu();
@@ -704,12 +715,21 @@ impl App {
                 if ui.button("➕🗗").on_hover_text("Additional window (Ctrl+4) — open as many as you like").clicked() {
                     self.workzones.new_aux(Tab::AuxPlaylist);
                 }
+                let new_version = self.updates.lock().available.as_ref().map(|a| a.version.clone());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(RichText::new("Master").strong().size(15.0).color(Color32::from_rgb(20, 150, 235)));
                     ui.add_space(-ui.spacing().item_spacing.x);
                     ui.label(RichText::new("Radio").strong().size(15.0));
                     if let Some(t) = &icon {
                         ui.add(egui::Image::new((t.id(), egui::vec2(18.0, 18.0))));
+                    }
+                    if let Some(v) = &new_version {
+                        let b = egui::Button::new(RichText::new(format!("⬆ Update available: v{v}")).strong().color(Color32::WHITE))
+                            .fill(Color32::from_rgb(20, 150, 235));
+                        if ui.add(b).on_hover_text("A newer RadioMaster is on GitHub — click to see what's new and install it").clicked()
+                        {
+                            self.show_update = true;
+                        }
                     }
                 });
             });
@@ -1155,6 +1175,9 @@ impl App {
                                 ui.label(format!("Data folder: {}",data_dir().display()));
                                 ui.label(format!("Active profile: {}",self.profile_name));
                                 if ui.button("Station profiles…").clicked(){self.show_profiles=true;}
+                                ui.separator();
+                                ui.checkbox(&mut core.cfg.check_updates, "Check for updates when RadioMaster starts");
+                                ui.label(RichText::new(format!("This is version {}. Help → Check for updates looks right now.", crate::updater::CURRENT)).small().color(GRAY));
                             },
                             SettingsPage::Library=>{
                                 ui.label("Music folders scanned by the library");
@@ -2294,6 +2317,97 @@ impl App {
             });
     }
 
+    fn update_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        use crate::updater::Phase;
+        if !self.show_update {
+            return;
+        }
+        let (avail, phase) = {
+            let u = self.updates.lock();
+            (u.available.clone(), u.phase.clone())
+        };
+        let installed = crate::updater::installed_copy();
+        let mut open = true;
+        let mut start_download = false;
+        let mut install: Option<PathBuf> = None;
+        Self::window_for(ctx, "Update RadioMaster", [520.0, 420.0]).id(egui::Id::new("update_window")).collapsible(false).open(&mut open).show(ctx, |ui| {
+            ui.label(format!("You have version {}.", crate::updater::CURRENT));
+            match (&avail, &phase) {
+                (_, Phase::Checking) => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Checking GitHub for a newer version…");
+                    });
+                }
+                (None, Phase::UpToDate) => {
+                    ui.label(RichText::new("✔ RadioMaster is up to date.").color(GREEN).strong());
+                }
+                (None, Phase::Failed(e)) => {
+                    ui.colored_label(RED, format!("Couldn't check for updates: {e}"));
+                }
+                (None, _) => {
+                    ui.label("No update information yet.");
+                }
+                (Some(a), phase) => {
+                    ui.label(RichText::new(format!("Version {} is available — {}", a.version, a.title)).strong().size(16.0));
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                        ui.label(if a.notes.trim().is_empty() { "No release notes." } else { a.notes.trim() });
+                    });
+                    ui.separator();
+                    match phase {
+                        Phase::Downloading { done, total } => {
+                            let f = if *total > 0 { *done as f32 / *total as f32 } else { 0.0 };
+                            ui.add(egui::ProgressBar::new(f).text(format!("Downloading… {:.1} / {:.1} MB", *done as f32 / 1e6, *total as f32 / 1e6)));
+                        }
+                        Phase::Ready(p) => {
+                            ui.label("Downloaded. RadioMaster will close, update and start again.");
+                            if ui.button(RichText::new("Install now").strong()).clicked() {
+                                install = Some(p.clone());
+                            }
+                        }
+                        other => {
+                            if let Phase::Failed(e) = other {
+                                ui.colored_label(RED, e);
+                            }
+                            ui.horizontal(|ui| {
+                                if installed && a.installer.is_some() {
+                                    if ui.button(RichText::new("⬇ Download and install").strong()).clicked() {
+                                        start_download = true;
+                                    }
+                                } else if ui.button(RichText::new("⬇ Open the download page").strong()).clicked() {
+                                    ui.ctx().open_url(egui::OpenUrl::new_tab(a.page.clone()));
+                                }
+                                if ui.button("Release page").clicked() {
+                                    ui.ctx().open_url(egui::OpenUrl::new_tab(a.page.clone()));
+                                }
+                            });
+                            if !installed {
+                                ui.label(RichText::new("This copy wasn't installed with the setup program, so download the new zip (or the installer) from the page.").small().color(GRAY));
+                            }
+                        }
+                    }
+                    if core.state == PlayState::Playing {
+                        ui.label(RichText::new("Playback stops while the update installs — best done between shows.").small().color(AMBER));
+                    }
+                }
+            }
+        });
+        if start_download {
+            crate::updater::download(self.updates.clone(), ctx.clone());
+        }
+        if let Some(p) = install {
+            match crate::updater::run_installer(&p) {
+                Ok(()) => {
+                    core.say("Installing the update…");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(e) => self.updates.lock().phase = crate::updater::Phase::Failed(format!("Couldn't start the installer: {e}")),
+            }
+        }
+        self.show_update = open;
+    }
+
     fn tag_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         let (mut save, mut close) = (false, false);
         if let Some(t) = &mut self.tag_edit {
@@ -2389,10 +2503,17 @@ impl eframe::App for App {
             self.find_window(ctx, c);
         });
         self.repeat_window(ctx, &mut core);
+        if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
+            // at start-up, then every 6 hours for stations that run for weeks
+            self.update_next = Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
+            crate::updater::check(self.updates.clone(), ctx.clone(), false);
+        }
+        self.update_window(ctx, &mut core);
         self.apply_tab_ops(&mut core);
         // A native web view paints above everything egui draws, so hide the main window's views
         // whenever an egui window, menu, combo list or popup overlaps them.
-        let force = self.show_settings || self.show_users || self.show_profiles || self.show_about || self.tag_edit.is_some();
+        let force =
+            self.show_settings || self.show_users || self.show_profiles || self.show_about || self.show_update || self.tag_edit.is_some();
         self.guard_web_views(ctx, "", force);
         self.browsers.finish();
         // save the layout when it changed, at most every 2 seconds (never while a window is being dragged)
@@ -2421,7 +2542,12 @@ impl eframe::App for App {
             p.worst_lock_ms = p.worst_lock_ms.max(lock_ms);
             let txt = format!(
                 "UI work {:.1} ms (worst {:.0})  ·  waiting for playout {:.1} ms (worst {:.0})  ·  {:.0} frames/s  ·  {} window(s)",
-                p.frame_ms, p.worst_ms, p.lock_ms, p.worst_lock_ms, p.fps, 1 + self.workzones.aux.len()
+                p.frame_ms,
+                p.worst_ms,
+                p.lock_ms,
+                p.worst_lock_ms,
+                p.fps,
+                1 + self.workzones.aux.len()
             );
             egui::Area::new(egui::Id::new("perf_overlay")).anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -30.0]).show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {

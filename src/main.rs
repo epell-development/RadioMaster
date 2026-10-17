@@ -18,6 +18,7 @@ mod remote;
 mod scheduler;
 mod stream;
 mod theme;
+mod updater;
 mod workzones;
 
 use parking_lot::Mutex;

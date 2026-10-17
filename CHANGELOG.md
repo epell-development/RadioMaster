@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.2 — 2026-10-17
+- Update checker: when a newer release is on GitHub, an "Update available" button appears next to the
+  RadioMaster logo. Installed copies download the new setup and update themselves (RadioMaster closes,
+  updates and starts again); portable copies open the download page.
+- Help → Check for updates, and Settings → General → "Check for updates when RadioMaster starts"
+
 ## v0.2.1 — 2026-10-17
 Performance fixes.
 

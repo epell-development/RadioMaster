@@ -205,10 +205,8 @@ impl App {
             // The builder must stay identical frame to frame: egui turns any change into a move/resize
             // command, so the window is placed once from the saved layout and then left alone.
             let (size0, pos0) = *self.aux_spawn.entry(w.id).or_insert((w.size.unwrap_or([520.0, 600.0]), w.pos));
-            let mut builder = ViewportBuilder::default()
-                .with_title(title.clone())
-                .with_inner_size(size0)
-                .with_min_inner_size([260.0, 200.0]);
+            let mut builder =
+                ViewportBuilder::default().with_title(title.clone()).with_inner_size(size0).with_min_inner_size([260.0, 200.0]);
             if let Some(icon) = self.icon.clone() {
                 builder = builder.with_icon(icon);
             }

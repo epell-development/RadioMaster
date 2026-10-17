@@ -358,11 +358,14 @@ pub struct Config {
     pub carts: Vec<CartPad>,
     pub events: Vec<Event>,
     pub rotations: Vec<Rotation>,
+    /// Look for a newer RadioMaster release on GitHub at start-up.
+    pub check_updates: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            check_updates: true,
             audio_devices: AudioDevices::default(),
             announce: AnnounceCfg::default(),
             repeat: RepeatCfg::default(),

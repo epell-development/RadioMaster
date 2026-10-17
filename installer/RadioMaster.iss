@@ -3,7 +3,7 @@
 ; Output: dist\RadioMaster-Setup-<version>.exe
 
 #ifndef AppVersion
-  #define AppVersion "0.2.1"
+  #define AppVersion "0.2.2"
 #endif
 
 #define AppName "RadioMaster"
@@ -58,10 +58,18 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; updates started from inside RadioMaster run silently: start it again when they finish
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 ; Settings, playlists and logs in %APPDATA%\RadioMaster are kept on uninstall so a reinstall picks them up.
 
 [Code]
+// RadioMaster's own updater passes /RELAUNCH=1 so it starts again after a silent update.
+function ShouldRelaunch(): Boolean;
+begin
+  Result := WizardSilent() and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
+
 // Embedded web panels need the Edge WebView2 runtime (part of Windows 11 and up-to-date Windows 10).
 function WebView2Installed(): Boolean;
 var v: String;
