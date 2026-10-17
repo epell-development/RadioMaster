@@ -3,6 +3,8 @@
 ## v0.2.0 — 2026-10-17
 First public release.
 
+- Windows installer (`RadioMaster-Setup-0.2.0.exe`) and portable zip
+
 - Multiple playlist tabs (one on air), projected start times, last-played column
 - Full Playlist menu: URL relays, Line Input, commands, timed pauses, teasers, time announcements,
   comments, containers, Track Lists with repeat protection, hour markers (wait / soft / hard),

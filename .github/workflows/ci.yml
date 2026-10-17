@@ -26,7 +26,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          choco upgrade innosetup -y --no-progress   # Inno Setup 6.3+ (x64compatible)
+          & $iscc installer\RadioMaster.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: RadioMaster-windows
-          path: target/release/RadioMaster.exe
+          path: |
+            target/release/RadioMaster.exe
+            dist/RadioMaster-Setup-*.exe

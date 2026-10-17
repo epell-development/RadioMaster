@@ -27,9 +27,19 @@ jobs:
           Copy-Item target/release/RadioMaster.exe $name/
           Copy-Item README.md, LICENSE, CHANGELOG.md $name/
           Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          choco upgrade innosetup -y --no-progress   # Inno Setup 6.3+ (x64compatible)
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          & $iscc "/DAppVersion=$ver" installer\RadioMaster.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: softprops/action-gh-release@v2
         with:
-          files: RadioMaster-*-windows-x64.zip
+          files: |
+            RadioMaster-*-windows-x64.zip
+            dist/RadioMaster-Setup-*.exe
           generate_release_notes: true
 
   linux:

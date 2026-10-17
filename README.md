@@ -18,13 +18,18 @@ RadioMaster uses a classic broadcast-automation layout: playlist tabs in the cen
 VU meters and the Last / On Air / Next tiles on top, panels around it, and tools in their own windows.
 
 ## Download
-Grab `RadioMaster-<version>-windows-x64.zip` from the [latest release](../../releases/latest), unzip it anywhere and run
-`RadioMaster.exe`. On first start you create the local administrator account.
+From the [latest release](../../releases/latest):
+- **`RadioMaster-Setup-<version>.exe`** — installer with Start-menu / desktop shortcuts and an uninstaller
+  (install just for you, no admin needed, or for all users), or
+- **`RadioMaster-<version>-windows-x64.zip`** — portable: unzip anywhere and run `RadioMaster.exe`.
+
+On first start you create the local administrator account.
 Embedded web panels use the Microsoft Edge WebView2 runtime, which Windows 10/11 already include.
 
 ## Build from source (Windows)
 Double-click **`run-windows.bat`** (or `cargo run --release` in this folder).
 **`build-windows.bat`** produces `target\release\RadioMaster.exe` (with the RadioMaster icon).
+**`build-installer.bat`** also makes `dist\RadioMaster-Setup-<version>.exe` (needs [Inno Setup 6](https://jrsoftware.org/isdl.php)).
 
 Linux: `sudo apt install build-essential libasound2-dev pkg-config`, then `cargo run --release`.
 
