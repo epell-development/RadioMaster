@@ -185,6 +185,8 @@ struct Shared {
     mic_on: bool,
     mic_gain: f32,
     duck: f32,
+    /// music level right now (follows `duck` smoothly)
+    duck_now: f32,
     mic_buf: VecDeque<f32>,
     monitors: Vec<Sender<Arc<Vec<f32>>>>,
 }
@@ -192,7 +194,6 @@ struct Shared {
 #[derive(Clone, Default, Debug)]
 pub struct Status {
     pub has_track: bool,
-    pub paused: bool,
     pub pos: f32,
     pub total: f32,
     pub peak_l: f32,
@@ -219,10 +220,19 @@ impl Bus {
                 }
             }
         }
-        if s.mic_on {
-            let d = s.duck;
-            self.buf.iter_mut().for_each(|x| *x *= d);
-        } else if !s.mic_buf.is_empty() {
+        // the music level glides to the duck level (and back) instead of jumping: no clicks
+        let target = if s.mic_on { s.duck } else { 1.0 };
+        if s.duck_now != target || target != 1.0 {
+            let step = 1.0 / (0.12 * SR as f32);
+            let mut g = s.duck_now;
+            for f in self.buf.chunks_exact_mut(2) {
+                g = if g < target { (g + step).min(target) } else { (g - step).max(target) };
+                f[0] *= g;
+                f[1] *= g;
+            }
+            s.duck_now = g;
+        }
+        if !s.mic_on && !s.mic_buf.is_empty() {
             s.mic_buf.clear();
         }
         for c in s.carts.iter_mut() {
@@ -380,6 +390,7 @@ impl Engine {
             mic_on: false,
             mic_gain: 1.0,
             duck: 0.35,
+            duck_now: 1.0,
             mic_buf: VecDeque::new(),
             monitors: vec![],
         }));
@@ -418,12 +429,6 @@ impl Engine {
             }
         });
         stop
-    }
-
-    /// Start a track on the idle deck. If `xfade` > 0 the previous track fades out while
-    /// the new one fades in.
-    pub fn play(&self, path: &Path, duration_hint: f32, xfade: f32) -> Result<()> {
-        self.play_cued(path, duration_hint, CueSpec { fade_in: xfade, ..Default::default() }, Some(xfade))
     }
 
     /// Start a track on the idle deck honouring its cue points.
@@ -609,14 +614,7 @@ impl Engine {
     pub fn status(&self) -> Status {
         let s = self.shared.lock();
         let d = &s.decks[s.active];
-        Status {
-            has_track: d.src.is_some(),
-            paused: s.paused,
-            pos: d.frames as f32 / SR as f32,
-            total: d.total_secs,
-            peak_l: s.peak_l,
-            peak_r: s.peak_r,
-        }
+        Status { has_track: d.src.is_some(), pos: d.frames as f32 / SR as f32, total: d.total_secs, peak_l: s.peak_l, peak_r: s.peak_r }
     }
 }
 
@@ -729,6 +727,33 @@ mod tests {
     }
 
     #[test]
+    fn speech_with_pauses_plays_to_the_end_even_with_silence_trimming() {
+        if std::process::Command::new("espeak-ng").arg("--version").output().is_err() {
+            return; // no speech engine here
+        }
+        let v = crate::live::Voice { line_pause_ms: 1500, ..Default::default() };
+        let text = "First line here.\nSecond line here.\nThird line here.";
+        let file = crate::live::speech_file(text, &v).unwrap();
+        let want = open_at(&file, 0.0).unwrap().count() / 2;
+        let engine = Engine::new_detached();
+        engine.set_dsp(&crate::dsp::DspConfig { silence_trim: true, silence_max_secs: 0.4, ..Default::default() });
+        let mut bus = engine.primary_source();
+        let opts = crate::items::SpeechOpts { line_pause_ms: 1500, ..Default::default() };
+        let src = crate::live::speech_source(text.into(), v, opts, Default::default());
+        engine.play_source(Box::new(src), None, 0.0, CueSpec::default(), Some(0.0), true);
+        let mut frames = 0usize;
+        while !engine.take_ended() && frames < SR as usize * 60 {
+            bus.next();
+            bus.next();
+            frames += 1;
+            if frames % 4096 == 0 {
+                std::thread::sleep(std::time::Duration::from_micros(200)); // let the reader keep up
+            }
+        }
+        assert!(frames >= want, "played {frames} frames of {want}: the pauses between lines must not end it");
+    }
+
+    #[test]
     fn cued_playback_honours_in_out_and_fade() {
         // 1 s tone; play from 0.25 s, fade out from 0.5 s, end at 0.75 s
         let p = std::env::temp_dir().join("openboss_test_cue.wav");
@@ -759,7 +784,7 @@ mod tests {
         engine.set_volume(1.0);
         let mut primary = engine.primary_source();
         let mut monitor = engine.monitor_source();
-        engine.play(&p, 1.0, 0.0).unwrap();
+        engine.play_cued(&p, 1.0, CueSpec::default(), Some(0.0)).unwrap();
         let a: Vec<f32> = (0..4096).map(|_| primary.next().unwrap()).collect();
         let b: Vec<f32> = (0..4096).map(|_| monitor.next().unwrap()).collect();
         assert!(a.iter().any(|x| x.abs() > 0.1), "primary should carry audio");

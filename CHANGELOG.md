@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.2.4 — 2026-10-18
+**New**
+- Reports: choose everything, songs, adverts, jingles or speech for any period (today, this week, last
+  month…), click an item to see every time it played, and export:
+  - a PDF report (totals, plays per day, every item)
+  - proof of play as a PDF — for one advert or jingle, or each item on its own page — with every air time
+  - CSV (opens in Excel) for the report or for every single play
+- The play history now records what each item was (song, advert, jingle, speech…), and jingles fired
+  from the cart wall are included
+- Library: select several tracks (Ctrl+click, Shift+click) and drag them into the playlist; right-click
+  works on the whole selection
+- Track editor: a list of every track in the library (with search) or the playlist beside the editor —
+  click any track to edit it next
+- Text to speech: every line is read (with a pause you can set between lines), plus pitch, volume,
+  read it several times, an intro / outro sound, and reading numbers digit by digit; Stop button for
+  the preview; speech is prepared just before it is due so it starts without a gap
+- Microphone: choose what the music does while the mic is on — lower it, mute it, or pause it and carry
+  on afterwards (right-click the Mic button, or Settings → Audio); the music fades down and up smoothly
+- Web panels: add as many as you like (➕ → New web panel); the first one opens
+  https://radiomanager.dovafm.com
+- Permissions: administrators pick exactly which tools each user can open (track editor, generator,
+  adverts, Audio FX, AzuraCast, reports, history, notepad, plugins, scheduler, voice tracks, library,
+  file explorer, song requests, web panels), plus a separate Jingles permission
+- Characters the built-in fonts lack (other alphabets, symbols in song titles) now use the computer's
+  own fonts instead of showing squares
+
+**Fixed**
+- Text to speech rows stopped after the first line on air (the pause between lines was taken for the
+  end of the item)
+- Dragging songs from the library or file explorer into the playlist did nothing
+- The line that shows where dragged rows will land now sits exactly between two rows
+- Users who may not edit playlists could still add songs (Library → Insert as next, AzuraCast,
+  file explorer, search, dropped files)
+- Icons that showed as squares (Additional window button, web panel Home, AzuraCast live DJ)
+- The track editor no longer grows taller than the screen on small displays; its zoom buttons no longer
+  overlap the file details
+
+**Website**
+- Cleaner addresses (…/RadioMaster/updates/ instead of updates.html) and clearer Windows, macOS and
+  Linux downloads
+
 ## v0.2.3 — 2026-10-17
 **New**
 - Drag and drop in playlists: reorder rows, drop them on another playlist's tab, or drag songs in from

@@ -17,6 +17,25 @@ pub(super) struct DragRows {
 pub(super) struct DragFiles(pub Vec<PathBuf>);
 
 /// Draw "what's being dragged" next to the pointer.
+/// The payload of type `T` dropped on `r` this frame. (egui's own `dnd_release_payload` takes
+/// whatever is being dragged, even of another type, so checking for one type would lose the other.)
+pub(super) fn released<T: std::any::Any + Send + Sync>(r: &egui::Response) -> Option<std::sync::Arc<T>> {
+    if egui::DragAndDrop::has_payload_of_type::<T>(&r.ctx) {
+        r.dnd_release_payload::<T>()
+    } else {
+        None
+    }
+}
+
+/// Take a dropped payload of type `T` (and leave other types alone).
+pub(super) fn take<T: std::any::Any + Send + Sync>(ctx: &egui::Context) -> Option<std::sync::Arc<T>> {
+    if egui::DragAndDrop::has_payload_of_type::<T>(ctx) {
+        egui::DragAndDrop::take_payload::<T>(ctx)
+    } else {
+        None
+    }
+}
+
 pub(super) fn drag_label(ctx: &egui::Context, text: &str) {
     if let Some(p) = ctx.pointer_interact_pos() {
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("drag_label")));
@@ -79,6 +98,10 @@ impl App {
     /// Insert rows into the playlist being viewed (after the selection, or at the end) and select them.
     pub(super) fn insert_rows_here(&mut self, core: &mut Playout, rows: Vec<PlEntry>) {
         if rows.is_empty() {
+            return;
+        }
+        if !self.perm.edit_playlists {
+            *self.notify.lock() = tr("Your account isn't allowed to edit playlists").into();
             return;
         }
         let at = self.insert_pos(core);
@@ -225,12 +248,12 @@ impl App {
                         ui.painter().rect_stroke(r.rect.expand(2.0), 4.0, egui::Stroke::new(2.0_f32, ACCENT), egui::StrokeKind::Outside);
                     }
                 }
-                if let Some(d) = r.dnd_release_payload::<DragRows>() {
+                if let Some(d) = released::<DragRows>(&r) {
                     if d.tab != i {
                         self.tab_ops.push(TabOp::MoveRows(d.tab, d.rows.clone(), i));
                     }
                 }
-                if let Some(f) = r.dnd_release_payload::<DragFiles>() {
+                if let Some(f) = released::<DragFiles>(&r) {
                     let rows: Vec<PlEntry> = f.0.iter().map(|p| PlEntry::file(crate::library::Track::from_path(p))).collect();
                     self.tab_ops.push(TabOp::Rows(i, rows));
                 }
@@ -347,7 +370,7 @@ impl App {
             let may_play = self.perm.playback;
             let dragging_rows = egui::DragAndDrop::payload::<DragRows>(ctx);
             let dragging_files = egui::DragAndDrop::payload::<DragFiles>(ctx);
-            let mut drop_line: Option<f32> = None;
+            let mut drop_line: Option<(f32, egui::Rangef)> = None;
             let mut drop_at: Option<usize> = None;
             let mut drop_files: Option<(usize, Vec<PathBuf>)> = None;
             let mut drop_rows: Option<(DragRows, usize)> = None;
@@ -470,11 +493,14 @@ impl App {
                         let below = resp.hover_pos().or(resp.ctx.pointer_hover_pos()).is_some_and(|p| p.y > resp.rect.center().y);
                         let at = if below { i + 1 } else { i };
                         drop_at = Some(at);
-                        drop_line = Some(if below { resp.rect.bottom() } else { resp.rect.top() });
-                        if let Some(d) = resp.dnd_release_payload::<DragRows>() {
+                        // on the boundary between the two rows (rows have a small gap between them)
+                        let gap = resp.ctx.style().spacing.item_spacing.y * 0.5;
+                        let y = if below { resp.rect.bottom() + gap } else { resp.rect.top() - gap };
+                        drop_line = Some((y, resp.rect.x_range()));
+                        if let Some(d) = released::<DragRows>(&resp) {
                             drop_rows = Some(((*d).clone(), at));
                         }
-                        if let Some(f) = resp.dnd_release_payload::<DragFiles>() {
+                        if let Some(f) = released::<DragFiles>(&resp) {
                             drop_files = Some((at, f.0.clone()));
                         }
                     }
@@ -563,9 +589,13 @@ impl App {
                 });
             });
 
-            if let Some(y) = drop_line {
-                let r = ui.min_rect();
-                ui.painter().hline(r.x_range(), y, egui::Stroke::new(2.5_f32, ACCENT));
+            if let Some((y, xr)) = drop_line {
+                let p = ui.painter();
+                p.hline(xr, y, egui::Stroke::new(2.5_f32, ACCENT));
+                // little end caps make the drop point easy to see
+                for x in [xr.min, xr.max] {
+                    p.circle_filled(egui::pos2(x + if x == xr.min { 4.0 } else { -4.0 }, y), 3.5, ACCENT);
+                }
             }
             if let Some(d) = &dragging_rows {
                 let _ = drag_start;
@@ -575,9 +605,9 @@ impl App {
             }
             // released below the last row: drop at the end
             if may_edit && drop_at.is_none() && ui.input(|i| i.pointer.any_released()) && ui.rect_contains_pointer(ui.max_rect()) {
-                if let Some(d) = egui::DragAndDrop::take_payload::<DragRows>(ctx) {
+                if let Some(d) = take::<DragRows>(ctx) {
                     drop_rows = Some(((*d).clone(), n_rows));
-                } else if let Some(f) = egui::DragAndDrop::take_payload::<DragFiles>(ctx) {
+                } else if let Some(f) = take::<DragFiles>(ctx) {
                     drop_files = Some((n_rows, f.0.clone()));
                 }
             }

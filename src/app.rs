@@ -99,6 +99,8 @@ enum Dlg {
     SaveReport(PathBuf),
     AnnounceFolder(PathBuf),
     ContainerFiles(Vec<PathBuf>),
+    /// (outro?, file) for a speech row
+    SpeechSound(bool, PathBuf),
     TrackListSource(PathBuf),
     InsertVoice(Vec<PathBuf>),
     InsertPlaylist(PathBuf),
@@ -131,6 +133,8 @@ mod panes;
 mod pltools;
 #[path = "plview.rs"]
 mod plview;
+#[path = "reportui.rs"]
+mod reportui;
 
 /// Presenter notes for the Track Info tab (notes.json in the data folder).
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -178,7 +182,15 @@ pub struct App {
     lib_filter: String,
     lib_filtered: Vec<usize>,
     lib_key: (String, u64),
-    lib_sel: Option<usize>,
+    /// selected library tracks (library indexes)
+    lib_sel: BTreeSet<usize>,
+    lib_anchor: Option<usize>,
+    /// library track to scroll into view
+    lib_scroll: Option<usize>,
+    /// track editor: show the track list, list the library (else the playlist), scroll it to the track
+    te_browser: bool,
+    te_from_lib: bool,
+    te_scroll: bool,
     dlg_tx: mpsc::Sender<Dlg>,
     dlg_rx: mpsc::Receiver<Dlg>,
     tag_edit: Option<Track>,
@@ -186,11 +198,10 @@ pub struct App {
     seek_drag: Option<f32>,
     mic_stream: Option<rodio::cpal::Stream>,
     mic_on: bool,
+    /// playback was paused by the mic (Pause mode) and resumes when it goes off
+    mic_paused: bool,
     tpl_sel: usize,
-    report_from: String,
-    report_to: String,
-    report_excl: String,
-    report_rows: Vec<(String, u32, String)>,
+    rep: reportui::RepUi,
     workzones: WorkzoneSet,
     saved_layout: String,
     browsers: Browsers,
@@ -308,6 +319,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, core: Arc<Mutex<Playout>>) -> Self {
         let workzones = WorkzoneSet::load();
         crate::theme::apply(&cc.egui_ctx, workzones.dark, workzones.scale);
+        crate::theme::install_fallback_fonts(&cc.egui_ctx);
         let mut audio = crate::audio::AudioManager::default();
         {
             let c = core.lock();
@@ -328,7 +340,12 @@ impl App {
             lib_filter: String::new(),
             lib_filtered: vec![],
             lib_key: (String::new(), 0),
-            lib_sel: None,
+            lib_sel: BTreeSet::new(),
+            lib_anchor: None,
+            lib_scroll: None,
+            te_browser: true,
+            te_from_lib: true,
+            te_scroll: true,
             dlg_tx,
             dlg_rx,
             tag_edit: None,
@@ -343,11 +360,9 @@ impl App {
             seek_drag: None,
             mic_stream: None,
             mic_on: false,
+            mic_paused: false,
             tpl_sel: 0,
-            report_from: (Local::now() - chrono::Duration::days(30)).format("%Y-%m-%d").to_string(),
-            report_to: Local::now().format("%Y-%m-%d").to_string(),
-            report_excl: String::new(),
-            report_rows: vec![],
+            rep: Default::default(),
             workzones,
             saved_layout: String::new(),
             browsers: Browsers::new(),
@@ -421,7 +436,11 @@ impl App {
         let w = want[0].min(screen.x * 0.9).min(screen.x - 24.0).max(280.0);
         let h = want[1].min(screen.y * 0.85).min(screen.y - 24.0).max(200.0);
         let pos = egui::pos2(((screen.x - w) / 2.0).max(8.0), ((screen.y - h) / 2.0).max(8.0));
-        egui::Window::new(title.to_string()).default_size([w, h]).default_pos(pos).constrain(true)
+        egui::Window::new(title.to_string())
+            .default_size([w, h])
+            .default_pos(pos)
+            .constrain(true)
+            .max_size([screen.x - 16.0, screen.y - 110.0])
     }
 
     fn dlg<F: FnOnce() -> Option<Dlg> + Send + 'static>(&self, f: F) {
@@ -477,6 +496,16 @@ impl App {
                         d.items.extend(v);
                     }
                 }
+                Dlg::SpeechSound(outro, p) => {
+                    if let Some(d) = self.item_dlg.as_mut() {
+                        let s = p.to_string_lossy().to_string();
+                        if outro {
+                            d.speech.outro = s;
+                        } else {
+                            d.speech.intro = s;
+                        }
+                    }
+                }
                 Dlg::TrackListSource(p) => {
                     if let Some(d) = self.item_dlg.as_mut() {
                         d.text = p.to_string_lossy().to_string();
@@ -506,12 +535,9 @@ impl App {
                     }
                 }
                 Dlg::SaveReport(p) => {
-                    let mut s = String::from("Title,Plays,Last played\n");
-                    for (t, n, l) in &self.report_rows {
-                        s += &format!("\"{}\",{},{}\n", t.replace('"', "'"), n, l);
-                    }
-                    let _ = std::fs::write(&p, s);
-                    core.say(format!("Report saved to {}", p.display()));
+                    let msg = self.rep.write_export(&p, Self::station_name(core)).unwrap_or_else(|e| format!("Couldn't save: {e}"));
+                    core.say(msg.clone());
+                    self.rep.msg = msg;
                 }
                 Dlg::LibFolder(p) => {
                     core.cfg.library_folders.push(p.to_string_lossy().to_string());
@@ -619,6 +645,7 @@ impl App {
                     if ui.button(tr("Log out")).clicked() {
                         self.logged_in = None;
                         self.login_password.clear();
+                        self.auth_error.clear();
                         ui.close_menu();
                     }
                     ui.separator();
@@ -692,7 +719,14 @@ impl App {
                             ToolWin::Notepad => "T",
                             _ => "",
                         };
-                        if ui.add(egui::Button::new(format!("{}  {}…", w.icon(), tr(w.label()))).shortcut_text(sc)).clicked() {
+                        if ui
+                            .add_enabled(
+                                w.allowed(&self.perm),
+                                egui::Button::new(format!("{}  {}…", w.icon(), tr(w.label()))).shortcut_text(sc),
+                            )
+                            .on_disabled_hover_text(tr("Your account isn't allowed to use this tool"))
+                            .clicked()
+                        {
                             if w == ToolWin::FadeEditor {
                                 self.open_fade_editor(core, None);
                             } else {
@@ -702,13 +736,22 @@ impl App {
                         }
                     }
                     ui.separator();
-                    if ui.button(tr("🔴 Record voice track…")).clicked() {
+                    let vt = self.perm.edit_playlists && self.perm.tool(crate::auth::tool::VOICE_TRACK);
+                    if ui
+                        .add_enabled(vt, egui::Button::new(tr("🔴 Record voice track…")))
+                        .on_disabled_hover_text(tr("Your account isn't allowed to do this"))
+                        .clicked()
+                    {
                         self.show_vt = true;
                         ui.close_menu();
                     }
                 });
                 ui.menu_button(tr("Jingles"), |ui| {
                     ui.label(RichText::new(tr("Cart wall")).small().color(GRAY));
+                    if !self.perm.jingles {
+                        ui.label(RichText::new(tr("Your account isn't allowed to play jingles")).small().color(AMBER));
+                        ui.disable();
+                    }
                     let mut fire = None;
                     for (i, c) in core.cfg.carts.iter().enumerate().take(12) {
                         let label = if c.label.is_empty() { format!("{}. (empty)", i + 1) } else { format!("{}. {}", i + 1, c.label) };
@@ -798,7 +841,7 @@ impl App {
                         self.workzones.panels = n;
                     }
                 }
-                if ui.button("➕🗗").on_hover_text(tr("Additional window (Ctrl+4) — open as many as you like")).clicked() {
+                if ui.button("➕🗖").on_hover_text(tr("Additional window (Ctrl+4) — open as many as you like")).clicked() {
                     self.workzones.new_aux(Tab::AuxPlaylist);
                 }
                 let new_version = self.updates.lock().available.as_ref().map(|a| a.version.clone());
@@ -1168,18 +1211,31 @@ impl App {
                             vu(ui, st.peak_r, meters_w - 62.0);
                         });
                         ui.horizontal(|ui| {
-                            if ui
+                            let r = ui
                                 .add_enabled(self.perm.playback, egui::SelectableLabel::new(self.mic_on, "🎤 Mic"))
-                                .on_hover_text(tr("Microphone on/off (Ctrl+M)"))
-                                .clicked()
-                            {
+                                .on_hover_text(tr("Microphone on/off (Ctrl+M) · right-click: what the music does"));
+                            if r.clicked() {
                                 self.toggle_mic(core);
                             }
+                            r.context_menu(|ui| {
+                                use crate::config::MicMode;
+                                ui.label(RichText::new(tr("While the mic is on")).small().color(GRAY));
+                                ui.radio_value(&mut core.cfg.mic_mode, MicMode::Duck, tr("Lower the music (slider)"));
+                                ui.radio_value(&mut core.cfg.mic_mode, MicMode::Mute, tr("Mute the music"));
+                                ui.radio_value(&mut core.cfg.mic_mode, MicMode::Pause, tr("Pause the music, carry on after"));
+                            });
                             ui.spacing_mut().slider_width = ((meters_w - 90.0) / 2.0).max(36.0);
                             ui.add(egui::Slider::new(&mut core.cfg.mic_gain, 0.0..=2.0).show_value(false))
                                 .on_hover_text(tr("Microphone volume"));
-                            ui.add(egui::Slider::new(&mut core.cfg.mic_duck, 0.0..=1.0).show_value(false))
-                                .on_hover_text(tr("Music level while the mic is on (left = silent, right = no ducking)"));
+                            use crate::config::MicMode;
+                            ui.add_enabled(
+                                core.cfg.mic_mode == MicMode::Duck,
+                                egui::Slider::new(&mut core.cfg.mic_duck, 0.0..=1.0).show_value(false),
+                            )
+                            .on_hover_text(tr("Music level while the mic is on (left = silent, right = no ducking)"))
+                            .on_disabled_hover_text(tr(
+                                "The music is muted or paused while the mic is on (right-click the Mic button to change)",
+                            ));
                         });
                     });
                 });
@@ -1253,7 +1309,8 @@ impl App {
         for i in hits {
             let track = &core.library[i];
             ui.horizontal(|ui| {
-                if ui.small_button("➕").on_hover_text(tr("Add to playlist")).clicked() {
+                if ui.add_enabled(self.perm.edit_playlists, egui::Button::new("➕").small()).on_hover_text(tr("Add to playlist")).clicked()
+                {
                     append = Some(i);
                 }
                 ui.add(egui::Label::new(track.label()).truncate());
@@ -1542,18 +1599,50 @@ impl App {
 
     /// Microphone on / off.
     fn toggle_mic(&mut self, core: &mut Playout) {
+        use crate::config::MicMode;
         if self.mic_on {
             self.mic_stream = None;
             self.mic_on = false;
+            if std::mem::take(&mut self.mic_paused) && core.state == crate::playout::PlayState::Paused {
+                core.pause_toggle(); // carry on where the music was
+            }
         } else {
             match crate::mic::start(core.engine.clone(), &core.cfg.audio_devices.input) {
                 Ok(s) => {
                     self.mic_stream = Some(s);
                     self.mic_on = true;
+                    if core.cfg.mic_mode == MicMode::Pause && core.state == crate::playout::PlayState::Playing {
+                        core.pause_toggle();
+                        self.mic_paused = true;
+                    }
                 }
                 Err(e) => core.say(format!("Mic error: {e}")),
             }
         }
+    }
+
+    /// "9 of 15 tools ▾" button: tick which tools a user may open.
+    fn tools_picker(ui: &mut egui::Ui, id: &str, perms: &mut crate::auth::Perms) {
+        use crate::auth::TOOLS;
+        let n = perms.tools_allowed();
+        let text = if n == TOOLS.len() { tr("All tools").to_string() } else { format!("{n} / {} {}", TOOLS.len(), tr("tools")) };
+        egui::ComboBox::from_id_salt(("tools_picker", id)).width(120.0).height(460.0).selected_text(text).show_ui(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.small_button(tr("All")).clicked() {
+                    perms.denied = 0;
+                }
+                if ui.small_button(tr("None")).clicked() {
+                    (0..TOOLS.len()).for_each(|t| perms.set_tool(t, false));
+                }
+            });
+            ui.separator();
+            for (t, (name, help)) in TOOLS.iter().enumerate() {
+                let mut on = perms.tool(t);
+                if ui.checkbox(&mut on, tr(name)).on_hover_text(tr(help)).changed() {
+                    perms.set_tool(t, on);
+                }
+            }
+        });
     }
 
     fn users_window(&mut self, ctx: &egui::Context) {
@@ -1566,7 +1655,7 @@ impl App {
         let mut changes: Vec<(String, bool, Perms, bool)> = vec![];
         let mut reset: Option<(String, String)> = None;
         let mut delete: Option<String> = None;
-        Self::window_for(ctx, "Users and permissions", [860.0, 520.0]).id(egui::Id::new("users_window")).open(&mut open).show(ctx, |ui| {
+        Self::window_for(ctx, "Users and permissions", [1000.0, 520.0]).id(egui::Id::new("users_window")).open(&mut open).show(ctx, |ui| {
             ui.label(
                 RichText::new(tr(
                     "Administrators can do everything, including managing users. Other operators only get the ticked permissions.",
@@ -1580,8 +1669,9 @@ impl App {
                     ui.strong(tr("User"));
                     ui.strong(tr("Admin"));
                     for (name, help) in Perms::LIST {
-                        ui.strong(name).on_hover_text(help);
+                        ui.strong(tr(name)).on_hover_text(tr(help));
                     }
+                    ui.strong(tr("Tools")).on_hover_text(tr("Which tools this user can open"));
                     ui.strong(tr("Disabled"));
                     ui.strong(tr("New password"));
                     ui.label("");
@@ -1593,6 +1683,7 @@ impl App {
                         for k in 0..Perms::LIST.len() {
                             ui.add_enabled(!admin, egui::Checkbox::without_text(perms.get_mut(k)));
                         }
+                        ui.add_enabled_ui(!admin, |ui| Self::tools_picker(ui, &u.name, &mut perms));
                         ui.add_enabled(u.name != me, egui::Checkbox::without_text(&mut disabled))
                             .on_disabled_hover_text(tr("You can't disable your own account"));
                         let pw = self.user_pw.entry(u.name.clone()).or_default();
@@ -1636,8 +1727,10 @@ impl App {
             if !self.new_user_admin {
                 ui.horizontal_wrapped(|ui| {
                     for (k, (name, help)) in Perms::LIST.iter().enumerate() {
-                        ui.checkbox(self.new_user_perms.get_mut(k), *name).on_hover_text(*help);
+                        ui.checkbox(self.new_user_perms.get_mut(k), tr(name)).on_hover_text(tr(help));
                     }
+                    ui.label(tr("Tools:"));
+                    Self::tools_picker(ui, "\u{0}new", &mut self.new_user_perms);
                 });
             }
             if ui.button(RichText::new(tr("Create user")).strong()).clicked() {
@@ -1726,29 +1819,8 @@ impl App {
         self.show_profiles = open;
     }
 
-    fn tab_library(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(tr("➕ Folder…")).clicked() {
-                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
-            }
-            if ui.add_enabled(!core.scanning, egui::Button::new("⟳")).on_hover_text(tr("Rescan")).clicked() {
-                core.start_scan();
-            }
-            if ui.button(tr("Add all")).on_hover_text(tr("Add all shown tracks to the playlist")).clicked() {
-                let paths = self.lib_filtered.iter().map(|&i| core.library[i].path.clone()).collect();
-                let v = self.view_pl;
-                core.with_tab(v, |c| c.add_paths(paths));
-            }
-            if core.scanning {
-                ui.spinner();
-                ui.label(format!("{}", core.scan_progress));
-            } else {
-                ui.label(RichText::new(format!("{} tracks", core.library.len())).color(GRAY));
-            }
-        });
-        ui.add(
-            egui::TextEdit::singleline(&mut self.lib_filter).desired_width(f32::INFINITY).hint_text(tr("🔍 search artist, title, album")),
-        );
+    /// Keep the filtered library list (library tab, track editor list) in step with the search text.
+    pub(super) fn refresh_lib_filter(&mut self, core: &Playout) {
         let key = (self.lib_filter.to_lowercase(), core.library_ver);
         if key != self.lib_key {
             let f = key.0.clone();
@@ -1766,83 +1838,168 @@ impl App {
                 .collect();
             self.lib_key = key;
         }
+    }
+
+    fn tab_library(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr("➕ Folder…")).clicked() {
+                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
+            }
+            if ui.add_enabled(!core.scanning, egui::Button::new("⟳")).on_hover_text(tr("Rescan")).clicked() {
+                core.start_scan();
+            }
+            if ui
+                .add_enabled(self.perm.edit_playlists, egui::Button::new(tr("Add all")))
+                .on_hover_text(tr("Add all shown tracks to the playlist"))
+                .clicked()
+            {
+                let paths = self.lib_filtered.iter().map(|&i| core.library[i].path.clone()).collect();
+                let v = self.view_pl;
+                core.with_tab(v, |c| c.add_paths(paths));
+            }
+            if core.scanning {
+                ui.spinner();
+                ui.label(format!("{}", core.scan_progress));
+            } else {
+                ui.label(RichText::new(format!("{} tracks", core.library.len())).color(GRAY));
+            }
+        });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.lib_filter).desired_width(f32::INFINITY).hint_text(tr("🔍 search artist, title, album")),
+        );
+        self.refresh_lib_filter(core);
 
         let mut act: Option<(usize, &'static str)> = None;
         let lib = &core.library;
         let filt = &self.lib_filtered;
         let lsel = &mut self.lib_sel;
+        let lanchor = &mut self.lib_anchor;
+        let may_edit = self.perm.edit_playlists;
+        let may_play = self.perm.playback;
+        let may_tag = self.perm.tool(crate::auth::tool::TRACK_EDITOR);
+        let mods = ui.input(|i| i.modifiers);
         let lib_w = ui.available_width();
-        TableBuilder::new(ui)
+        let mut scroll_to = self.lib_scroll.take();
+        if let Some(li) = scroll_to.take() {
+            scroll_to = filt.iter().position(|&x| x == li);
+        }
+        let mut tb = TableBuilder::new(ui)
             .id_salt(("library_table", (lib_w / 24.0) as i32))
             .striped(true)
             .resizable(true)
             .sense(egui::Sense::click_and_drag())
             .column(Column::initial((lib_w * 0.38).max(70.0)).at_least(40.0).clip(true))
             .column(Column::remainder().at_least(60.0).clip(true))
-            .column(Column::exact(58.0))
-            .header(20.0, |mut h| {
-                for t in ["Artist", "Title", "Length"] {
-                    h.col(|ui| {
-                        ui.strong(tr(t));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(20.0, filt.len(), |mut row| {
-                    let li = filt[row.index()];
-                    let t = &lib[li];
-                    row.set_selected(*lsel == Some(li));
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(&t.artist).truncate());
-                    });
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(&t.title).truncate());
-                    });
-                    row.col(|ui| {
-                        ui.label(fmt(t.duration));
-                    });
-                    let r = row.response();
-                    if r.clicked() || r.secondary_clicked() {
-                        *lsel = Some(li);
-                    }
-                    if r.drag_started() {
-                        *lsel = Some(li);
-                        r.dnd_set_drag_payload(plview::DragFiles(vec![t.path.clone()]));
-                    }
-                    if r.double_clicked() {
-                        act = Some((li, "add"));
-                    }
-                    r.context_menu(|ui| {
-                        for (l, k) in [
-                            ("Add to playlist", "add"),
-                            ("Insert as next", "next"),
-                            ("Play now", "now"),
-                            ("✏ Track editor…", "tags"),
-                            ("☁ Upload to AzuraCast", "up"),
-                        ] {
-                            if ui.button(l).clicked() {
-                                act = Some((li, k));
-                                ui.close_menu();
-                            }
+            .column(Column::exact(58.0));
+        if let Some(r) = scroll_to {
+            tb = tb.scroll_to_row(r, Some(egui::Align::Center));
+        }
+        tb.header(20.0, |mut h| {
+            for t in ["Artist", "Title", "Length"] {
+                h.col(|ui| {
+                    ui.strong(tr(t));
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(20.0, filt.len(), |mut row| {
+                let pos = row.index();
+                let li = filt[pos];
+                let t = &lib[li];
+                row.set_selected(lsel.contains(&li));
+                row.col(|ui| {
+                    ui.add(egui::Label::new(&t.artist).truncate());
+                });
+                row.col(|ui| {
+                    ui.add(egui::Label::new(&t.title).truncate());
+                });
+                row.col(|ui| {
+                    ui.label(fmt(t.duration));
+                });
+                let r = row.response();
+                if r.clicked() {
+                    // click = one, Ctrl+click = add/remove, Shift+click = range (in the list as shown)
+                    if mods.shift && lanchor.is_some() {
+                        let a = filt.iter().position(|&x| Some(x) == *lanchor).unwrap_or(pos);
+                        lsel.clear();
+                        lsel.extend(filt[a.min(pos)..=a.max(pos)].iter().copied());
+                    } else if mods.command {
+                        if !lsel.remove(&li) {
+                            lsel.insert(li);
                         }
-                    });
+                        *lanchor = Some(li);
+                    } else {
+                        lsel.clear();
+                        lsel.insert(li);
+                        *lanchor = Some(li);
+                    }
+                }
+                if r.secondary_clicked() && !lsel.contains(&li) {
+                    lsel.clear();
+                    lsel.insert(li);
+                    *lanchor = Some(li);
+                }
+                if r.drag_started() && may_edit {
+                    if !lsel.contains(&li) {
+                        lsel.clear();
+                        lsel.insert(li);
+                        *lanchor = Some(li);
+                    }
+                    // drag the whole selection, in the order it is shown
+                    let paths: Vec<PathBuf> = filt.iter().filter(|x| lsel.contains(x)).map(|&x| lib[x].path.clone()).collect();
+                    r.dnd_set_drag_payload(plview::DragFiles(paths));
+                }
+                if r.double_clicked() && may_edit {
+                    act = Some((li, "add"));
+                }
+                r.context_menu(|ui| {
+                    let n = lsel.len().max(1);
+                    let many = if n > 1 { format!(" ({n})") } else { String::new() };
+                    let items: [(String, &str, bool); 5] = [
+                        (format!("{}{many}", tr("Add to playlist")), "add", may_edit),
+                        (format!("{}{many}", tr("Insert as next")), "next", may_edit),
+                        (tr("Play now").to_string(), "now", may_edit && may_play),
+                        (tr("✏ Track editor…").to_string(), "tags", may_tag),
+                        (format!("{}{many}", tr("☁ Upload to AzuraCast")), "up", true),
+                    ];
+                    for (l, k, ok) in items {
+                        if ui
+                            .add_enabled(ok, egui::Button::new(l))
+                            .on_disabled_hover_text(tr("Your account isn't allowed to do this"))
+                            .clicked()
+                        {
+                            act = Some((li, k));
+                            ui.close_menu();
+                        }
+                    }
                 });
             });
+        });
 
         if let Some((li, a)) = act {
-            let t = core.library[li].clone();
+            // the selection (in the order shown), or the clicked track
+            let mut paths: Vec<PathBuf> =
+                self.lib_filtered.iter().filter(|x| self.lib_sel.contains(x)).map(|&x| core.library[x].path.clone()).collect();
+            if paths.is_empty() || !self.lib_sel.contains(&li) {
+                paths = vec![core.library[li].path.clone()];
+            }
+            let edit = self.perm.edit_playlists;
             match a {
-                "add" => {
+                "add" if edit => {
                     let v = self.view_pl;
-                    core.with_tab(v, |c| c.add_paths(vec![t.path]));
+                    core.with_tab(v, |c| c.add_paths(paths));
                 }
-                "next" => core.insert_next(vec![t.path]),
-                "now" => {
-                    core.insert_next(vec![t.path]);
+                "next" if edit => core.insert_next(paths),
+                "now" if edit && self.perm.playback => {
+                    core.insert_next(vec![core.library[li].path.clone()]);
                     core.next();
                 }
-                "tags" => self.open_track_editor_for(core, t, Some(li)),
-                _ => Self::upload(core, vec![t.path]),
+                "tags" if self.perm.tool(crate::auth::tool::TRACK_EDITOR) => {
+                    let t = core.library[li].clone();
+                    self.open_track_editor_for(core, t, Some(li));
+                }
+                "up" => Self::upload(core, paths),
+                _ => *self.notify.lock() = tr("Your account isn't allowed to do this").into(),
             }
         }
     }
@@ -1852,7 +2009,7 @@ impl App {
             let cols = ((ui.available_width() / 116.0) as usize).clamp(1, 6);
             let pad_width = ((ui.available_width() - (cols.saturating_sub(1)) as f32 * 6.0) / cols as f32 - 8.0).max(86.0);
             let mut trigger = None;
-            let may_play = self.perm.playback;
+            let may_play = self.perm.jingles;
             let playing = core.engine.carts_playing();
             if !playing.is_empty() {
                 ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -2078,6 +2235,21 @@ impl App {
             }
         });
         ui.small(tr("Switch the Mic button off and on again after changing the input."));
+        ui.add_space(6.0);
+        {
+            use crate::config::MicMode;
+            ui.label(RichText::new(tr("While the mic is on, the music…")).strong());
+            ui.radio_value(&mut core.cfg.mic_mode, MicMode::Duck, tr("is lowered (set how far with the slider next to the Mic volume)"));
+            if core.cfg.mic_mode == MicMode::Duck {
+                ui.add(
+                    egui::Slider::new(&mut core.cfg.mic_duck, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
+                        .text(tr("music level")),
+                );
+            }
+            ui.radio_value(&mut core.cfg.mic_mode, MicMode::Mute, tr("is muted (it keeps playing silently)"));
+            ui.radio_value(&mut core.cfg.mic_mode, MicMode::Pause, tr("is paused, and carries on when the mic goes off"));
+        }
         ui.add_space(8.0);
         ui.separator();
         ui.heading(tr("Preview (track editor)"));
@@ -2284,7 +2456,7 @@ impl App {
                         RichText::new(tr("● offline")).color(RED)
                     });
                     if n.live.is_live {
-                        ui.label(RichText::new(format!("🎙 Live DJ: {}", n.live.streamer_name)).color(AMBER));
+                        ui.label(RichText::new(format!("🎤 Live DJ: {}", n.live.streamer_name)).color(AMBER));
                     }
                     ui.label(format!("{} — {}", n.now_playing.song.artist, n.now_playing.song.title));
                     ui.label(format!("Listeners: {} (unique {}, total {})", n.listeners.current, n.listeners.unique, n.listeners.total));
@@ -2312,6 +2484,9 @@ impl App {
             for h in core.history.iter().rev() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&h.time).monospace().color(GRAY));
+                    if h.kind != "song" {
+                        ui.label(RichText::new(tr(crate::report::kind_name(h.kind))).small().color(AMBER));
+                    }
                     ui.label(&h.text);
                 });
             }
@@ -2873,75 +3048,6 @@ impl App {
         });
     }
 
-    fn tab_reports(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        ui.horizontal(|ui| {
-            ui.label(tr("From"));
-            ui.add(egui::TextEdit::singleline(&mut self.report_from).desired_width(90.0));
-            ui.label(tr("To"));
-            ui.add(egui::TextEdit::singleline(&mut self.report_to).desired_width(90.0));
-            ui.label(tr("Exclude containing"));
-            ui.add(egui::TextEdit::singleline(&mut self.report_excl).desired_width(180.0).hint_text(tr("jingle, ad, …")));
-            if ui.button(tr("Generate")).clicked() {
-                let text = std::fs::read_to_string(data_dir().join("history.csv")).unwrap_or_default();
-                let excl: Vec<String> = self.report_excl.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
-                let mut map: BTreeMap<String, (u32, String)> = BTreeMap::new();
-                for line in text.lines() {
-                    let line = line.trim().trim_start_matches('"').trim_end_matches('"');
-                    let Some((t, x)) = line.split_once("\",\"") else { continue };
-                    let d = &t[..t.len().min(10)];
-                    if d < self.report_from.as_str() || d > self.report_to.as_str() {
-                        continue;
-                    }
-                    let lx = x.to_lowercase();
-                    if excl.iter().any(|e| lx.contains(e)) {
-                        continue;
-                    }
-                    let e = map.entry(x.to_string()).or_insert((0, String::new()));
-                    e.0 += 1;
-                    e.1 = t.to_string();
-                }
-                let mut rows: Vec<(String, u32, String)> = map.into_iter().map(|(k, (n, l))| (k, n, l)).collect();
-                rows.sort_by(|a, b| b.1.cmp(&a.1));
-                self.report_rows = rows;
-            }
-            if ui.button(tr("Export CSV…")).clicked() {
-                self.dlg(|| {
-                    rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("report.csv").save_file().map(Dlg::SaveReport)
-                });
-            }
-            let total: u32 = self.report_rows.iter().map(|r| r.1).sum();
-            ui.label(RichText::new(format!("{} tracks · {} plays", self.report_rows.len(), total)).color(GRAY));
-        });
-        let _ = core;
-        let rows = &self.report_rows;
-        TableBuilder::new(ui)
-            .striped(true)
-            .column(Column::remainder().at_least(200.0))
-            .column(Column::exact(60.0))
-            .column(Column::exact(150.0))
-            .header(20.0, |mut h| {
-                for t in ["Track", "Plays", "Last played"] {
-                    h.col(|ui| {
-                        ui.strong(tr(t));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(18.0, rows.len(), |mut row| {
-                    let r = &rows[row.index()];
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(&r.0).truncate());
-                    });
-                    row.col(|ui| {
-                        ui.label(r.1.to_string());
-                    });
-                    row.col(|ui| {
-                        ui.label(&r.2);
-                    });
-                });
-            });
-    }
-
     fn update_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         use crate::updater::Phase;
         if !self.show_update {
@@ -3095,11 +3201,14 @@ impl eframe::App for App {
             Some(u) => u.perms,
             None => crate::auth::Perms {
                 playback: false,
+                jingles: false,
                 edit_playlists: false,
                 tools: false,
                 streaming: false,
                 azuracast: false,
                 settings: false,
+                denied: u32::MAX,
+                v: 1,
             },
         };
         let arc = self.core.clone();
@@ -3145,7 +3254,8 @@ impl eframe::App for App {
         self.left_workspace(ctx, &mut core);
         self.playlist(ctx, &mut core);
         self.aux_windows(ctx, &mut core);
-        core.engine.set_mic(self.mic_on, core.cfg.mic_gain, core.cfg.mic_duck);
+        let duck = if core.cfg.mic_mode == crate::config::MicMode::Duck { core.cfg.mic_duck } else { 0.0 };
+        core.engine.set_mic(self.mic_on, core.cfg.mic_gain, duck);
         self.tag_window(ctx, &mut core);
         self.profiles_window(ctx, &mut core);
         self.users_window(ctx);

@@ -62,3 +62,55 @@ pub fn apply(ctx: &egui::Context, dark: bool, scale: f32) {
     ctx.set_style(s);
     ctx.set_zoom_factor(scale.clamp(0.8, 1.7));
 }
+
+/// Fonts from the computer that cover what egui's built-in fonts don't (symbols, Chinese,
+/// Japanese, Korean, Arabic, Hindi…), so track titles and translations don't show as squares.
+/// They are only used for characters the built-in fonts lack.
+pub fn install_fallback_fonts(ctx: &egui::Context) {
+    #[cfg(windows)]
+    let candidates: &[(&str, u32)] = &[
+        ("C:\\Windows\\Fonts\\seguisym.ttf", 0),
+        ("C:\\Windows\\Fonts\\seguiemj.ttf", 0),
+        ("C:\\Windows\\Fonts\\msyh.ttc", 0),
+        ("C:\\Windows\\Fonts\\YuGothR.ttc", 0),
+        ("C:\\Windows\\Fonts\\malgun.ttf", 0),
+        ("C:\\Windows\\Fonts\\Nirmala.ttf", 0),
+        ("C:\\Windows\\Fonts\\arial.ttf", 0),
+    ];
+    #[cfg(target_os = "macos")]
+    let candidates: &[(&str, u32)] = &[
+        ("/System/Library/Fonts/Apple Symbols.ttf", 0),
+        ("/System/Library/Fonts/PingFang.ttc", 0),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+        ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
+        ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+    ];
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let candidates: &[(&str, u32)] = &[
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 0),
+        ("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc", 0),
+        ("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf", 0),
+    ];
+    let mut defs = egui::FontDefinitions::default();
+    let mut added = 0;
+    for (i, (path, index)) in candidates.iter().enumerate() {
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        // a font egui can't read would stop the program: check it first
+        if ab_glyph::FontRef::try_from_slice_and_index(&bytes, *index).is_err() {
+            continue;
+        }
+        let name = format!("system{i}");
+        let mut fd = egui::FontData::from_owned(bytes);
+        fd.index = *index;
+        defs.font_data.insert(name.clone(), std::sync::Arc::new(fd));
+        for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+            defs.families.entry(fam).or_default().push(name.clone());
+        }
+        added += 1;
+    }
+    if added > 0 {
+        ctx.set_fonts(defs);
+    }
+}

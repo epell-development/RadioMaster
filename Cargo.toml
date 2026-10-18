@@ -1,6 +1,6 @@
 [package]
 name = "radiomaster"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "RadioMaster — radio automation for Icecast/Shoutcast/AzuraCast, written in Rust"
 build = "build.rs"
@@ -14,6 +14,8 @@ name = "RadioMaster"
 path = "src/main.rs"
 
 [dependencies]
+ab_glyph = "0.2.32"
+flate2 = "1"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland", "persistence"] }
 egui_extras = "0.31"
 rodio = { version = "0.20", default-features = false, features = ["symphonia-all"] }

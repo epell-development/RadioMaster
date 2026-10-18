@@ -37,7 +37,59 @@ pub enum ItemKind {
     HourInfo { hour: u32, auto: bool },
     /// Reads `text` with the computer's speech voice. `{time}`, `{next}`, `{last}` and friends are
     /// filled in when it plays.
-    Tts { text: String, voice: String, rate: i32 },
+    Tts {
+        text: String,
+        voice: String,
+        rate: i32,
+        #[serde(default)]
+        opts: SpeechOpts,
+    },
+}
+
+/// Rough length of a speech row. `files` also measures the intro/outro sounds (reads the files).
+pub fn speech_secs(text: &str, rate: i32, opts: &SpeechOpts, files: bool) -> f32 {
+    let lines = text.lines().filter(|l| !l.trim().is_empty()).count().max(1);
+    let one = (text.split_whitespace().count() as f32 / (2.6 * (1.0 + rate as f32 * 0.08)).max(0.8)).max(1.5)
+        + (lines - 1) as f32 * opts.line_pause_ms as f32 / 1000.0;
+    let n = opts.repeat.max(1) as f32;
+    let file_len = |f: &str| if !files || f.trim().is_empty() { 0.0 } else { Track::from_path(Path::new(f)).duration };
+    one * n + (n - 1.0) * opts.repeat_pause_ms as f32 / 1000.0 + file_len(&opts.intro) + file_len(&opts.outro)
+}
+
+/// Extra speech settings for a text to speech row.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+pub struct SpeechOpts {
+    /// -10 (lower) … 10 (higher)
+    pub pitch: i32,
+    /// 0 … 200 %
+    pub volume: u32,
+    /// silence between lines (ms)
+    pub line_pause_ms: u32,
+    /// how many times the text is read
+    pub repeat: u32,
+    /// silence between repeats (ms)
+    pub repeat_pause_ms: u32,
+    /// sound played before the speech (empty = none)
+    pub intro: String,
+    /// sound played after the speech (empty = none)
+    pub outro: String,
+    /// spell out numbers like "1999" as digits ("one nine nine nine")
+    pub spell_numbers: bool,
+}
+impl Default for SpeechOpts {
+    fn default() -> Self {
+        Self {
+            pitch: 0,
+            volume: 100,
+            line_pause_ms: 500,
+            repeat: 1,
+            repeat_pause_ms: 800,
+            intro: String::new(),
+            outro: String::new(),
+            spell_numbers: false,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
@@ -53,9 +105,6 @@ pub struct PlEntry {
 impl PlEntry {
     pub fn file(track: Track) -> Self {
         PlEntry { track, played: false, kind: ItemKind::Track }
-    }
-    pub fn voice(track: Track) -> Self {
-        PlEntry { track, played: false, kind: ItemKind::VoiceTrack }
     }
     pub fn special(kind: ItemKind, title: impl Into<String>, secs: f32) -> Self {
         let track = Track { title: title.into(), duration: secs, ..Default::default() };
@@ -148,8 +197,12 @@ impl PlEntry {
             ItemKind::Pause(s) => *s,
             ItemKind::Teaser { count, secs } => *count as f32 * secs,
             ItemKind::TimeAnnounce => 4.0,
-            ItemKind::Tts { text, rate, .. } => {
-                (text.split_whitespace().count() as f32 / (2.6 * (1.0 + *rate as f32 * 0.08)).max(0.8)).max(1.5)
+            ItemKind::Tts { text, rate, opts, .. } => {
+                if self.track.duration > 0.0 {
+                    self.track.duration
+                } else {
+                    speech_secs(text, *rate, opts, false)
+                }
             }
             ItemKind::Command(_) | ItemKind::Comment(_) | ItemKind::HourMarker { .. } | ItemKind::HourInfo { .. } => 0.0,
         }

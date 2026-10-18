@@ -29,10 +29,12 @@ pub enum Tab {
     SongRequests,
     AuxPlaylist,
     TrackInfo,
+    /// Web panel number n (0-based; the first four are WebPlayout…WebCustom).
+    Web(u16),
 }
 impl Tab {
     /// Tabs that can go in a panel, in the order of the "+" menu.
-    pub const PANEL: [Tab; 17] = [
+    pub const PANEL: [Tab; 13] = [
         Tab::AuxPlaylist,
         Tab::TrackInfo,
         Tab::Carts,
@@ -46,11 +48,17 @@ impl Tab {
         Tab::Log,
         Tab::Library,
         Tab::Clock,
-        Tab::WebPlayout,
-        Tab::WebAzura,
-        Tab::WebClock,
-        Tab::WebCustom,
     ];
+    /// The tab for web panel `i`.
+    pub fn web(i: usize) -> Tab {
+        match i {
+            0 => Tab::WebPlayout,
+            1 => Tab::WebAzura,
+            2 => Tab::WebClock,
+            3 => Tab::WebCustom,
+            n => Tab::Web(n.min(u16::MAX as usize) as u16),
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Tab::Library => "Library",
@@ -77,6 +85,7 @@ impl Tab {
             Tab::SongRequests => "Song Requests",
             Tab::AuxPlaylist => "AUX Playlist",
             Tab::TrackInfo => "Track Info",
+            Tab::Web(_) => "Web",
         }
     }
     /// Tools that live in their own window instead of a panel.
@@ -86,13 +95,14 @@ impl Tab {
     pub fn is_panel(self) -> bool {
         !self.is_window_tool()
     }
-    /// Which of the four web panels this tab is.
+    /// Which web panel this tab is.
     pub fn web_index(self) -> Option<usize> {
         match self {
             Tab::WebPlayout => Some(0),
             Tab::WebAzura => Some(1),
             Tab::WebClock => Some(2),
             Tab::WebCustom => Some(3),
+            Tab::Web(n) => Some(n as usize),
             _ => None,
         }
     }
@@ -201,8 +211,13 @@ pub struct WebSite {
     pub url: String,
 }
 
+/// Start page of the first web panel on a fresh install.
+pub const DEFAULT_WEB: &str = "https://radiomanager.dovafm.com";
+
 fn default_web() -> Vec<WebSite> {
-    (1..=4).map(|i| WebSite { name: format!("Web {i}"), url: String::new() }).collect()
+    let mut v: Vec<WebSite> = (1..=4).map(|i| WebSite { name: format!("Web {i}"), url: String::new() }).collect();
+    v[0].url = DEFAULT_WEB.into();
+    v
 }
 
 /// Layout from before work zones became panel counts (read once to migrate).
@@ -256,7 +271,7 @@ pub struct WorkzoneSet {
 impl Default for WorkzoneSet {
     fn default() -> Self {
         Self {
-            v: 2,
+            v: 3,
             panels: 3,
             show_left: true,
             left: PaneTabs::of(vec![Tab::Library, Tab::FileExplorer, Tab::Search, Tab::Scheduler, Tab::Log]),
@@ -322,6 +337,22 @@ impl WorkzoneSet {
             }
             self.v = 2;
         }
+        if self.v < 3 {
+            // the old start pages (listen.dovafm.com, clocktab) make way for Radio Manager
+            let old = |u: &str| {
+                let u = u.trim().to_ascii_lowercase();
+                u.contains("listen.dovafm.com") || u.contains("clocktab.com")
+            };
+            let mut first = true;
+            for w in self.web.iter_mut().filter(|w| old(&w.url)) {
+                w.url = if first { DEFAULT_WEB.into() } else { String::new() };
+                if first && (w.name.to_ascii_lowercase().contains("clock") || w.name.to_ascii_lowercase().contains("listen")) {
+                    w.name = "Radio Manager".into();
+                }
+                first = false;
+            }
+            self.v = 3;
+        }
         self.zones.clear();
         if self.web.is_empty() {
             self.web = default_web();
@@ -329,7 +360,10 @@ impl WorkzoneSet {
             self.web[2].url = self.clock_url.trim().to_string();
             self.web[3].url = self.custom_url.trim().to_string();
         }
-        self.web.resize(4, WebSite::default());
+        if self.web.len() < 4 {
+            self.web.resize(4, WebSite::default());
+        }
+        self.web.truncate(64);
         for (i, w) in self.web.iter_mut().enumerate() {
             if w.name.trim().is_empty() {
                 w.name = format!("Web {}", i + 1);

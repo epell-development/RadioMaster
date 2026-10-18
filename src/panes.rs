@@ -43,6 +43,20 @@ impl App {
                         ui.close_menu();
                     }
                 }
+                ui.separator();
+                for i in 0..self.workzones.web.len() {
+                    let tab = Tab::web(i);
+                    if ui.add_enabled(!pt.tabs.contains(&tab), egui::Button::new(self.tab_name(tab))).clicked() {
+                        add = Some(tab);
+                        ui.close_menu();
+                    }
+                }
+                if self.workzones.web.len() < 64 && ui.button(tr("🌐 New web panel")).clicked() {
+                    let n = self.workzones.web.len();
+                    self.workzones.web.push(crate::workzones::WebSite { name: format!("Web {}", n + 1), url: String::new() });
+                    add = Some(Tab::web(n));
+                    ui.close_menu();
+                }
             })
             .response
             .on_hover_text(tr("Add a tab to this panel"));
@@ -100,8 +114,36 @@ impl App {
         self.workzones.pane(pane).and_then(|p| p.selected())
     }
 
+    /// Whether the signed-in account may use a panel tab.
+    pub(super) fn tab_allowed(&self, tab: Tab) -> bool {
+        use crate::auth::tool;
+        let p = &self.perm;
+        match tab {
+            Tab::Library => p.tool(tool::LIBRARY),
+            Tab::Scheduler => p.tool(tool::SCHEDULER),
+            Tab::Segment => p.tool(tool::NOTEPAD),
+            Tab::FileExplorer => p.tool(tool::FILE_EXPLORER),
+            Tab::SongRequests => p.tool(tool::SONG_REQUESTS),
+            Tab::Carts => p.jingles,
+            t if t.is_web() => p.tool(tool::WEB),
+            _ => true,
+        }
+    }
+
     pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane, core: &mut Playout) {
         let selected = self.pane_tabs(ui, pane);
+        if let Some(tab) = selected.filter(|t| !self.tab_allowed(*t)) {
+            ui.vertical_centered(|ui| {
+                ui.add_space(28.0);
+                ui.label(RichText::new(format!("🔒 {}", self.tab_name(tab))).strong().color(GRAY));
+                ui.label(
+                    RichText::new(tr("Your account isn't allowed to use this. An administrator can change that in Users and permissions."))
+                        .small()
+                        .color(GRAY),
+                );
+            });
+            return;
+        }
         match selected {
             Some(tab) if tab.is_web() => self.web_pane(ui, pane, tab),
             Some(Tab::AuxPlaylist) => self.tab_aux_playlist(ui, pane, core),
@@ -289,7 +331,7 @@ impl App {
             if ui.small_button("⟳").on_hover_text(tr("Reload")).clicked() {
                 self.browsers.reload(&key);
             }
-            if ui.small_button("⌂").on_hover_text(tr("Home")).clicked() {
+            if ui.small_button("🏠").on_hover_text(tr("Home")).clicked() {
                 if let Some(st) = self.web_state.get_mut(&key) {
                     st.entry = default.clone();
                 }
@@ -473,7 +515,7 @@ impl App {
                     go = Some(root.clone());
                 }
             }
-            if ui.small_button(tr("Add folder to playlist")).clicked() {
+            if ui.add_enabled(self.perm.edit_playlists, egui::Button::new(tr("Add folder to playlist")).small()).clicked() {
                 let p = dir.clone();
                 core.with_tab(self.view_pl, |c| c.add_paths(vec![p]));
             }
@@ -500,7 +542,7 @@ impl App {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let r =
                 ui.selectable_label(false, if *is_dir { format!("📁 {name}") } else { format!("🎵 {name}") }).interact(egui::Sense::drag());
-            if r.drag_started() {
+            if r.drag_started() && self.perm.edit_playlists {
                 let files = if *is_dir { crate::library::audio_files_in(p) } else { vec![p.clone()] };
                 r.dnd_set_drag_payload(super::plview::DragFiles(files));
             }
@@ -512,6 +554,10 @@ impl App {
                 }
             }
             r.context_menu(|ui| {
+                if !self.perm.edit_playlists {
+                    ui.label(RichText::new(tr("Your account can't change playlists")).small().color(GRAY));
+                    return;
+                }
                 if ui.button(tr("Add to playlist")).clicked() {
                     add.push(p.clone());
                     ui.close_menu();
@@ -527,7 +573,7 @@ impl App {
         if entries.is_empty() {
             ui.label(RichText::new(tr("No folders or audio files here.")).color(GRAY));
         }
-        if !add.is_empty() {
+        if !add.is_empty() && self.perm.edit_playlists {
             core.with_tab(self.view_pl, |c| c.add_paths(add));
         }
         if let Some(p) = go {

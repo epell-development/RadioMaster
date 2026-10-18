@@ -2,7 +2,7 @@
   <img src="assets/logo_light.png" alt="RadioMaster" width="420">
 </p>
 
-<p align="center"><b>Radio automation for Windows, written in Rust.</b><br>
+<p align="center"><b>Radio automation for Windows, macOS and Linux, written in Rust.</b><br>
 Playlists, hour markers, smart crossfades, Icecast / Shoutcast streaming and AzuraCast station management in one studio app.</p>
 
 <p align="center">
@@ -23,6 +23,8 @@ From the [latest release](../../releases/latest):
 - **`RadioMaster-Setup-<version>.exe`** — installer with Start-menu / desktop shortcuts and an uninstaller
   (install just for you, no admin needed, or for all users), or
 - **`RadioMaster-<version>-windows-x64.zip`** — portable: unzip anywhere and run `RadioMaster.exe`.
+- **`RadioMaster-<version>-macos.zip`** — RadioMaster.app for macOS 12+ (see [macOS and Linux](#macos-and-linux)).
+- **`RadioMaster-<version>-linux-x64.tar.gz`** — unpack and run `./RadioMaster`.
 
 On first start you create the local administrator account. RadioMaster tells you when a new version is out
 (the button next to the logo); installed copies update themselves in one click.
@@ -57,7 +59,7 @@ OpenBoss install are copied across on first start). If the program ever crashes,
 | Add timed pause… (Ctrl+P) | silence for a set time |
 | Add teaser… | faded snippets of the next N tracks |
 | Add time announcement… | recordings H00…H23 / M00…M59 from a folder, otherwise the computer's speech voice reads your text (`{h12}:{mm} {ampm}`) |
-| Add text to speech… (Alt+T) | reads your text: {time}, {next}, {last}, {station}… |
+| Add text to speech… (Alt+T) | reads your text, every line: {time}, {next}, {last}, {station}…; voice, speed, pitch, volume, pause between lines, repeat, intro/outro sound |
 | Add comment… (Alt+W) | a note row; nothing plays |
 | Add container… | several files as one row: all in order, or one at random |
 | Insert voice track (Ctrl+W) / Record voice track (Ctrl+R) | recordings go to `voicetracks\` |
@@ -73,13 +75,14 @@ The clock shows the countdown to the next marker.
 
 ## Work zones
 View → Work zones, the **1 2 3** buttons, or **Ctrl+1/2/3** set how many panels the main window has
-(1 = playlist + left panel, 2 = + right panel, 3 = + lower-right panel). **Ctrl+4 / ➕🗗** opens an
+(1 = playlist + left panel, 2 = + right panel, 3 = + lower-right panel). **Ctrl+4 / ➕🗖** opens an
 **Additional** window — a real window with its own tabbed panel. Open as many as you like and put them on other
 screens; they reopen where you left them. Each panel's ➕ adds AUX Playlist, Cart wall, Search, Scheduler,
-File Explorer, Notepad, Statistics, Song Requests, Playback Queue, Log, Library, Clock or Web 1–4.
+File Explorer, Notepad, Statistics, Song Requests, Playback Queue, Log, Library, Clock, Track Info or a web panel.
 Right-click a tab to move it to another panel or into a new Additional window.
 
-Web 1–4 are empty until you type an address and give the tab a name — nothing is built in.
+Web panels: type an address and give the tab a name. **➕ → New web panel** adds as many as you like. On a fresh
+install the first one opens https://radiomanager.dovafm.com.
 
 ![An Additional window next to the main window](docs/screenshots/additional-window.png)
 
@@ -103,6 +106,17 @@ Two-deck crossfading with smart fading and a waveform track editor (cues, fades,
 multiple outputs, 12-band EQ / compressor / leveling, ad scheduler, event scheduler, rotations, reports, metadata export,
 remote control HTTP API, station profiles, local operator accounts.
 
+## Reports (Tools → Reports)
+Pick **Everything, Songs, Adverts, Jingles** or **Speech, voice & other**, a period (Today, This week, Last month…
+or any dates), and optionally only items containing a word. Click an item to see every time it played.
+**📄 PDF…** saves a report with totals, plays per day and every item; **⬇ Export** also has CSV (opens in Excel),
+every single play, and **proof of play** PDFs — for the selected advert or jingle, or each item on its own page,
+with every air time and lines to sign. Plays are read from `history.csv` in the settings folder.
+
+## Microphone
+The 🎤 Mic button (Ctrl+M) puts your input on air. Right-click it (or Settings → Audio) to choose what the music
+does meanwhile: lowered to the level of the slider next to the mic volume, muted, or paused until the mic goes off.
+
 ## Plugins
 Small programs in any language that run when something happens on air, and can send commands back.
 See [PLUGINS.md](PLUGINS.md) and **Tools → Plugins**.
@@ -111,8 +125,10 @@ See [PLUGINS.md](PLUGINS.md) and **Tools → Plugins**.
 Settings → General → Language. To translate RadioMaster, see [lang/README.md](lang/README.md).
 
 ## Users and permissions
-File → Users: administrators can add operators and choose what each one may do — playback, editing
-playlists, tools, streaming, AzuraCast and settings — reset passwords, disable or delete accounts.
+File → Users: administrators can add operators and choose what each one may do — playback, jingles,
+editing playlists, streaming and settings — and exactly which tools they can open (track editor, generator,
+adverts, Audio FX, AzuraCast, reports, history, notepad, plugins, scheduler, voice tracks, library, file explorer,
+song requests, web panels). They can also reset passwords and disable or delete accounts.
 
 ## macOS and Linux
 Each release also has `RadioMaster-<version>-macos.zip` (RadioMaster.app; unsigned, so right-click → Open the

@@ -60,6 +60,7 @@ pub(super) struct ItemDlg {
     pub info: bool,
     pub voice: String,
     pub rate: i32,
+    pub speech: crate::items::SpeechOpts,
     pub err: String,
 }
 
@@ -110,6 +111,7 @@ impl App {
             info: false,
             voice: String::new(),
             rate: 0,
+            speech: Default::default(),
             err: String::new(),
         }
     }
@@ -182,9 +184,9 @@ impl App {
                 (d.hour, d.minute, d.info) = (*hour, 0, true);
                 d
             }
-            ItemKind::Tts { text, voice, rate } => {
+            ItemKind::Tts { text, voice, rate, opts } => {
                 let mut d = self.new_item_dlg(DlgKind::Tts);
-                (d.text, d.voice, d.rate) = (text.clone(), voice.clone(), *rate);
+                (d.text, d.voice, d.rate, d.speech) = (text.clone(), voice.clone(), *rate, opts.clone());
                 d
             }
             ItemKind::TimeAnnounce => self.new_item_dlg(DlgKind::TimeAnnounce),
@@ -270,9 +272,12 @@ impl App {
                 if d.text.trim().is_empty() {
                     return Err("Type what should be said".into());
                 }
-                let e =
-                    PlEntry::special(ItemKind::Tts { text: d.text.trim().to_string(), voice: d.voice.clone(), rate: d.rate }, title, 0.0);
-                let secs = e.est_secs();
+                let e = PlEntry::special(
+                    ItemKind::Tts { text: d.text.trim().to_string(), voice: d.voice.clone(), rate: d.rate, opts: d.speech.clone() },
+                    title,
+                    0.0,
+                );
+                let secs = crate::items::speech_secs(&d.text, d.rate, &d.speech, true);
                 PlEntry { track: crate::library::Track { duration: secs, ..e.track }, ..e }
             }
         })
@@ -290,6 +295,9 @@ impl App {
 
     pub(super) fn item_dialog_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         let Some(mut d) = self.item_dlg.take() else { return };
+        if !self.perm.edit_playlists {
+            return; // the dialog closes: this account can't change playlists
+        }
         let mut open = true;
         let (mut ok, mut cancel) = (false, false);
         let title = if d.edit.is_some() { d.kind.title().replace("Add", "Edit") } else { d.kind.title().to_string() };
@@ -498,14 +506,55 @@ impl App {
                         }
                         ui.end_row();
                         ui.label(tr("Speed"));
-                        ui.add(egui::Slider::new(&mut d.rate, -10..=10).text("slower ↔ faster"));
+                        ui.add(egui::Slider::new(&mut d.rate, -10..=10).text(tr("slower ↔ faster")));
+                        ui.end_row();
+                        ui.label(tr("Pitch"));
+                        ui.add(egui::Slider::new(&mut d.speech.pitch, -10..=10).text(tr("lower ↔ higher")));
+                        ui.end_row();
+                        ui.label(tr("Volume"));
+                        ui.add(egui::Slider::new(&mut d.speech.volume, 0..=200).suffix(" %"));
+                        ui.end_row();
+                        ui.label(tr("Between lines"));
+                        ui.add(egui::Slider::new(&mut d.speech.line_pause_ms, 0..=3000).suffix(" ms").text(tr("pause")));
+                        ui.end_row();
+                        ui.label(tr("Read it"));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut d.speech.repeat).range(1..=20).suffix(" ×"));
+                            if d.speech.repeat > 1 {
+                                ui.label(tr("pause"));
+                                ui.add(egui::DragValue::new(&mut d.speech.repeat_pause_ms).range(0..=10000).suffix(" ms"));
+                            }
+                        });
+                        ui.end_row();
+                        for outro in [false, true] {
+                            ui.label(if outro { tr("Outro sound") } else { tr("Intro sound") });
+                            let path = if outro { &mut d.speech.outro } else { &mut d.speech.intro };
+                            ui.horizontal(|ui| {
+                                ui.add(egui::TextEdit::singleline(path).hint_text(tr("none")).desired_width(230.0));
+                                if ui.small_button("…").on_hover_text(tr("Pick a sound file")).clicked() {
+                                    self.dlg(move || {
+                                        rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::SpeechSound(outro, p))
+                                    });
+                                }
+                                if !path.is_empty() && ui.small_button("✖").on_hover_text(tr("No sound")).clicked() {
+                                    path.clear();
+                                }
+                            });
+                            ui.end_row();
+                        }
+                        ui.label("");
+                        ui.checkbox(&mut d.speech.spell_numbers, tr("Read numbers digit by digit"));
                         ui.end_row();
                         ui.label("");
-                        if ui.button(tr("▶ Preview")).on_hover_text(tr("Plays through the preview output, not on air")).clicked() {
-                            let text = core.fill_speech(&d.text, core.current.unwrap_or(0));
-                            let voice = if d.voice.is_empty() { core.cfg.announce.voice.clone() } else { d.voice.clone() };
-                            self.preview_speech(core, text, voice, d.rate);
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button(tr("▶ Preview")).on_hover_text(tr("Plays through the preview output, not on air")).clicked() {
+                                let (text, v) = core.speech_for(&d.text, &d.voice, d.rate, &d.speech, core.current.unwrap_or(0));
+                                self.preview_speech(core, text, v, d.speech.clone());
+                            }
+                            if self.preview.is_some() && ui.button(tr("■ Stop")).clicked() {
+                                self.preview = None;
+                            }
+                        });
                         ui.end_row();
                         name_row(ui, &mut d, "shown in the playlist (optional)");
                     }
@@ -560,16 +609,9 @@ impl App {
     }
 
     /// Speak `text` on the preview output (never on air).
-    pub(super) fn preview_speech(&mut self, core: &mut Playout, text: String, voice: String, rate: i32) {
-        let src = crate::live::announce_source(
-            text,
-            String::new(),
-            voice,
-            rate,
-            data_dir().join("tmp").join("preview_speech.wav"),
-            core.log_sink.clone(),
-        );
-        match crate::audio::PreviewPlayer::play_pcm(&core.cfg.audio_devices.preview, Box::new(src), "speech") {
+    pub(super) fn preview_speech(&mut self, core: &mut Playout, text: String, v: crate::live::Voice, opts: crate::items::SpeechOpts) {
+        let src = crate::live::speech_source(text, v, opts, core.log_sink.clone());
+        match crate::audio::PreviewPlayer::play_pcm(&core.cfg.audio_devices.preview, Box::new(src)) {
             Ok(p) => self.preview = Some(p),
             Err(e) => core.say(format!("Preview: {e}")),
         }
@@ -617,6 +659,9 @@ impl App {
 
     // ------------------------------------------------------ voice tracks
     pub(super) fn voice_track_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        if !(self.perm.edit_playlists && self.perm.tool(crate::auth::tool::VOICE_TRACK)) {
+            self.show_vt = false;
+        }
         if !self.show_vt {
             if let Some(r) = self.vt.as_mut() {
                 r.stream = None;
@@ -788,7 +833,8 @@ impl App {
     // ------------------------------------------------------- the menu itself
     pub(super) fn playlist_menu(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let edit = self.perm.edit_playlists;
-        let tools = self.perm.tools;
+        let tools = self.perm.tool(crate::auth::tool::GENERATOR);
+        let vt = edit && self.perm.tool(crate::auth::tool::VOICE_TRACK);
         fn item(ui: &mut egui::Ui, enabled: bool, text: &str, sc: &str) -> bool {
             let mut b = egui::Button::new(text);
             if !sc.is_empty() {
@@ -848,7 +894,7 @@ impl App {
         if item(ui, edit, tr("Insert voice track…"), "Ctrl+W") {
             self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
         }
-        if item(ui, edit, tr("🔴 Record voice track…"), "Ctrl+R") {
+        if item(ui, vt, tr("🔴 Record voice track…"), "Ctrl+R") {
             self.show_vt = true;
         }
         ui.separator();
@@ -944,7 +990,7 @@ impl App {
             // Shift+F1 … Shift+F12: cart pads 1–12
             let fkeys = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6, Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12];
             for (i, k) in fkeys.into_iter().enumerate() {
-                if press(Modifiers::SHIFT, k) {
+                if press(Modifiers::SHIFT, k) && p.jingles {
                     core.trigger_cart(i);
                 }
             }
@@ -974,7 +1020,7 @@ impl App {
             if press(Modifiers::NONE, Key::F9) {
                 core.prev();
             }
-            if press(Modifiers::COMMAND, Key::J) {
+            if press(Modifiers::COMMAND, Key::J) && p.jingles {
                 core.stop_carts();
             }
             if press(Modifiers::COMMAND, Key::M) {
@@ -1019,7 +1065,7 @@ impl App {
             if press(Modifiers::COMMAND, Key::W) {
                 self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
             }
-            if press(Modifiers::COMMAND, Key::R) {
+            if press(Modifiers::COMMAND, Key::R) && p.tool(crate::auth::tool::VOICE_TRACK) {
                 self.show_vt = true;
             }
             if press(Modifiers::COMMAND, Key::N) {

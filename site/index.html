@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="img/icon.png">
 <title>RadioMaster</title>
-<meta name="description" content="RadioMaster — free radio automation for Windows. Playlists, hour markers, smart crossfades, Icecast/Shoutcast streaming and AzuraCast station management.">
+<meta name="description" content="RadioMaster — free radio automation for Windows, macOS and Linux. Playlists, hour markers, smart crossfades, Icecast/Shoutcast streaming and AzuraCast station management.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -20,7 +20,7 @@
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#playlist">Playlist</a>
       <a class="hide-sm" href="#azuracast">AzuraCast</a>
-      <a class="hide-sm" href="updates.html">Updates</a>
+      <a class="hide-sm" href="updates/">Updates</a>
       <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a class="hide-sm" href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
       <a class="btn primary small" href="#download">Download</a>
@@ -31,15 +31,20 @@
 <main id="top">
   <div class="wrap hero">
     <div>
-      <p class="eyebrow">Free radio automation for Windows · macOS · Linux</p>
+      <p class="eyebrow">Free radio automation · Windows · macOS · Linux</p>
       <h1 style="margin-top:14px">Your studio.<br><span>Your control.</span></h1>
       <p class="lede">RadioMaster runs your station from one screen: playlists with live start times, hour markers that keep you on the clock, smart crossfades, Icecast and Shoutcast streaming, and full AzuraCast station management.</p>
       <div class="cta">
-        <a class="btn primary" href="https://github.com/epell-development/RadioMaster/releases/latest">Download for Windows <small>Setup .exe</small></a>
+        <a class="btn primary" id="dl-main" href="#download">Download <small id="dl-main-os">free</small></a>
         <a class="btn ghost" href="https://github.com/epell-development/RadioMaster">View source</a>
       </div>
-      <p class="fine">Windows 10 and 11 · macOS and Linux builds · MIT licensed · no account or subscription</p>
-      <a class="news" href="updates.html"><b>New in v0.2.3</b> drag-and-drop playlists, plugins, user permissions, text to speech, ad rules, translations <span>All updates →</span></a>
+      <div class="platforms" aria-label="Runs on">
+        <a class="os" href="#dl-windows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 8.5h18M12 8.5V20" stroke="currentColor" stroke-width="1.8"/></svg><span><b>Windows</b><small>10 · 11</small></span></a>
+        <a class="os" href="#dl-macos"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.5 18.5h19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span><b>macOS</b><small>12 or newer</small></span></a>
+        <a class="os" href="#dl-linux"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 10l3 2.5L7 15M12 15.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Linux</b><small>x64</small></span></a>
+      </div>
+      <p class="fine">One app on all three systems · MIT licensed · no account or subscription</p>
+      <a class="news" href="updates/"><b>New in v0.2.4</b> PDF advert &amp; jingle reports, library drag and drop, per-tool permissions, better text to speech <span>All updates →</span></a>
     </div>
 
     <div class="board" aria-label="Example of the RadioMaster on-air display">
@@ -158,31 +163,34 @@
     <div class="wrap">
       <div class="head">
         <p class="eyebrow">Download</p>
-        <h2>Get on air</h2>
-        <p class="lede">Free and open source. Pick the installer, or the portable zip if you'd rather keep everything in one folder.</p>
+        <h2>Get on air — on Windows, macOS or Linux</h2>
+        <p class="lede">Free and open source, with the same features on every system. Every download is on the GitHub releases page.</p>
       </div>
       <div class="desk">
-        <div class="dl rec">
-          <h3>Installer</h3>
-          <p class="file">RadioMaster-Setup-&lt;version&gt;.exe</p>
-          <p>Start-menu and desktop shortcuts plus an uninstaller. Install for just you without an admin password, or for everyone on the PC.</p>
-          <a class="btn primary" href="https://github.com/epell-development/RadioMaster/releases/latest">Download installer</a>
+        <div class="dl rec" id="dl-windows">
+          <h3 class="os-h"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 8.5h18M12 8.5V20" stroke="currentColor" stroke-width="1.8"/></svg>Windows</h3>
+          <p class="file">RadioMaster-Setup-&lt;version&gt;.exe<br>RadioMaster-&lt;version&gt;-windows-x64.zip</p>
+          <p>The installer adds Start-menu and desktop shortcuts and updates itself in one click. Install for just you without an admin password, or use the portable zip from a USB stick.</p>
+          <div class="btns">
+            <a class="btn primary" href="https://github.com/epell-development/RadioMaster/releases/latest">Installer</a>
+            <a class="btn ghost" href="https://github.com/epell-development/RadioMaster/releases/latest">Portable zip</a>
+          </div>
         </div>
-        <div class="dl">
-          <h3>Portable</h3>
-          <p class="file">RadioMaster-&lt;version&gt;-windows-x64.zip</p>
-          <p>Unzip anywhere, including a USB stick, and run RadioMaster.exe. Settings live in your AppData folder either way.</p>
-          <a class="btn ghost" href="https://github.com/epell-development/RadioMaster/releases/latest">Download zip</a>
+        <div class="dl" id="dl-macos">
+          <h3 class="os-h"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2.5 18.5h19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>macOS</h3>
+          <p class="file">RadioMaster-&lt;version&gt;-macos.zip</p>
+          <p>Unzip and drag RadioMaster.app into Applications. The first time, right-click it and choose Open. Text to speech uses the Mac's own voices.</p>
+          <div class="btns"><a class="btn ghost" href="https://github.com/epell-development/RadioMaster/releases/latest">Download for Mac</a></div>
         </div>
-        <div class="dl">
-          <h3>macOS and Linux</h3>
-          <p class="file">RadioMaster-&lt;version&gt;-macos.zip · -linux-x64.tar.gz</p>
-          <p>RadioMaster.app for Mac (right-click → Open the first time) and a Linux build. Web panels open in your browser there.</p>
-          <a class="btn ghost" href="https://github.com/epell-development/RadioMaster/releases/latest">Download</a>
+        <div class="dl" id="dl-linux">
+          <h3 class="os-h"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 10l3 2.5L7 15M12 15.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Linux</h3>
+          <p class="file">RadioMaster-&lt;version&gt;-linux-x64.tar.gz</p>
+          <p>Unpack and run <code>./RadioMaster</code>. Works with PulseAudio, PipeWire and ALSA; install <code>espeak-ng</code> for text to speech.</p>
+          <div class="btns"><a class="btn ghost" href="https://github.com/epell-development/RadioMaster/releases/latest">Download for Linux</a></div>
         </div>
         <div class="dl">
           <h3>From source</h3>
-          <p>Needs the Rust toolchain. Linux builds work too.</p>
+          <p>Any of the three, with the Rust toolchain:</p>
           <div class="code"><pre id="src-cmd">git clone https://github.com/epell-development/RadioMaster
 cd RadioMaster
 cargo run --release</pre><button type="button" id="copy">Copy</button></div>
@@ -190,7 +198,7 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       </div>
       <div class="req">
         <span><b>Windows</b> 10 or 11, 64-bit · <b>macOS</b> 12+ · <b>Linux</b> x64</span>
-        <span><b>Web panels</b> use the Edge WebView2 runtime, already on most PCs</span>
+        <span><b>Web panels</b> show inside RadioMaster on Windows (Edge WebView2); on macOS and Linux they open in your browser</span>
         <span><b>Streaming</b> Icecast 2, Shoutcast 2, AzuraCast</span>
       </div>
     </div>
@@ -203,7 +211,7 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       <a class="brand" href="#top" style="font-size:1.2rem"><img src="img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
       <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
-      <a href="updates.html">Updates</a>
+      <a href="updates/">Updates</a>
       <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
@@ -300,6 +308,13 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       var img = $('shot'); img.src = b.dataset.src; img.alt = b.dataset.alt; $('shot-cap').textContent = b.dataset.cap;
     });
   });
+
+  // the big download button names the visitor's system
+  (function () {
+    var ua = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
+    var os = /mac/i.test(ua) ? ['macOS', '#dl-macos'] : /linux|x11/i.test(ua) && !/android/i.test(ua) ? ['Linux', '#dl-linux'] : /win/i.test(ua) ? ['Windows', '#dl-windows'] : null;
+    if (os) { $('dl-main-os').textContent = 'for ' + os[0]; $('dl-main').href = os[1]; }
+  })();
 
   // copy build commands
   $('copy').addEventListener('click', function () {

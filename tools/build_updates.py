@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render CHANGELOG.md into site/updates.html (between the RELEASES markers).
+"""Render CHANGELOG.md into site/updates/index.html (between the RELEASES markers).
 Run from the repository root:  python3 tools/build_updates.py"""
 import html, pathlib, re
 
@@ -23,10 +23,15 @@ def render(md: str) -> str:
         ver, date = (m.group(1), m.group(2).strip()) if m else (head.strip(), "")
         body, items, group = [], [], None
 
+        def li(i):
+            # an item is [text, [sub-items]]
+            sub = "<ul>" + "".join(f"<li>{inline(s)}</li>" for s in i[1]) + "</ul>" if i[1] else ""
+            return f"<li>{inline(i[0])}{sub}</li>"
+
         def flush():
             nonlocal items
             if items:
-                body.append("<ul>" + "".join(f"<li>{inline(i)}</li>" for i in items) + "</ul>")
+                body.append("<ul>" + "".join(li(i) for i in items) + "</ul>")
                 items = []
 
         for line in lines[1:]:
@@ -37,9 +42,14 @@ def render(md: str) -> str:
                 flush()
                 body.append(f"<h3>{html.escape(g.group(1))}</h3>")
             elif line.startswith("- "):
-                items.append(line[2:].strip())
+                items.append([line[2:].strip(), []])
+            elif line.startswith("  - ") and items:
+                items[-1][1].append(line[4:].strip())
             elif line.startswith("  ") and items:
-                items[-1] += " " + line.strip()
+                if items[-1][1]:
+                    items[-1][1][-1] += " " + line.strip()
+                else:
+                    items[-1][0] += " " + line.strip()
             else:
                 flush()
                 body.append(f"<p class=\"lede\" style=\"margin-bottom:14px\">{inline(line.strip())}</p>")
@@ -55,9 +65,9 @@ def render(md: str) -> str:
     return "\n".join(out)
 
 
-page = pathlib.Path("site/updates.html")
+page = pathlib.Path("site/updates/index.html")
 text = page.read_text(encoding="utf-8")
 new = render(pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8"))
 text = re.sub(r"(<!-- RELEASES -->).*?(<!-- /RELEASES -->)", lambda m: m.group(1) + "\n" + new + "\n" + m.group(2), text, flags=re.S)
 page.write_text(text, encoding="utf-8")
-print("site/updates.html updated")
+print("site/updates/index.html updated")

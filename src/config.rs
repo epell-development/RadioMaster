@@ -53,6 +53,18 @@ impl Default for AnnounceCfg {
     }
 }
 
+/// What the music does while the microphone is on.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MicMode {
+    /// lower it to the duck level
+    #[default]
+    Duck,
+    /// silence it (it keeps running)
+    Mute,
+    /// pause it, and carry on when the mic goes off
+    Pause,
+}
+
 /// Track list repeat protection.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
@@ -379,6 +391,8 @@ pub struct Config {
     pub remote: RemoteCfg,
     pub mic_gain: f32,
     pub mic_duck: f32,
+    /// what happens to the music while the mic is on
+    pub mic_mode: MicMode,
     pub library_folders: Vec<String>,
     pub crossfade_secs: f32,
     pub fade: crate::fade::SmartFadeConfig,
@@ -426,6 +440,7 @@ impl Default for Config {
             remote: RemoteCfg::default(),
             mic_gain: 1.0,
             mic_duck: 0.35,
+            mic_mode: MicMode::Duck,
             library_folders: vec![],
             crossfade_secs: 3.0,
             fade: crate::fade::SmartFadeConfig::default(),

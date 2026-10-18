@@ -112,7 +112,6 @@ pub struct PreviewPlayer {
     _stream: OutputStream,
     stop: Arc<AtomicBool>,
     pub engine: Engine,
-    pub label: String,
 }
 
 pub struct PreviewSide {
@@ -123,7 +122,7 @@ pub struct PreviewSide {
 
 impl PreviewPlayer {
     /// Play any audio source (e.g. a speech preview) on the preview device.
-    pub fn play_pcm(device: &str, src: crate::engine::Pcm, label: &str) -> anyhow::Result<PreviewPlayer> {
+    pub fn play_pcm(device: &str, src: crate::engine::Pcm) -> anyhow::Result<PreviewPlayer> {
         let host = cpal::default_host();
         let dev = if device.is_empty() {
             host.default_output_device()
@@ -148,7 +147,7 @@ impl PreviewPlayer {
             }
             s2.store(true, Ordering::Relaxed);
         });
-        Ok(PreviewPlayer { _stream: stream, stop, engine, label: label.to_string() })
+        Ok(PreviewPlayer { _stream: stream, stop, engine })
     }
 
     /// Play A from `from` seconds. If `b` is given, B comes in at A's mix point and plays for `tail`
@@ -165,7 +164,6 @@ impl PreviewPlayer {
                 .or_else(|| host.default_output_device())
         }
         .ok_or_else(|| anyhow::anyhow!("no output device for preview"))?;
-        let label = dev.name().unwrap_or_else(|_| "default".into());
         let (stream, handle) = OutputStream::try_from_device(&dev)?;
         let engine = Engine::new_detached();
         engine.set_volume(1.0);
@@ -225,7 +223,7 @@ impl PreviewPlayer {
             sleep(350);
             s2.store(true, Ordering::Relaxed);
         });
-        Ok(PreviewPlayer { _stream: stream, stop, engine, label })
+        Ok(PreviewPlayer { _stream: stream, stop, engine })
     }
 
     pub fn finished(&self) -> bool {

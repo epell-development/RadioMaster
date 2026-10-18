@@ -806,8 +806,10 @@ impl App {
                         .small()
                         .color(GRAY),
                 );
+                let may_edit = self.perm.edit_playlists;
                 ui.horizontal(|ui| {
                     if !is_dir
+                        && may_edit
                         && ui
                             .small_button(tr("➕ Playlist"))
                             .on_hover_text(tr("Download it and add it to the playlist you're viewing"))
@@ -815,7 +817,9 @@ impl App {
                     {
                         get = Some((path.clone(), false));
                     }
-                    if !is_dir && ui.small_button(tr("Insert")).on_hover_text(tr("Download it and put it after the selected row")).clicked()
+                    if !is_dir
+                        && may_edit
+                        && ui.small_button(tr("Insert")).on_hover_text(tr("Download it and put it after the selected row")).clicked()
                     {
                         get = Some((path.clone(), true));
                     }
@@ -876,6 +880,7 @@ impl App {
         while let Ok(r) = self.az.dl_rx.try_recv() {
             self.az.downloading = self.az.downloading.saturating_sub(1);
             match r {
+                Ok((_, _)) if !self.perm.edit_playlists => self.az.msg = tr("Your account isn't allowed to edit playlists").into(),
                 Ok((p, after_sel)) => {
                     let e = core.entry_for(&p);
                     let title = e.title();

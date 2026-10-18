@@ -35,6 +35,8 @@ pub enum PlayState {
 pub struct HistoryItem {
     pub time: String,
     pub text: String,
+    /// song, advert, jingle, voice, speech, time, stream, live, teaser (see `report::KINDS`)
+    pub kind: &'static str,
 }
 
 #[derive(Clone)]
@@ -190,6 +192,8 @@ pub struct Playout {
     pub azura: Arc<Mutex<AzuraState>>,
     azura_shared: Arc<Mutex<AzuraConfig>>,
     pub history: Vec<HistoryItem>,
+    /// kind of the item being started (for the play history), when the file alone can't tell
+    kind_hint: Option<&'static str>,
     fired: HashMap<usize, String>,
     songs_since: Vec<u32>,
     pub notify: Arc<Mutex<String>>,
@@ -235,10 +239,13 @@ pub struct Playout {
     // ---- log
     pub log: Vec<LogLine>,
     pub log_sink: LogSink,
+    /// speech row already rendered ahead (row|text)
+    speech_ready: String,
 }
 
 impl Playout {
     pub fn new(engine: Engine, cfg: Config) -> Self {
+        std::thread::spawn(live::clean_speech_files);
         engine.set_dsp(&cfg.dsp);
         let dsp_shared = cfg.dsp.clone();
         let azura_shared = Arc::new(Mutex::new(cfg.azuracast.clone()));
@@ -289,6 +296,7 @@ impl Playout {
             azura,
             azura_shared,
             history: vec![],
+            kind_hint: None,
             fired: HashMap::new(),
             songs_since: vec![],
             notify: Arc::new(Mutex::new(String::new())),
@@ -322,6 +330,7 @@ impl Playout {
             plays_dirty: false,
             log: vec![],
             log_sink,
+            speech_ready: String::new(),
             plugins,
         };
         p.reindex();
@@ -405,6 +414,7 @@ impl Playout {
             }
             if self.state == PlayState::Playing && self.wait_until.is_none() {
                 self.check_markers();
+                self.prepare_next_speech();
             }
         }
 
@@ -758,8 +768,10 @@ impl Playout {
         self.playlist[i].played = true;
         let e = self.playlist[i].clone();
         let xf = old_fade.unwrap_or(0.0);
+        self.kind_hint = None;
         let ok = match e.kind.clone() {
             ItemKind::Track | ItemKind::VoiceTrack => {
+                self.kind_hint = matches!(e.kind, ItemKind::VoiceTrack).then_some("voice");
                 if self.play_file(&e.track, old_fade) {
                     self.apply_rotations(i, &e.track);
                     if let Some(n) = self.playlist.get(i + 1).filter(|x| x.is_file()).map(|x| x.track.path.clone()) {
@@ -774,6 +786,7 @@ impl Playout {
                 let src = live::url_source(&url, self.log_sink.clone());
                 let spec = CueSpec { cue_out: (secs > 0.0).then_some(secs), ..Default::default() };
                 self.engine.play_source(Box::new(src), None, secs, spec, Some(xf), true);
+                self.kind_hint = Some("stream");
                 self.started_other(e.title());
                 true
             }
@@ -781,6 +794,7 @@ impl Playout {
                 let src = live::line_source(&self.cfg.audio_devices.input, self.log_sink.clone());
                 let spec = CueSpec { cue_out: (secs > 0.0).then_some(secs), ..Default::default() };
                 self.engine.play_source(Box::new(src), None, secs, spec, Some(xf), true);
+                self.kind_hint = Some("live");
                 self.started_other(e.title());
                 true
             }
@@ -805,6 +819,7 @@ impl Playout {
                 match live::teaser_source(&parts, secs) {
                     Ok(src) => {
                         self.engine.play_source(src, None, parts.len() as f32 * secs, CueSpec::default(), Some(xf), false);
+                        self.kind_hint = Some("teaser");
                         self.started_other(e.title());
                         true
                     }
@@ -825,24 +840,19 @@ impl Playout {
                     data_dir().join("tmp").join("time.wav"),
                     self.log_sink.clone(),
                 );
-                self.engine.play_source(Box::new(src), None, 0.0, CueSpec::default(), Some(xf), false);
+                self.engine.play_source(Box::new(src), None, 0.0, CueSpec::default(), Some(xf), true);
+                self.kind_hint = Some("time");
                 self.started_other(format!("Time announcement — {text}"));
                 true
             }
             ItemKind::Comment(_) | ItemKind::HourInfo { .. } => false,
-            ItemKind::Tts { text, voice, rate } => {
-                let said = self.fill_speech(&text, i);
-                let voice = if voice.is_empty() { self.cfg.announce.voice.clone() } else { voice };
-                let src = live::announce_source(
-                    said.clone(),
-                    String::new(),
-                    voice,
-                    rate,
-                    data_dir().join("tmp").join(format!("speech{}.wav", i % 4)),
-                    self.log_sink.clone(),
-                );
-                self.engine.play_source(Box::new(src), None, 0.0, CueSpec::default(), Some(xf), false);
-                self.started_other(format!("Speech — {said}"));
+            ItemKind::Tts { text, voice, rate, opts } => {
+                let (said, v) = self.speech_for(&text, &voice, rate, &opts, i);
+                let src = live::speech_source(said.clone(), v, opts, self.log_sink.clone());
+                // speech has pauses between lines: never cut it short with silence trimming
+                self.engine.play_source(Box::new(src), None, e.est_secs(), CueSpec::default(), Some(xf), true);
+                self.kind_hint = Some("speech");
+                self.started_other(format!("Speech — {}", said.lines().next().unwrap_or("")));
                 true
             }
             ItemKind::Container { items, random } => {
@@ -913,7 +923,9 @@ impl Playout {
         self.request_analysis(&t.path);
         let text = t.label();
         self.on_air = Some(t.clone());
+        let kind = self.kind_hint.take().unwrap_or_else(|| self.kind_of(&t.path));
         self.after_start(text.clone());
+        self.log_history(&text, kind, Some(&t.path), t.duration);
         self.push_metadata(&text);
         self.export_now(t);
         let now = Local::now().timestamp();
@@ -941,6 +953,8 @@ impl Playout {
         self.active_cues = None;
         self.on_air = None;
         self.after_start(label.clone());
+        let kind = self.kind_hint.take().unwrap_or("other");
+        self.log_history(&label, kind, None, 0.0);
         self.push_metadata(&label);
         self.plugin_event("item_started", json!({ "text": label, "title": label }));
     }
@@ -951,7 +965,23 @@ impl Playout {
         self.wait_until = None;
         self.on_air_label = label.clone();
         *self.now_text.lock() = label.clone();
-        self.log_history(&label);
+    }
+
+    /// Whether a file is an advert, a jingle or a song (for the play history and reports).
+    pub fn kind_of(&self, path: &Path) -> &'static str {
+        let in_rule =
+            |adverts: bool| {
+                self.cfg.rotations.iter().filter(|r| r.adverts == adverts).any(|r| {
+                    (!r.folder.trim().is_empty() && path.starts_with(r.folder.trim())) || r.files.iter().any(|f| Path::new(f) == path)
+                })
+            };
+        if self.cfg.ads.iter().any(|a| Path::new(&a.path) == path) || in_rule(true) {
+            "advert"
+        } else if self.cfg.carts.iter().any(|c| Path::new(&c.path) == path) || in_rule(false) {
+            "jingle"
+        } else {
+            "song"
+        }
     }
 
     fn start_wait(&mut self, until: DateTime<Local>, label: String) {
@@ -1192,6 +1222,42 @@ impl Playout {
 
     /// Fill in a speech row's text: the time placeholders plus {next}, {next_artist}, {next_title},
     /// {last}, {last_artist}, {last_title} and {station}.
+    /// What a speech row will say (placeholders filled in) and with which voice settings.
+    pub fn speech_for(&self, text: &str, voice: &str, rate: i32, opts: &crate::items::SpeechOpts, row: usize) -> (String, live::Voice) {
+        let mut said = self.fill_speech(text, row);
+        if opts.spell_numbers {
+            said = live::spell_digits(&said);
+        }
+        let name = if voice.is_empty() { self.cfg.announce.voice.clone() } else { voice.to_string() };
+        (said, live::Voice { name, rate, pitch: opts.pitch, line_pause_ms: opts.line_pause_ms })
+    }
+
+    /// Render the next speech row ahead of time so it starts without a gap.
+    fn prepare_next_speech(&mut self) {
+        let Some(c) = self.current else { return };
+        let Some((i, e)) =
+            self.playlist.iter().enumerate().skip(c + 1).find(|(_, e)| !matches!(e.kind, ItemKind::Comment(_) | ItemKind::HourInfo { .. }))
+        else {
+            return;
+        };
+        let ItemKind::Tts { text, voice, rate, opts } = &e.kind else { return };
+        if self.status.total <= 0.0 || self.status.total - self.status.pos > 25.0 {
+            return;
+        }
+        let (said, v) = self.speech_for(text, voice, *rate, opts, i);
+        let key = format!("{i}|{said}");
+        if self.speech_ready == key {
+            return;
+        }
+        self.speech_ready = key;
+        let sink = self.log_sink.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = live::speech_file(&said, &v) {
+                sink.lock().push(format!("Text to speech: {e}"));
+            }
+        });
+    }
+
     pub fn fill_speech(&self, text: &str, row: usize) -> String {
         let now = Local::now();
         let mut out = live::announce_text(text, &now);
@@ -1409,6 +1475,11 @@ impl Playout {
         self.refresh_active_cues(path);
     }
 
+    /// Whether this file has cue points set by hand.
+    pub fn manual_cues_for(&self, path: &Path) -> bool {
+        self.cues.get(path).is_some_and(|c| c.manual)
+    }
+
     /// Forget hand-edited cues; smart analysis takes over again.
     pub fn clear_manual_cues(&mut self, path: &Path) {
         if let Some(w) = self.waves.get(path).cloned() {
@@ -1566,14 +1637,19 @@ impl Playout {
     }
 
     /// Fire a cart pad; pressing a pad that is already playing stops it.
-    pub fn trigger_cart(&self, idx: usize) {
+    pub fn trigger_cart(&mut self, idx: usize) {
         if let Some(p) = self.cfg.carts.get(idx).map(|c| c.path.clone()) {
             if !p.is_empty() {
                 if self.engine.stop_carts(Some(Path::new(&p)), 0.4) > 0 {
                     return;
                 }
-                if let Err(e) = self.engine.trigger_cart(Path::new(&p)) {
-                    self.say(format!("Cart error: {e}"));
+                match self.engine.trigger_cart(Path::new(&p)) {
+                    Err(e) => self.say(format!("Cart error: {e}")),
+                    Ok(()) => {
+                        // jingles from the cart wall go into the play history (and the jingle report)
+                        let t = self.entry_for(Path::new(&p)).track;
+                        self.log_history(&t.label(), "jingle", Some(&t.path), t.duration);
+                    }
                 }
             }
         }
@@ -2034,14 +2110,16 @@ impl Playout {
     }
 
     // ------------------------------------------------------ history/events
-    fn log_history(&mut self, text: &str) {
+    fn log_history(&mut self, text: &str, kind: &'static str, path: Option<&Path>, secs: f32) {
         let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let line = format!("\"{}\",\"{}\"\n", time, text.replace('"', "'"));
+        let q = |s: &str| s.replace('"', "'").replace(['\n', '\r'], " ");
+        let path = path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        let line = format!("\"{}\",\"{}\",\"{kind}\",\"{}\",\"{:.1}\"\n", time, q(text), q(&path), secs.max(0.0));
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(data_dir().join("history.csv")) {
             use std::io::Write;
             let _ = f.write_all(line.as_bytes());
         }
-        self.history.push(HistoryItem { time, text: text.to_string() });
+        self.history.push(HistoryItem { time, text: text.to_string(), kind });
         if self.history.len() > 500 {
             self.history.remove(0);
         }

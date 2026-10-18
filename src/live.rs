@@ -50,10 +50,6 @@ impl Feeder {
     pub fn send(&self, block: Vec<f32>) -> bool {
         self.tx.send(block).is_ok()
     }
-    /// Non-blocking send (drops the block if the buffer is full). False once nobody is listening.
-    pub fn try_send(&self, block: Vec<f32>) -> bool {
-        !matches!(self.tx.try_send(block), Err(TrySendError::Disconnected(_)))
-    }
     pub fn sender(&self) -> Sender<Vec<f32>> {
         self.tx.clone()
     }
@@ -334,10 +330,84 @@ pub fn announce_files(folder: &Path, now: &chrono::DateTime<chrono::Local>) -> V
     v
 }
 
-/// Speak `text` into a WAV file with the system's speech engine.
-/// `rate`: -10 (slow) … 10 (fast), 0 = normal.
+/// How the speech engine should read text.
+#[derive(Clone, Debug, Default)]
+pub struct Voice {
+    pub name: String,
+    /// -10 (slow) … 10 (fast), 0 = normal
+    pub rate: i32,
+    /// -10 (low) … 10 (high), 0 = normal
+    pub pitch: i32,
+    /// silence between lines
+    pub line_pause_ms: u32,
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Every line of `text` (blank lines dropped).
+fn speech_lines(text: &str) -> Vec<String> {
+    text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+/// "1999" → "1 9 9 9" so the voice reads the digits one by one.
+pub fn spell_digits(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    let mut prev_digit = false;
+    for c in text.chars() {
+        if c.is_ascii_digit() && prev_digit {
+            out.push(' ');
+        }
+        prev_digit = c.is_ascii_digit();
+        out.push(c);
+    }
+    out
+}
+
+/// SSML body: each line, with a pause between lines.
+fn ssml_body(text: &str, v: &Voice) -> String {
+    let joined =
+        speech_lines(text).iter().map(|l| xml_escape(l)).collect::<Vec<_>>().join(&format!("<break time=\"{}ms\"/>", v.line_pause_ms));
+    // named levels: every SSML engine (Windows SAPI included) understands these
+    let level = match v.pitch.clamp(-10, 10) {
+        -10..=-6 => "x-low",
+        -5..=-2 => "low",
+        2..=5 => "high",
+        6..=10 => "x-high",
+        _ => return joined,
+    };
+    format!("<prosody pitch=\"{level}\">{joined}</prosody>")
+}
+
+#[cfg(any(windows, test))]
+/// PowerShell's -EncodedCommand: base64 of UTF-16LE. Avoids every quoting and line-break problem.
+fn ps_encode(script: &str) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let mut out = String::with_capacity(bytes.len() * 4 / 3 + 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// Speak `text` into a WAV file with the system's speech engine. Every line is read, with
+/// `line_pause_ms` of silence between lines.
 pub fn tts_to_wav(text: &str, out: &Path, voice: &str, rate: i32) -> Result<()> {
-    let rate = rate.clamp(-10, 10);
+    speak_to_wav(text, out, &Voice { name: voice.to_string(), rate, pitch: 0, line_pause_ms: 400 })
+}
+
+pub fn speak_to_wav(text: &str, out: &Path, v: &Voice) -> Result<()> {
+    let rate = v.rate.clamp(-10, 10);
+    let voice = v.name.as_str();
+    if speech_lines(text).is_empty() {
+        return Err(anyhow!("nothing to say"));
+    }
     use std::process::Command;
     #[cfg(windows)]
     let status = {
@@ -345,40 +415,137 @@ pub fn tts_to_wav(text: &str, out: &Path, voice: &str, rate: i32) -> Result<()> 
         let q = |s: &str| s.replace('\'', "''");
         let select = if voice.trim().is_empty() { String::new() } else { format!("$s.SelectVoice('{}'); ", q(voice)) };
         let script = format!(
-            "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; {select}$s.Rate = {rate}; $s.SetOutputToWaveFile('{}'); $s.Speak('{}'); $s.Dispose()",
+            "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; {select}$s.Rate = {rate}; \
+             $s.SetOutputToWaveFile('{}'); \
+             $x = '<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"' + $s.Voice.Culture.Name + '\">{}</speak>'; \
+             $s.SpeakSsml($x); $s.Dispose()",
             q(&out.to_string_lossy()),
-            q(text)
+            q(&ssml_body(text, v))
         );
         Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &ps_encode(&script)])
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .status()?
     };
     #[cfg(target_os = "macos")]
     let status = {
+        let mut said = String::new();
+        if v.pitch != 0 {
+            said.push_str(&format!("[[pbas {:+}]] ", v.pitch.clamp(-10, 10) * 2));
+        }
+        said.push_str(&speech_lines(text).join(&format!(" [[slnc {}]] ", v.line_pause_ms)));
         let mut c = Command::new("say");
         if !voice.trim().is_empty() {
             c.args(["-v", voice]);
         }
         c.args(["-r", &(175 + rate * 15).to_string()]);
-        c.args(["--file-format=WAVE", "--data-format=LEI16@22050", "-o"]).arg(out).arg(text).status()?
+        c.args(["--file-format=WAVE", "--data-format=LEI16@22050", "-o"]).arg(out).arg(said).status()?
     };
     #[cfg(all(unix, not(target_os = "macos")))]
     let status = {
+        let body = format!("<speak>{}</speak>", ssml_body(text, &Voice { pitch: 0, ..v.clone() }));
         let run = |bin: &str| {
             let mut c = Command::new(bin);
             if !voice.trim().is_empty() {
                 c.args(["-v", voice]);
             }
             c.args(["-s", &(175 + rate * 15).to_string()]);
-            c.arg("-w").arg(out).arg(text).status()
+            c.args(["-p", &(50 + v.pitch.clamp(-10, 10) * 4).to_string()]);
+            c.arg("-m").arg("-w").arg(out).arg(&body).status()
         };
-        run("espeak-ng").or_else(|_| run("espeak")).map_err(|_| anyhow!("install espeak-ng for spoken time announcements"))?
+        run("espeak-ng").or_else(|_| run("espeak")).map_err(|_| anyhow!("install espeak-ng for text to speech"))?
     };
     if !status.success() || !out.exists() {
         return Err(anyhow!("speech engine failed"));
     }
     Ok(())
+}
+
+/// Speech rendered ahead of time, so a speech row starts without a gap. Files are named after
+/// what is said and how, so the same text is only rendered once.
+pub fn speech_file(text: &str, v: &Voice) -> Result<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (text, &v.name, v.rate, v.pitch, v.line_pause_ms).hash(&mut h);
+    let dir = crate::config::data_dir().join("tmp").join("speech");
+    std::fs::create_dir_all(&dir)?;
+    let out = dir.join(format!("{:016x}.wav", h.finish()));
+    if out.exists() {
+        return Ok(out);
+    }
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let part = dir.join(format!("{:016x}.{}.part.wav", h.finish(), N.fetch_add(1, Ordering::Relaxed)));
+    speak_to_wav(text, &part, v)?;
+    std::fs::rename(&part, &out).or_else(|_| std::fs::copy(&part, &out).map(|_| ()))?;
+    let _ = std::fs::remove_file(&part);
+    Ok(out)
+}
+
+/// Remove rendered speech older than a day.
+pub fn clean_speech_files() {
+    let dir = crate::config::data_dir().join("tmp").join("speech");
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|a| a.as_secs() > 86_400);
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+/// A speech row as audio: intro sound, the speech (repeated), outro sound, at `volume` %.
+pub fn speech_source(text: String, v: Voice, opts: crate::items::SpeechOpts, sink: LogSink) -> FeedSource {
+    let (feeder, src) = feed(64, 1);
+    thread::spawn(move || {
+        let speech = match speech_file(&text, &v) {
+            Ok(f) => f,
+            Err(e) => {
+                log(&sink, format!("Text to speech: {e}"));
+                return;
+            }
+        };
+        let gain = opts.volume.min(200) as f32 / 100.0;
+        let mut chunk = Chunker { buf: Vec::new() };
+        let play = |f: &Path, gain: f32, chunk: &mut Chunker| -> bool {
+            match open_at(f, 0.0) {
+                Ok(src) => {
+                    let mut b = Vec::with_capacity(BLOCK);
+                    for s in src {
+                        b.push(s * gain);
+                        if b.len() == BLOCK {
+                            if !chunk.push(&b, &feeder) {
+                                return false;
+                            }
+                            b.clear();
+                        }
+                    }
+                    chunk.push(&b, &feeder)
+                }
+                Err(e) => {
+                    log(&sink, format!("Text to speech {}: {e}", f.display()));
+                    true
+                }
+            }
+        };
+        let silence = |ms: u32, chunk: &mut Chunker| chunk.push(&vec![0.0; (ms as usize * SR as usize / 1000) * 2], &feeder);
+        if !opts.intro.trim().is_empty() && !play(Path::new(&opts.intro), 1.0, &mut chunk) {
+            return;
+        }
+        for k in 0..opts.repeat.clamp(1, 20) {
+            if k > 0 && !silence(opts.repeat_pause_ms, &mut chunk) {
+                return;
+            }
+            if !play(&speech, gain, &mut chunk) {
+                return;
+            }
+        }
+        if !opts.outro.trim().is_empty() && !play(Path::new(&opts.outro), 1.0, &mut chunk) {
+            return;
+        }
+        chunk.flush(&feeder);
+    });
+    src
 }
 
 /// Installed speech voices (best effort; empty if unknown).
@@ -445,6 +612,30 @@ pub fn announce_source(text: String, folder: String, voice: String, rate: i32, t
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_encoding_and_digits() {
+        assert_eq!(ps_encode("ab"), "YQBiAA==");
+        assert_eq!(ps_encode("a"), "YQA=");
+        assert_eq!(spell_digits("Call 1999 now, 7"), "Call 1 9 9 9 now, 7");
+        let b = ssml_body("Hello <you>\n\n  second line ", &Voice { line_pause_ms: 700, ..Default::default() });
+        assert_eq!(b, "Hello &lt;you&gt;<break time=\"700ms\"/>second line");
+    }
+
+    #[test]
+    fn every_line_is_spoken() {
+        if std::process::Command::new("espeak-ng").arg("--version").output().is_err() {
+            return; // no speech engine here
+        }
+        let dir = std::env::temp_dir();
+        let v = Voice { line_pause_ms: 500, ..Default::default() };
+        let one = dir.join("rm_tts_one.wav");
+        let three = dir.join("rm_tts_three.wav");
+        speak_to_wav("This is the first line.", &one, &v).unwrap();
+        speak_to_wav("This is the first line.\nHere is the second line.\nAnd the third line.", &three, &v).unwrap();
+        let len = |p: &Path| open_at(p, 0.0).unwrap().count();
+        assert!(len(&three) > len(&one) * 5 / 2, "all three lines are in the file");
+    }
 
     #[test]
     fn feed_keeps_channels_aligned_and_ends() {
