@@ -120,7 +120,6 @@ impl App {
         let p = &self.perm;
         match tab {
             Tab::Library => p.tool(tool::LIBRARY),
-            Tab::Scheduler => p.tool(tool::SCHEDULER),
             Tab::Segment => p.tool(tool::NOTEPAD),
             Tab::FileExplorer => p.tool(tool::FILE_EXPLORER),
             Tab::SongRequests => p.tool(tool::SONG_REQUESTS),
@@ -151,7 +150,6 @@ impl App {
                 // `both`: a wide tool scrolls sideways instead of pushing the panel wider
                 egui::ScrollArea::both().id_salt(("pane", pane.key())).auto_shrink([false, false]).show(ui, |ui| match tab {
                     Tab::Library => self.tab_library(ui, core),
-                    Tab::Scheduler => self.tab_scheduler(ui, core),
                     Tab::Carts => self.tab_carts(ui, core),
                     Tab::Clock => self.tab_clock(ui, core),
                     Tab::Segment => self.tab_segment(ui, core),
@@ -321,6 +319,7 @@ impl App {
         }
         let mut navigate = false;
         let mut open_ext = false;
+        let mut delete_web: Option<usize> = None;
         ui.horizontal(|ui| {
             if ui.small_button("◀").on_hover_text(tr("Back")).clicked() {
                 self.browsers.back(&key);
@@ -370,7 +369,18 @@ impl App {
                 ui.label(RichText::new(tr("Name")).small().color(GRAY));
                 ui.add(egui::TextEdit::singleline(&mut w.name).desired_width(110.0)).on_hover_text(tr("Name shown on this tab"));
             }
+            // delete this web panel (asks once)
+            if let Some(i) = tab.web_index().filter(|_| self.workzones.web.len() > 1) {
+                if super::delete_button(ui, ("web", i), tr("this web panel")) {
+                    delete_web = Some(i);
+                }
+            }
         });
+        if let Some(i) = delete_web {
+            self.workzones.remove_web(i);
+            self.web_state.remove(&key);
+            return;
+        }
         if target.trim().is_empty() {
             ui.add_space(20.0);
             ui.vertical_centered(|ui| {

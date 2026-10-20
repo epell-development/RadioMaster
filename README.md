@@ -106,6 +106,23 @@ Two-deck crossfading with smart fading and a waveform track editor (cues, fades,
 multiple outputs, 12-band EQ / compressor / leveling, ad scheduler, event scheduler, rotations, reports, metadata export,
 remote control HTTP API, station profiles, local operator accounts.
 
+## Adverts and jingles (Tools → Advertisement scheduler)
+**Rules** say what plays (an advert / jingle folder, chosen files, or the Adverts list), how often (after every N
+songs, every N minutes or hours, or at set times) and when the rule is in force (dates, days, hours). The **Adverts
+list** holds your adverts with the dates and days each may run. Rules can also be used in the playlist generator
+(as a pattern step or inserted every N minutes) and run by the Event scheduler or the `RULE <name>` command.
+
+## Event scheduler (Tools → Event scheduler, F3)
+At a set time (on chosen days and dates): generate a new playlist from a template, append one, play a rule's
+adverts / jingles, put a playlist tab on air, load an M3U, play a file, start / stop encoders, set the volume, or
+run any station command.
+
+## Streaming formats
+MP3 is built in. AAC, Opus, Ogg Vorbis and FLAC are made by [ffmpeg](https://ffmpeg.org/download.html) — put
+`ffmpeg` next to RadioMaster, in the settings folder's `ffmpeg` folder, or on the PATH, or choose it in Streams.
+**Custom encoder** runs any program you give it: it receives 16-bit 44.1 kHz stereo PCM on stdin and writes the
+stream to stdout (`{bitrate}` is replaced with the bitrate).
+
 ## Reports (Tools → Reports)
 Pick **Everything, Songs, Adverts, Jingles** or **Speech, voice & other**, a period (Today, This week, Last month…
 or any dates), and optionally only items containing a word. Click an item to see every time it played.

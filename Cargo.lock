@@ -1208,11 +1208,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "624659a2e972a46f4d5f646557906c55f1cd5a0836eddbe610fdf1afba1b4226"
 dependencies = [
  "ahash",
+ "chrono",
  "egui",
  "enum-map",
  "log",
  "mime_guess2",
  "profiling",
+ "serde",
 ]
 
 [[package]]
@@ -3696,7 +3698,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radiomaster"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "ab_glyph",
  "anyhow",

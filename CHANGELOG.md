@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.2.5 — 2026-10-20
+**New**
+- Advertisement scheduler redesigned: one list of advert and jingle rules on the left, the chosen rule
+  on the right in three steps — what plays, how often, when it's in force — plus an Adverts list where
+  each advert has its own run dates and days. Rules show whether they're in force right now
+- Rules can go off after every N songs, every N minutes or hours (on the clock, e.g. :00 and :30, or
+  counted from the last time) or at set times, and can be limited to dates, days of the week and hours
+  (22:00–06:00 works over midnight). Old song-count rules and commercial breaks are carried over
+- Playlist generator: jingle and advert rules can be pattern steps (e.g. 2 songs, a jingle) or inserted
+  by time ("every 15 min insert 1 × Station IDs"), using the generator's running-order timing; "Hour
+  marker at the top of every hour" is now a checkbox
+- Event scheduler is its own window (Tools → Event scheduler, F3) and can generate a new playlist from a
+  template, append a template, play a rule's adverts / jingles, put a playlist tab on air or run any
+  station command; events can be limited to dates and have a "Run now" button
+- Streams can be MP3 (built in), AAC, Opus, Ogg Vorbis or FLAC (made by ffmpeg), or a custom encoder —
+  any program that reads PCM and writes the stream. RadioMaster finds ffmpeg next to itself, in its
+  settings folder or on the PATH, or you can choose it
+- Date pickers (a calendar) wherever a date is entered: reports, adverts, rules, events, AzuraCast history
+- Web panels can be deleted
+- More text to speech voices: Windows 10/11 voices are listed beside the classic ones, every espeak-ng
+  language and voice variant on Linux, and all macOS voices; the voice list has a search box and loads
+  in the background
+- New station commands for plugins, the remote API and events: GENERATE / APPEND <template> and
+  RULE <rule name>
+
+**Fixed**
+- The text to speech window grew past the screen with long text and hid its buttons: the text box now
+  has a fixed height and scrolls, and every add / edit dialog keeps OK and Cancel on screen
+
+**Changed**
+- One way of doing things throughout: the same delete button (asks "Delete! / Keep" first) for rules,
+  adverts, events, categories, templates and web panels; the same day buttons (with Every day /
+  Weekdays / Weekends) and date pickers everywhere; tools open the same way from the Tools menu, the
+  quick buttons and shortcuts; the Scheduler joins the quick buttons
+
 ## v0.2.4 — 2026-10-18
 **New**
 - Reports: choose everything, songs, adverts, jingles or speech for any period (today, this week, last

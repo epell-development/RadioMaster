@@ -34,12 +34,11 @@ pub enum Tab {
 }
 impl Tab {
     /// Tabs that can go in a panel, in the order of the "+" menu.
-    pub const PANEL: [Tab; 13] = [
+    pub const PANEL: [Tab; 12] = [
         Tab::AuxPlaylist,
         Tab::TrackInfo,
         Tab::Carts,
         Tab::Search,
-        Tab::Scheduler,
         Tab::FileExplorer,
         Tab::Segment,
         Tab::Statistics,
@@ -90,7 +89,10 @@ impl Tab {
     }
     /// Tools that live in their own window instead of a panel.
     pub fn is_window_tool(self) -> bool {
-        matches!(self, Tab::Generator | Tab::Ads | Tab::Dsp | Tab::Streaming | Tab::AzuraCast | Tab::Reports | Tab::History)
+        matches!(
+            self,
+            Tab::Generator | Tab::Ads | Tab::Dsp | Tab::Streaming | Tab::AzuraCast | Tab::Reports | Tab::History | Tab::Scheduler
+        )
     }
     pub fn is_panel(self) -> bool {
         !self.is_window_tool()
@@ -274,7 +276,7 @@ impl Default for WorkzoneSet {
             v: 3,
             panels: 3,
             show_left: true,
-            left: PaneTabs::of(vec![Tab::Library, Tab::FileExplorer, Tab::Search, Tab::Scheduler, Tab::Log]),
+            left: PaneTabs::of(vec![Tab::Library, Tab::FileExplorer, Tab::Search, Tab::Log]),
             top: PaneTabs::of(vec![Tab::WebPlayout, Tab::Segment, Tab::Carts, Tab::Queue]),
             bottom: PaneTabs::of(vec![Tab::Statistics, Tab::Clock, Tab::Search]),
             split: 0.5,
@@ -360,8 +362,8 @@ impl WorkzoneSet {
             self.web[2].url = self.clock_url.trim().to_string();
             self.web[3].url = self.custom_url.trim().to_string();
         }
-        if self.web.len() < 4 {
-            self.web.resize(4, WebSite::default());
+        if self.web.is_empty() {
+            self.web.push(WebSite { name: "Web 1".into(), url: String::new() });
         }
         self.web.truncate(64);
         for (i, w) in self.web.iter_mut().enumerate() {
@@ -428,6 +430,29 @@ impl WorkzoneSet {
     }
 
     /// Open a new Additional window (with one tab to start with). Returns its id.
+    /// Delete web panel `i`: its tabs close everywhere and later panels move up one.
+    pub fn remove_web(&mut self, i: usize) {
+        if i >= self.web.len() {
+            return;
+        }
+        self.web.remove(i);
+        let fix = |p: &mut PaneTabs| {
+            p.tabs.retain(|t| t.web_index() != Some(i));
+            for t in p.tabs.iter_mut() {
+                if let Some(k) = t.web_index().filter(|k| *k > i) {
+                    *t = Tab::web(k - 1);
+                }
+            }
+            p.repair();
+        };
+        fix(&mut self.left);
+        fix(&mut self.top);
+        fix(&mut self.bottom);
+        for a in self.aux.iter_mut() {
+            fix(&mut a.pane);
+        }
+    }
+
     pub fn new_aux(&mut self, first: Tab) -> u64 {
         let id = self.next_aux.max(1);
         self.next_aux = id + 1;
@@ -494,6 +519,13 @@ mod tests {
         assert_ne!(a, b);
         s.move_tab(Pane::Top, 0, Pane::Aux(b));
         assert_eq!(s.pane(Pane::Aux(b)).unwrap().tabs, vec![Tab::Log, Tab::WebPlayout]);
+        // deleting a web panel closes its tabs and moves the later ones up
+        let mut w = WorkzoneSet::default();
+        w.web.push(WebSite { name: "Five".into(), url: String::new() });
+        w.top.tabs = vec![Tab::WebAzura, Tab::Web(4), Tab::Log];
+        w.remove_web(1);
+        assert_eq!(w.top.tabs, vec![Tab::WebCustom, Tab::Log]);
+        assert_eq!(w.web[3].name, "Five");
         assert_eq!(s.pane(Pane::Aux(b)).unwrap().selected(), Some(Tab::WebPlayout));
         s.close_aux(a);
         let mut back: WorkzoneSet = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();

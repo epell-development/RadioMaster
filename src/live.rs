@@ -410,7 +410,36 @@ pub fn speak_to_wav(text: &str, out: &Path, v: &Voice) -> Result<()> {
     }
     use std::process::Command;
     #[cfg(windows)]
-    let status = {
+    let status = if let Some(name) = voice.strip_prefix(ONECORE) {
+        // Windows 10/11 voices: Windows.Media.SpeechSynthesis (WinRT), awaited from PowerShell
+        use std::os::windows::process::CommandExt;
+        let q = |s: &str| s.replace('\'', "''");
+        let name = name.rsplit_once(" (").map(|(n, _)| n).unwrap_or(name);
+        let speed = (1.0f32 * 1.09f32.powi(rate)).clamp(0.5, 3.0);
+        let script = format!(
+            "Add-Type -AssemblyName System.Runtime.WindowsRuntime; \
+             $null = [Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media.SpeechSynthesis,ContentType=WindowsRuntime]; \
+             $null = [Windows.Storage.Streams.DataReader,Windows.Storage.Streams,ContentType=WindowsRuntime]; \
+             $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {{ $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }})[0]; \
+             function Wait-Op($op, [Type]$t) {{ $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $null = $task.Wait(-1); $task.Result }}; \
+             $s = New-Object Windows.Media.SpeechSynthesis.SpeechSynthesizer; \
+             $v = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | Where-Object {{ $_.DisplayName -eq '{}' }} | Select-Object -First 1; \
+             if ($v) {{ $s.Voice = $v }}; \
+             try {{ $s.Options.SpeakingRate = {speed:.2} }} catch {{ }}; \
+             $x = '<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"' + $s.Voice.Language + '\">{}</speak>'; \
+             $st = Wait-Op ($s.SynthesizeSsmlToStreamAsync($x)) ([Windows.Media.SpeechSynthesis.SpeechSynthesisStream]); \
+             $r = New-Object Windows.Storage.Streams.DataReader($st.GetInputStreamAt(0)); \
+             $n = [uint32]$st.Size; $null = Wait-Op ($r.LoadAsync($n)) ([uint32]); \
+             $b = New-Object byte[] $n; $r.ReadBytes($b); [IO.File]::WriteAllBytes('{}', $b)",
+            q(name),
+            q(&ssml_body(text, v)),
+            q(&out.to_string_lossy())
+        );
+        Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &ps_encode(&script)])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status()?
+    } else {
         use std::os::windows::process::CommandExt;
         let q = |s: &str| s.replace('\'', "''");
         let select = if voice.trim().is_empty() { String::new() } else { format!("$s.SelectVoice('{}'); ", q(voice)) };
@@ -548,25 +577,101 @@ pub fn speech_source(text: String, v: Voice, opts: crate::items::SpeechOpts, sin
     src
 }
 
-/// Installed speech voices (best effort; empty if unknown).
-pub fn list_voices() -> Vec<String> {
+/// Voices from the newer Windows speech system (Windows 10/11 "OneCore" voices) are listed with this
+/// prefix; they are spoken through Windows.Media.SpeechSynthesis instead of System.Speech.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const ONECORE: &str = "Windows: ";
+
+/// Installed speech voices (filled in the background the first time it is asked for; empty until then).
+pub fn voices() -> Vec<String> {
+    static V: std::sync::OnceLock<Arc<Mutex<Option<Vec<String>>>>> = std::sync::OnceLock::new();
+    let mut first = false;
+    let cell = V.get_or_init(|| {
+        first = true;
+        Arc::new(Mutex::new(None))
+    });
+    if first {
+        let c = cell.clone();
+        thread::spawn(move || {
+            let list = list_voices();
+            *c.lock() = Some(list);
+        });
+    }
+    cell.lock().clone().unwrap_or_default()
+}
+
+/// espeak-ng's `--voices` table → voice names, plus the voice variants (male/female/…) for English.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+pub fn parse_espeak_voices(table: &str, variants: &str) -> Vec<String> {
+    let col = |l: &str, i: usize| l.split_whitespace().nth(i).map(|s| s.to_string());
+    let mut out: Vec<String> = table.lines().skip(1).filter_map(|l| col(l, 1)).collect();
+    out.dedup();
+    let vars: Vec<String> =
+        variants.lines().skip(1).filter_map(|l| l.split_whitespace().find(|t| t.starts_with("!v/")).map(|f| f[3..].to_string())).collect();
+    for base in ["en", "en-us", "en-gb"] {
+        if out.iter().any(|v| v == base) {
+            for v in &vars {
+                out.push(format!("{base}+{v}"));
+            }
+        }
+    }
+    out
+}
+
+/// `say -v ?` → voice names (names can contain spaces; the language code follows them).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn parse_say_voices(list: &str) -> Vec<String> {
+    list.lines()
+        .filter_map(|l| {
+            let head = l.split('#').next()?.trim_end();
+            let (name, lang) = head.rsplit_once(char::is_whitespace)?;
+            (lang.contains('_') || lang.contains('-')).then(|| name.trim().to_string())
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+fn list_voices() -> Vec<String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let script = format!(
+            "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object {{ $_.VoiceInfo.Name }}; \
+             try {{ $null = [Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media.SpeechSynthesis,ContentType=WindowsRuntime]; \
+             [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | ForEach-Object {{ '{ONECORE}' + $_.DisplayName + ' (' + $_.Language + ')' }} }} catch {{ }}"
+        );
         let out = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }",
-            ])
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &ps_encode(&script)])
             .creation_flags(0x0800_0000)
             .output();
         if let Ok(o) = out {
-            return String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+            let mut v: Vec<String> =
+                String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+            v.dedup();
+            return v;
+        }
+        Vec::new()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("say").args(["-v", "?"]).output() {
+            Ok(o) => parse_say_voices(&String::from_utf8_lossy(&o.stdout)),
+            Err(_) => Vec::new(),
         }
     }
-    Vec::new()
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let run = |args: &[&str]| -> Option<String> {
+            ["espeak-ng", "espeak"]
+                .iter()
+                .find_map(|b| std::process::Command::new(b).args(args).output().ok())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        };
+        match run(&["--voices"]) {
+            Some(t) => parse_espeak_voices(&t, &run(&["--voices=variant"]).unwrap_or_default()),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// Time announcement as a playable source. Uses recorded files if `folder` has them, otherwise speech.
@@ -620,6 +725,15 @@ mod tests {
         assert_eq!(spell_digits("Call 1999 now, 7"), "Call 1 9 9 9 now, 7");
         let b = ssml_body("Hello <you>\n\n  second line ", &Voice { line_pause_ms: 700, ..Default::default() });
         assert_eq!(b, "Hello &lt;you&gt;<break time=\"700ms\"/>second line");
+    }
+
+    #[test]
+    fn voice_lists_are_read() {
+        let t = "Pty Language       Age/Gender VoiceName          File                 Other Languages\n 5  af              --/M      Afrikaans          gmw/af\n 2  en              --/M      English (Great Britain) gmw/en   (en 2)\n";
+        let v = "Pty Language       Age/Gender VoiceName          File                 Other Languages\n 5  variant         --/M      Adam               !v/adam\n 5  variant         --/F      Alicia             !v/Alicia\n";
+        assert_eq!(parse_espeak_voices(t, v), vec!["af", "en", "en+adam", "en+Alicia"]);
+        let say = "Alex                en_US    # Most people recognize me by my voice.\nBad News            en_US    # The light you see\nAmélie              fr_CA    # Bonjour\n";
+        assert_eq!(parse_say_voices(say), vec!["Alex", "Bad News", "Amélie"]);
     }
 
     #[test]

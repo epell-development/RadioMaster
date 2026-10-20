@@ -3,7 +3,7 @@
 ; Output: dist\RadioMaster-Setup-<version>.exe
 
 #ifndef AppVersion
-  #define AppVersion "0.2.4"
+  #define AppVersion "0.2.5"
 #endif
 
 #define AppName "RadioMaster"

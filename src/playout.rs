@@ -3,7 +3,7 @@
 //! automation keeps working even when the window is minimized.
 
 use crate::azuracast::{self, AzuraState};
-use crate::config::{data_dir, AdBreak, AzuraConfig, Config};
+use crate::config::{data_dir, AzuraConfig, Config};
 use crate::dsp::DspConfig;
 use crate::engine::{CueSpec, Engine, Status};
 use crate::fade::{smart_cues, Cues, FadeMode, Waveform};
@@ -195,11 +195,14 @@ pub struct Playout {
     /// kind of the item being started (for the play history), when the file alone can't tell
     kind_hint: Option<&'static str>,
     fired: HashMap<usize, String>,
-    songs_since: Vec<u32>,
+    /// songs since each song-count rule last went off (by rule id)
+    songs_since: HashMap<u64, u32>,
     pub notify: Arc<Mutex<String>>,
     last_save: Instant,
     dsp_shared: DspConfig,
-    fired_ads: HashMap<usize, String>,
+    /// minute each timed rule last went off (so it fires once), and when
+    rule_fired: HashMap<u64, String>,
+    rule_last: HashMap<u64, DateTime<Local>>,
     auto_check: Instant,
     /// cue points per file (manual from the track editor, or computed by smart fading)
     pub cues: HashMap<PathBuf, Cues>,
@@ -298,13 +301,14 @@ impl Playout {
             history: vec![],
             kind_hint: None,
             fired: HashMap::new(),
-            songs_since: vec![],
+            songs_since: HashMap::new(),
             notify: Arc::new(Mutex::new(String::new())),
             last_save: Instant::now(),
             plugin_hour: chrono::Timelike::hour(&Local::now()),
             enc_states: vec![],
             dsp_shared,
-            fired_ads: HashMap::new(),
+            rule_fired: HashMap::new(),
+            rule_last: HashMap::new(),
             auto_check: Instant::now(),
             cues,
             cues_dirty: false,
@@ -431,21 +435,21 @@ impl Playout {
             .collect();
         for (i, e) in due {
             self.fired.insert(i, key.clone());
-            self.exec(&e);
+            self.run_event(&e);
         }
 
-        // ad breaks
-        let breaks: Vec<(usize, AdBreak)> = self
+        // timed advert / jingle rules (every N minutes, set times)
+        let timed: Vec<crate::config::AdRule> = self
             .cfg
-            .ad_breaks
+            .ad_rules
             .iter()
-            .enumerate()
-            .filter(|(i, b)| b.due(&now) && self.fired_ads.get(i) != Some(&key))
-            .map(|(i, b)| (i, b.clone()))
+            .filter(|r| self.rule_fired.get(&r.id) != Some(&key) && r.due_now(&now, self.rule_last.get(&r.id).copied()))
+            .cloned()
             .collect();
-        for (i, b) in breaks {
-            self.fired_ads.insert(i, key.clone());
-            self.fire_ad_break(&b, &now);
+        for r in timed {
+            self.rule_fired.insert(r.id, key.clone());
+            self.rule_last.insert(r.id, now);
+            self.fire_rule(r.id, None);
         }
 
         // DSP settings → engine
@@ -1340,6 +1344,28 @@ impl Playout {
                     None => self.say(format!("PLAYLIST: no playlist called \"{name}\"")),
                 }
             }
+            Some("GENERATE") | Some("APPEND") => {
+                // GENERATE <template> = new playlist, APPEND <template> = add after the playlist
+                let append = words.first().is_some_and(|w| w.eq_ignore_ascii_case("APPEND"));
+                let name = rest(1);
+                match self.cfg.templates.iter().find(|t| t.name.eq_ignore_ascii_case(name.trim())).map(|t| t.name.clone()) {
+                    Some(n) => {
+                        let k = self.generate_playlist(&n, append);
+                        self.say(format!("{k} tracks from template '{n}'"));
+                    }
+                    None => self.say(format!("{}: no template called \"{name}\"", if append { "APPEND" } else { "GENERATE" })),
+                }
+            }
+            Some("JINGLES") | Some("ADVERTS") | Some("RULE") => {
+                // RULE <name>: queue that advert / jingle rule's files after the song on air
+                let name = rest(1);
+                match self.cfg.ad_rules.iter().find(|r| r.name.eq_ignore_ascii_case(name.trim())).map(|r| r.id) {
+                    Some(id) => {
+                        self.fire_rule(id, None);
+                    }
+                    None => self.say(format!("RULE: no advert / jingle rule called \"{name}\"")),
+                }
+            }
             Some("RUN") => {
                 let line = rest(1);
                 thread::spawn(move || {
@@ -1515,8 +1541,19 @@ impl Playout {
     }
 
     /// The files a song-count rule plays from.
-    fn rotation_pool(r: &crate::config::Rotation) -> Vec<PathBuf> {
-        if !r.files.is_empty() {
+    /// Files a rule can choose from: the Adverts list (only adverts in their dates and days),
+    /// the hand-picked files, or the folder.
+    fn rule_pool(&self, r: &crate::config::AdRule) -> Vec<PathBuf> {
+        if r.adverts && r.use_ad_list {
+            let now = Local::now();
+            self.cfg
+                .ads
+                .iter()
+                .filter(|a| a.active(&now) && !a.path.is_empty())
+                .map(|a| PathBuf::from(&a.path))
+                .filter(|p| p.exists())
+                .collect()
+        } else if !r.files.is_empty() {
             r.files.iter().map(PathBuf::from).filter(|p| p.exists()).collect()
         } else if !r.folder.trim().is_empty() {
             library::audio_files_in(Path::new(&r.folder))
@@ -1525,53 +1562,73 @@ impl Playout {
         }
     }
 
+    /// Whether a file belongs to an advert / jingle rule or the Adverts list (those don't count as songs).
+    fn is_rule_file(&self, path: &Path) -> bool {
+        self.cfg.ads.iter().any(|a| Path::new(&a.path) == path)
+            || self
+                .cfg
+                .ad_rules
+                .iter()
+                .any(|r| (!r.folder.trim().is_empty() && path.starts_with(r.folder.trim())) || r.files.iter().any(|f| Path::new(f) == path))
+    }
+
+    /// Run rule `id` now: pick its files and put them after `after` (or after the on-air row).
+    /// Returns how many were queued.
+    pub fn fire_rule(&mut self, id: u64, after: Option<usize>) -> usize {
+        use crate::config::RotPick;
+        let Some(k) = self.cfg.ad_rules.iter().position(|r| r.id == id) else { return 0 };
+        let r = self.cfg.ad_rules[k].clone();
+        let pool = self.rule_pool(&r);
+        if pool.is_empty() {
+            self.say(format!("{}: nothing to play (check its folder / files)", r.name));
+            return 0;
+        }
+        let want = (r.count.max(1) as usize).min(pool.len());
+        let picked: Vec<PathBuf> = match r.pick {
+            RotPick::All => pool.clone(),
+            RotPick::Random => pool.choose_multiple(&mut rand::thread_rng(), want).cloned().collect(),
+            RotPick::InOrder => {
+                let start = r.next % pool.len();
+                let v: Vec<PathBuf> = (0..want).map(|j| pool[(start + j) % pool.len()].clone()).collect();
+                self.cfg.ad_rules[k].next = (start + want) % pool.len();
+                v
+            }
+        };
+        let n = picked.len();
+        let rows: Vec<PlEntry> = picked.iter().map(|p| self.entry_for(p)).collect();
+        let at = after.or(self.current).map(|c| c + 1).unwrap_or(0);
+        self.insert_rows(at, rows);
+        self.say(format!("{}: {n} {} queued", r.name, if r.adverts { "advert(s)" } else { "jingle(s)" }));
+        n
+    }
+
     /// Song-count rules: after every N songs, insert adverts / jingles after the row that just started.
     fn apply_rotations(&mut self, idx: usize, t: &Track) {
-        use crate::config::RotPick;
-        let n_rules = self.cfg.rotations.len();
-        if self.songs_since.len() < n_rules {
-            self.songs_since.resize(n_rules, 0);
-        }
+        use crate::config::Trigger;
         // an advert or jingle doesn't count as a song
-        let is_rot = self
-            .cfg
-            .rotations
-            .iter()
-            .any(|r| (!r.folder.is_empty() && t.path.starts_with(&r.folder)) || r.files.iter().any(|f| Path::new(f) == t.path));
-        if is_rot {
+        if self.is_rule_file(&t.path) {
             return;
         }
-        let mut insert: Vec<PlEntry> = vec![];
-        for k in 0..n_rules {
-            let r = self.cfg.rotations[k].clone();
-            if !r.enabled {
-                continue;
+        let now = Local::now();
+        let due: Vec<u64> = self
+            .cfg
+            .ad_rules
+            .iter()
+            .filter(|r| r.trigger == Trigger::Songs && r.in_force(&now))
+            .filter_map(|r| {
+                let c = self.songs_since.entry(r.id).or_insert(0);
+                *c += 1;
+                (*c >= r.every_songs.max(1)).then_some(r.id)
+            })
+            .collect();
+        // later rules go after earlier ones
+        let mut after = idx;
+        for id in due {
+            let n = self.fire_rule(id, Some(after));
+            if n > 0 {
+                self.songs_since.insert(id, 0);
+                after += n;
             }
-            self.songs_since[k] += 1;
-            if self.songs_since[k] < r.every_n.max(1) {
-                continue;
-            }
-            let pool = Self::rotation_pool(&r);
-            if pool.is_empty() {
-                continue;
-            }
-            self.songs_since[k] = 0;
-            let want = (r.count.max(1) as usize).min(pool.len());
-            let picked: Vec<PathBuf> = match r.pick {
-                RotPick::All => pool.clone(),
-                RotPick::Random => pool.choose_multiple(&mut rand::thread_rng(), want).cloned().collect(),
-                RotPick::InOrder => {
-                    let start = r.next % pool.len();
-                    let v: Vec<PathBuf> = (0..want).map(|j| pool[(start + j) % pool.len()].clone()).collect();
-                    self.cfg.rotations[k].next = (start + want) % pool.len();
-                    v
-                }
-            };
-            self.say(format!("{}: {} after this song", r.name, picked.len()));
-            insert.extend(picked.iter().map(|p| self.entry_for(p)));
-        }
-        if !insert.is_empty() {
-            self.insert_rows(idx + 1, insert);
         }
     }
 
@@ -1952,7 +2009,12 @@ impl Playout {
         if self.handles[i].as_ref().map(|h| h.is_running()).unwrap_or(false) {
             return;
         }
-        self.handles[i] = Some(EncoderHandle::start(self.cfg.encoders[i].clone(), self.engine.clone(), self.now_text.clone()));
+        self.handles[i] = Some(EncoderHandle::start(
+            self.cfg.encoders[i].clone(),
+            self.engine.clone(),
+            self.now_text.clone(),
+            self.cfg.ffmpeg_path.clone(),
+        ));
     }
 
     pub fn stop_encoder(&mut self, i: usize) {
@@ -1991,7 +2053,22 @@ impl Playout {
             self.say(format!("Template '{name}' not found"));
             return 0;
         };
-        let tracks = crate::generator::generate(&tpl, &self.cfg.categories, &self.library);
+        // advert / jingle rules used as pattern steps or markers: their files join the pool
+        let mut lib = self.library.clone();
+        let mut preset: HashMap<String, Vec<usize>> = HashMap::new();
+        for src in tpl.pattern.iter().map(|p| &p.category).chain(tpl.markers.iter().map(|m| &m.category)) {
+            let Some(id) = src.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) else { continue };
+            if preset.contains_key(src) {
+                continue;
+            }
+            let Some(r) = self.cfg.ad_rules.iter().find(|r| r.id == id).cloned() else { continue };
+            let start = lib.len();
+            for p in self.rule_pool(&r) {
+                lib.push(self.entry_for(&p).track);
+            }
+            preset.insert(src.clone(), (start..lib.len()).collect());
+        }
+        let tracks = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset);
         let n = tracks.len();
         if n == 0 {
             self.say("Generator produced nothing — scan the library and check category filters");
@@ -2027,17 +2104,6 @@ impl Playout {
             self.playlist.push(PlEntry::file(tr));
         }
         n
-    }
-
-    fn fire_ad_break(&mut self, br: &AdBreak, now: &DateTime<Local>) {
-        let limit = if br.max_ads == 0 { usize::MAX } else { br.max_ads as usize };
-        let paths: Vec<PathBuf> =
-            self.cfg.ads.iter().filter(|a| a.active(now) && !a.path.is_empty()).map(|a| PathBuf::from(&a.path)).take(limit).collect();
-        if paths.is_empty() {
-            return;
-        }
-        self.say(format!("Ad break '{}': {} spot(s) queued", br.name, paths.len()));
-        self.insert_next(paths);
     }
 
     fn export_now(&self, t: &Track) {
@@ -2126,7 +2192,7 @@ impl Playout {
         self.log_sink.lock().push(format!("Started: {text}"));
     }
 
-    fn exec(&mut self, e: &Event) {
+    pub fn run_event(&mut self, e: &Event) {
         let xf = self.cfg.crossfade_secs;
         self.say(format!("Scheduler: {}", e.name));
         match e.action {
@@ -2143,6 +2209,22 @@ impl Playout {
             ActionKind::StartEncoder => self.start_encoder(e.arg as usize),
             ActionKind::StopEncoder => self.stop_encoder(e.arg as usize),
             ActionKind::SetVolume => self.set_volume(e.arg.clamp(0.0, 1.0)),
+            ActionKind::GenerateReplace | ActionKind::GenerateAppend => {
+                let append = e.action == ActionKind::GenerateAppend;
+                let was_playing = self.state == PlayState::Playing;
+                let n = self.generate_playlist(e.path.trim(), append);
+                if n > 0 {
+                    self.say(format!("Scheduler: {n} tracks from template '{}'", e.path.trim()));
+                    if !append && was_playing {
+                        self.play_index(0, xf); // a fresh playlist carries on playing
+                    }
+                }
+            }
+            ActionKind::RunRule => {
+                self.fire_rule(e.arg as u64, None);
+            }
+            ActionKind::SwitchPlaylist => self.run_command(&format!("PLAYLIST {}", e.path.trim())),
+            ActionKind::Command => self.run_command(e.path.trim()),
         }
     }
 }
@@ -2173,7 +2255,7 @@ mod tests {
 
     #[test]
     fn adverts_every_n_songs_in_order() {
-        use crate::config::{RotPick, Rotation};
+        use crate::config::{AdRule, RotPick};
         let mut p = playout();
         let dir = std::env::temp_dir().join("rm_test_ads");
         let _ = std::fs::create_dir_all(&dir);
@@ -2184,12 +2266,13 @@ mod tests {
                 f.to_string_lossy().to_string()
             })
             .collect();
-        p.cfg.rotations = vec![Rotation {
+        p.cfg.ad_rules = vec![AdRule {
+            id: 7,
             name: "Adverts".into(),
             enabled: true,
             adverts: true,
             files: ads.clone(),
-            every_n: 2,
+            every_songs: 2,
             count: 2,
             pick: RotPick::InOrder,
             ..Default::default()

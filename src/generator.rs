@@ -52,7 +52,9 @@ fn pool(cat: &Category, lib: &[Track]) -> Vec<usize> {
     v
 }
 
-pub fn generate(t: &Template, cats: &[Category], lib: &[Track]) -> Vec<Track> {
+/// Build the tracks for template `t`. `preset` gives ready-made pools (indexes into `lib`) for
+/// sources that aren't categories, e.g. "rule:3" = the files of advert / jingle rule 3.
+pub fn generate(t: &Template, cats: &[Category], lib: &[Track], preset: &HashMap<String, Vec<usize>>) -> Vec<Track> {
     let mut out: Vec<Track> = vec![];
     if t.pattern.is_empty() {
         return out;
@@ -61,7 +63,14 @@ pub fn generate(t: &Template, cats: &[Category], lib: &[Track]) -> Vec<Track> {
     let mut bags: HashMap<String, Bag> = HashMap::new();
     let get_bag = |name: &str, bags: &mut HashMap<String, Bag>| {
         if !bags.contains_key(name) {
-            let idx = cats.iter().find(|c| c.name == name).map(|c| pool(c, lib)).unwrap_or_default();
+            let idx = match preset.get(name) {
+                Some(v) => {
+                    let mut v = v.clone();
+                    v.shuffle(&mut rand::thread_rng());
+                    v
+                }
+                None => cats.iter().find(|c| c.name == name).map(|c| pool(c, lib)).unwrap_or_default(),
+            };
             bags.insert(name.to_string(), Bag { idx, pos: 0 });
         }
     };
@@ -85,9 +94,11 @@ pub fn generate(t: &Template, cats: &[Category], lib: &[Track]) -> Vec<Track> {
                 for (k, m) in t.markers.iter().enumerate() {
                     if total >= marker_next[k] {
                         get_bag(&m.category, &mut bags);
-                        if let Some(j) = bags.get_mut(&m.category).and_then(|b| b.next(lib, &VecDeque::new())) {
-                            total += lib[j].duration.max(1.0);
-                            out.push(lib[j].clone());
+                        for _ in 0..m.count.max(1) {
+                            if let Some(j) = bags.get_mut(&m.category).and_then(|b| b.next(lib, &VecDeque::new())) {
+                                total += lib[j].duration.max(1.0);
+                                out.push(lib[j].clone());
+                            }
                         }
                         marker_next[k] += m.every_mins.max(1) as f32 * 60.0;
                     }
@@ -145,11 +156,11 @@ mod tests {
             name: "t".into(),
             minutes: 60,
             pattern: vec![PatternItem { category: "Music".into(), count: 3 }],
-            markers: vec![Marker { category: "Jingles".into(), every_mins: 15 }],
+            markers: vec![Marker { category: "Jingles".into(), every_mins: 15, count: 1 }],
             artist_gap: 4,
             hour_markers: false,
         };
-        let out = generate(&t, &cats(), &lib());
+        let out = generate(&t, &cats(), &lib(), &HashMap::new());
         let total: f32 = out.iter().map(|t| t.duration).sum();
         assert!(total >= 3600.0 && total < 3600.0 + 400.0, "total {total}");
         assert!(out.iter().any(|t| t.path.starts_with("/jingles")));
@@ -164,6 +175,23 @@ mod tests {
     #[test]
     fn empty_pool_terminates() {
         let t = Template { pattern: vec![PatternItem { category: "Nope".into(), count: 2 }], ..Default::default() };
-        assert!(generate(&t, &cats(), &lib()).is_empty());
+        assert!(generate(&t, &cats(), &lib(), &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn jingle_rules_can_be_markers_and_steps() {
+        let lib = lib();
+        // "rule:1" = the five jingles (indexes 40..45)
+        let preset: HashMap<String, Vec<usize>> = [("rule:1".to_string(), (40..45).collect())].into();
+        let t = Template {
+            minutes: 60,
+            pattern: vec![PatternItem { category: "Music".into(), count: 2 }, PatternItem { category: "rule:1".into(), count: 1 }],
+            markers: vec![Marker { category: "rule:1".into(), every_mins: 30, count: 2 }],
+            ..Default::default()
+        };
+        let out = generate(&t, &cats(), &lib, &preset);
+        let jingles = out.iter().filter(|t| t.path.starts_with("/jingles")).count();
+        let songs = out.len() - jingles;
+        assert!(jingles >= songs / 2 + 2, "a jingle after every 2 songs plus 2 every half hour ({jingles} for {songs} songs)");
     }
 }

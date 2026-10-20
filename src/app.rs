@@ -1,6 +1,6 @@
 use crate::azuracast::Client;
 use crate::browser::Browsers;
-use crate::config::{data_dir, Ad, AdBreak, CartPad, Category, Marker, PatternItem, ServerKind, Template};
+use crate::config::{data_dir, CartPad, Category, Marker, PatternItem, ServerKind, Template};
 use crate::dsp::EQ_FREQS;
 use crate::i18n::tr;
 use crate::items::PlEntry;
@@ -99,6 +99,7 @@ enum Dlg {
     SaveReport(PathBuf),
     AnnounceFolder(PathBuf),
     ContainerFiles(Vec<PathBuf>),
+    FfmpegPath(PathBuf),
     /// (outro?, file) for a speech row
     SpeechSound(bool, PathBuf),
     TrackListSource(PathBuf),
@@ -125,6 +126,8 @@ enum PlAct {
 #[path = "tools.rs"]
 mod tools;
 use tools::ToolWin;
+#[path = "adsui.rs"]
+mod adsui;
 #[path = "aztool.rs"]
 mod aztool;
 #[path = "panes.rs"]
@@ -202,6 +205,9 @@ pub struct App {
     mic_paused: bool,
     tpl_sel: usize,
     rep: reportui::RepUi,
+    /// where ffmpeg was found (None = look again)
+    ffmpeg_found: Option<Option<String>>,
+    ads: adsui::AdsUi,
     workzones: WorkzoneSet,
     saved_layout: String,
     browsers: Browsers,
@@ -241,7 +247,6 @@ pub struct App {
     about_tab: usize,
     find_text: String,
     find_focus: bool,
-    voices: Vec<String>,
     fullscreen: bool,
     az: aztool::AzTool,
     show_settings: bool,
@@ -272,6 +277,65 @@ pub struct App {
     art_rx: Option<mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>>,
 }
 
+/// The one delete button used everywhere: 🗑, then "Delete!" / "Keep" so nothing goes by accident.
+/// Returns true once the deletion is confirmed.
+pub(super) fn delete_button(ui: &mut egui::Ui, id: impl std::hash::Hash, what: &str) -> bool {
+    let ask = egui::Id::new(("delete_ask", id));
+    let mut yes = false;
+    if ui.data(|d| d.get_temp::<bool>(ask)).unwrap_or(false) {
+        if ui.small_button(RichText::new(tr("Delete!")).color(RED)).clicked() {
+            ui.data_mut(|d| d.remove::<bool>(ask));
+            yes = true;
+        }
+        if ui.small_button(tr("Keep")).clicked() {
+            ui.data_mut(|d| d.remove::<bool>(ask));
+        }
+    } else if ui.small_button("🗑").on_hover_text(format!("{} {what}", tr("Delete"))).clicked() {
+        ui.data_mut(|d| d.insert_temp(ask, true));
+    }
+    yes
+}
+
+/// A date as "YYYY-MM-DD" text with a calendar button. `optional`: empty means "no limit" and a
+/// ✖ clears it. Returns true when it changed.
+pub(super) fn date_edit(ui: &mut egui::Ui, id: impl std::hash::Hash, value: &mut String, optional: bool) -> bool {
+    let parsed = chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").ok();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        match parsed {
+            Some(mut d) => {
+                if ui
+                    .add(egui_extras::DatePickerButton::new(&mut d).id_salt(&format!("{:?}", egui::Id::new(&id))).calendar_week(false))
+                    .changed()
+                {
+                    *value = d.format("%Y-%m-%d").to_string();
+                    changed = true;
+                }
+                if optional && ui.small_button("✖").on_hover_text(tr("No date limit")).clicked() {
+                    value.clear();
+                    changed = true;
+                }
+            }
+            None if optional && value.trim().is_empty() => {
+                if ui.button(format!("📅 {}", tr("any date"))).on_hover_text(tr("Click to pick a date")).clicked() {
+                    *value = Local::now().format("%Y-%m-%d").to_string();
+                    changed = true;
+                }
+            }
+            None => {
+                // typed something that isn't a date: let it be fixed by hand, or reset to today
+                changed |= ui.add(egui::TextEdit::singleline(value).desired_width(90.0).hint_text("YYYY-MM-DD")).changed();
+                if ui.small_button("📅").on_hover_text(tr("Today")).clicked() {
+                    *value = Local::now().format("%Y-%m-%d").to_string();
+                    changed = true;
+                }
+            }
+        }
+    });
+    changed
+}
+
 fn fmt(secs: f32) -> String {
     let s = secs.max(0.0) as u64;
     if s >= 3600 {
@@ -285,6 +349,29 @@ fn name_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, opt
     egui::ComboBox::from_id_salt(id).selected_text(cur.clone()).width(130.0).show_ui(ui, |ui| {
         for o in opts {
             ui.selectable_value(cur, o.clone(), o);
+        }
+    });
+}
+
+/// Where generator tracks come from: a category, or the files of an advert / jingle rule
+/// (stored as "rule:<id>"). `rules` = (id, name, adverts).
+fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)]) {
+    let shown = match cur.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) {
+        Some(rid) => rules.iter().find(|r| r.0 == rid).map(|r| format!("⚡ {}", r.1)).unwrap_or_else(|| tr("(deleted rule)").to_string()),
+        None => cur.clone(),
+    };
+    egui::ComboBox::from_id_salt(id).selected_text(shown).width(170.0).show_ui(ui, |ui| {
+        ui.label(RichText::new(tr("Categories")).small().color(GRAY));
+        for o in cats {
+            ui.selectable_value(cur, o.clone(), o);
+        }
+        if !rules.is_empty() {
+            ui.separator();
+            ui.label(RichText::new(tr("Jingles & adverts (their rule's files)")).small().color(GRAY));
+            for (rid, name, adverts) in rules {
+                let tag = if *adverts { tr("advert") } else { tr("jingle") };
+                ui.selectable_value(cur, format!("rule:{rid}"), format!("⚡ {name}  ({tag})"));
+            }
         }
     });
 }
@@ -363,6 +450,8 @@ impl App {
             mic_paused: false,
             tpl_sel: 0,
             rep: Default::default(),
+            ffmpeg_found: None,
+            ads: Default::default(),
             workzones,
             saved_layout: String::new(),
             browsers: Browsers::new(),
@@ -400,7 +489,6 @@ impl App {
             about_tab: 0,
             find_text: String::new(),
             find_focus: false,
-            voices: vec![],
             fullscreen: false,
             az: Default::default(),
             show_settings: false,
@@ -513,7 +601,7 @@ impl App {
                 }
                 Dlg::AzUpload(v) => self.az_upload_here(core, v),
                 Dlg::RotFiles(i, v) => {
-                    if let Some(r) = core.cfg.rotations.get_mut(i) {
+                    if let Some(r) = core.cfg.ad_rules.get_mut(i) {
                         r.files.extend(v.iter().map(|p| p.to_string_lossy().to_string()));
                     }
                 }
@@ -539,6 +627,10 @@ impl App {
                     core.say(msg.clone());
                     self.rep.msg = msg;
                 }
+                Dlg::FfmpegPath(p) => {
+                    core.cfg.ffmpeg_path = p.to_string_lossy().to_string();
+                    self.ffmpeg_found = None;
+                }
                 Dlg::LibFolder(p) => {
                     core.cfg.library_folders.push(p.to_string_lossy().to_string());
                     core.start_scan();
@@ -556,7 +648,7 @@ impl App {
                     }
                 }
                 Dlg::RotFolder(i, p) => {
-                    if let Some(r) = core.cfg.rotations.get_mut(i) {
+                    if let Some(r) = core.cfg.ad_rules.get_mut(i) {
                         r.folder = p.to_string_lossy().to_string();
                     }
                 }
@@ -680,7 +772,7 @@ impl App {
                     });
                     ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel")).on_hover_text(tr("Ctrl+L"));
                     ui.separator();
-                    for (tab, key) in [(Tab::FileExplorer, "F1"), (Tab::Search, "F2"), (Tab::Scheduler, "F3")] {
+                    for (tab, key) in [(Tab::FileExplorer, "F1"), (Tab::Search, "F2")] {
                         if ui.add(egui::Button::new(self.tab_name(tab)).shortcut_text(key)).clicked() {
                             self.workzones.show_left = true;
                             self.workzones.left.add(tab);
@@ -705,6 +797,7 @@ impl App {
                         ToolWin::FadeEditor,
                         ToolWin::Generator,
                         ToolWin::Ads,
+                        ToolWin::Scheduler,
                         ToolWin::AudioFx,
                         ToolWin::Streams,
                         ToolWin::AzuraCast,
@@ -715,6 +808,7 @@ impl App {
                     ] {
                         let sc = match w {
                             ToolWin::Generator => "Ctrl+G",
+                            ToolWin::Scheduler => "F3",
                             ToolWin::AudioFx => "F4",
                             ToolWin::Notepad => "T",
                             _ => "",
@@ -727,11 +821,7 @@ impl App {
                             .on_disabled_hover_text(tr("Your account isn't allowed to use this tool"))
                             .clicked()
                         {
-                            if w == ToolWin::FadeEditor {
-                                self.open_fade_editor(core, None);
-                            } else {
-                                self.open_tool(w);
-                            }
+                            self.launch_tool(core, w);
                             ui.close_menu();
                         }
                     }
@@ -819,16 +909,13 @@ impl App {
                     (ToolWin::FadeEditor, "Track editor"),
                     (ToolWin::Generator, "Generator"),
                     (ToolWin::Ads, "Ads"),
+                    (ToolWin::Scheduler, "Scheduler"),
                     (ToolWin::AudioFx, "Audio FX"),
                     (ToolWin::Streams, "Streams"),
                     (ToolWin::AzuraCast, "AzuraCast"),
                 ] {
                     if ui.add_enabled(w.allowed(&self.perm), egui::Button::new(tr(short))).on_hover_text(tr(w.label())).clicked() {
-                        if w == ToolWin::FadeEditor {
-                            self.open_fade_editor(core, None);
-                        } else {
-                            self.open_tool(w);
-                        }
+                        self.launch_tool(core, w);
                     }
                 }
                 ui.separator();
@@ -2074,37 +2161,100 @@ impl App {
     }
 
     fn tab_scheduler(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        if ui.button(tr("➕ Add event")).clicked() {
-            core.cfg.events.push(Event::default());
-        }
+        ui.horizontal(|ui| {
+            if ui.button(tr("➕ Add event")).clicked() {
+                core.cfg.events.push(Event::default());
+            }
+            ui.label(
+                RichText::new(tr(
+                    "Things that happen at a set time: a new playlist from a template, adverts, a playlist going on air, encoders, volume…",
+                ))
+                .small()
+                .color(GRAY),
+            );
+        });
+        ui.add_space(4.0);
         let mut del = None;
+        let mut run_now = None;
         let n_enc = core.cfg.encoders.len();
+        let templates: Vec<String> = core.cfg.templates.iter().map(|t| t.name.clone()).collect();
+        let rules: Vec<(u64, String)> = core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone())).collect();
+        let tabs: Vec<String> = core.tabs.iter().map(|t| t.name.clone()).collect();
+        let now = Local::now();
         egui::ScrollArea::vertical().show(ui, |ui| {
+            if core.cfg.events.is_empty() {
+                ui.label(RichText::new(tr("No events yet.")).color(GRAY));
+            }
             for i in 0..core.cfg.events.len() {
                 let e = &mut core.cfg.events[i];
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut e.enabled, "");
-                        ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(160.0));
+                        ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(170.0));
+                        ui.label(tr("at"));
                         ui.add(egui::DragValue::new(&mut e.hour).range(0..=23).custom_formatter(|v, _| format!("{:02}", v as u32)));
                         ui.label(":");
                         ui.add(egui::DragValue::new(&mut e.minute).range(0..=59).custom_formatter(|v, _| format!("{:02}", v as u32)));
-                        for (d, l) in e.days.iter_mut().zip(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]) {
-                            ui.checkbox(d, l);
+                        if ui.button(tr("▶ Run now")).on_hover_text(tr("Do it now, as a test")).clicked() {
+                            run_now = Some(i);
                         }
-                        if ui.button("🗑").clicked() {
+                        if delete_button(ui, ("event", i), tr("this event")) {
                             del = Some(i);
                         }
                     });
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt(("act", i)).selected_text(e.action.label()).width(230.0).show_ui(ui, |ui| {
-                            for a in ActionKind::ALL {
-                                ui.selectable_value(&mut e.action, a, a.label());
+                    adsui::days_edit(ui, &mut e.days);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(tr("Dates"));
+                        date_edit(ui, ("ev_from", i), &mut e.from_date, true);
+                        ui.label(tr("to"));
+                        date_edit(ui, ("ev_to", i), &mut e.to_date, true);
+                        let mut probe = e.clone();
+                        probe.hour = now.hour();
+                        probe.minute = now.minute();
+                        if e.enabled && !probe.due(&now) {
+                            ui.label(RichText::new(tr("○ not today")).small().color(AMBER));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(tr("Do")).strong());
+                        egui::ComboBox::from_id_salt(("act", i)).selected_text(tr(e.action.label())).width(290.0).height(400.0).show_ui(
+                            ui,
+                            |ui| {
+                                for a in ActionKind::ALL {
+                                    ui.selectable_value(&mut e.action, a, tr(a.label()));
+                                }
+                            },
+                        );
+                        if e.action.needs_template() {
+                            if templates.iter().all(|t| *t != e.path) {
+                                e.path = templates.first().cloned().unwrap_or_default();
                             }
-                        });
-                        if e.action.needs_path() {
-                            ui.add(egui::TextEdit::singleline(&mut e.path).desired_width(360.0));
-                            if ui.button(tr("Browse…")).clicked() {
+                            name_combo(ui, ("ev_tpl", i), &mut e.path, &templates);
+                        } else if e.action == ActionKind::RunRule {
+                            let shown = rules
+                                .iter()
+                                .find(|r| r.0 == e.arg as u64)
+                                .map(|r| r.1.clone())
+                                .unwrap_or_else(|| tr("pick a rule").to_string());
+                            egui::ComboBox::from_id_salt(("ev_rule", i)).selected_text(shown).width(180.0).show_ui(ui, |ui| {
+                                for (id, name) in &rules {
+                                    if ui.selectable_label(e.arg as u64 == *id, name).clicked() {
+                                        e.arg = *id as f32;
+                                    }
+                                }
+                            });
+                        } else if e.action == ActionKind::SwitchPlaylist {
+                            name_combo(ui, ("ev_tab", i), &mut e.path, &tabs);
+                        } else if e.action == ActionKind::Command {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut e.path)
+                                    .desired_width(260.0)
+                                    .hint_text("VOLUME 80 · ENCODER START 1 · RULE Jingles"),
+                            );
+                        } else if e.action.needs_path() {
+                            ui.add(egui::TextEdit::singleline(&mut e.path).desired_width(300.0));
+                            if ui.button("…").on_hover_text(tr("Browse")).clicked() {
                                 let pl = e.action == ActionKind::LoadPlaylistAndPlay;
                                 self.dlg(move || {
                                     let d = rfd::FileDialog::new();
@@ -2119,19 +2269,22 @@ impl App {
                         }
                         if e.action.needs_arg() {
                             if e.action == ActionKind::SetVolume {
-                                ui.add(egui::Slider::new(&mut e.arg, 0.0..=1.0));
+                                ui.add(egui::Slider::new(&mut e.arg, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
                             } else {
-                                let mut k = e.arg as usize;
-                                ui.label(tr("encoder #"));
-                                ui.add(egui::DragValue::new(&mut k).range(0..=n_enc.saturating_sub(1)));
-                                e.arg = k as f32;
-                                ui.label(RichText::new(tr("(0 = first)")).small().color(GRAY));
+                                let mut k = e.arg as usize + 1;
+                                ui.label(tr("encoder"));
+                                ui.add(egui::DragValue::new(&mut k).range(1..=n_enc.max(1)));
+                                e.arg = (k - 1) as f32;
                             }
                         }
                     });
                 });
             }
         });
+        if let Some(i) = run_now {
+            let e = core.cfg.events[i].clone();
+            core.run_event(&e);
+        }
         if let Some(i) = del {
             core.cfg.events.remove(i);
         }
@@ -2266,9 +2419,43 @@ impl App {
 
     fn tab_streaming(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let mut act: Option<(usize, &'static str)> = None;
-        if ui.button(tr("➕ Add encoder")).clicked() {
-            core.add_encoder();
-        }
+        let needs_ffmpeg =
+            core.cfg.encoders.iter().any(|e| !matches!(e.format, crate::config::StreamFormat::Mp3 | crate::config::StreamFormat::Custom));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr("➕ Add encoder")).clicked() {
+                core.add_encoder();
+            }
+            ui.separator();
+            // ffmpeg makes AAC / Opus / Vorbis / FLAC streams
+            ui.label(RichText::new("ffmpeg").strong());
+            let found = self
+                .ffmpeg_found
+                .get_or_insert_with(|| crate::stream::find_ffmpeg(&core.cfg.ffmpeg_path).map(|p| p.display().to_string()))
+                .clone();
+            match found {
+                Some(p) => {
+                    ui.label(RichText::new(format!("✔ {p}")).small().color(GREEN));
+                }
+                None => {
+                    ui.label(
+                        RichText::new(if needs_ffmpeg {
+                            tr("✖ not found — needed for AAC, Opus, Vorbis and FLAC streams")
+                        } else {
+                            tr("not found (only needed for formats other than MP3)")
+                        })
+                        .small()
+                        .color(if needs_ffmpeg { RED } else { GRAY }),
+                    );
+                    ui.hyperlink_to(tr("get ffmpeg"), "https://ffmpeg.org/download.html");
+                }
+            }
+            if ui.small_button(tr("Choose…")).on_hover_text(tr("Pick the ffmpeg program")).clicked() {
+                self.dlg(|| rfd::FileDialog::new().pick_file().map(Dlg::FfmpegPath));
+            }
+            if ui.small_button("⟳").on_hover_text(tr("Look again")).clicked() {
+                self.ffmpeg_found = None;
+            }
+        });
         egui::ScrollArea::vertical().show(ui, |ui| {
             for i in 0..core.cfg.encoders.len() {
                 let (txt, col, running, bytes) = match &core.handles[i] {
@@ -2303,11 +2490,50 @@ impl App {
                             ui.label(tr("Port"));
                             ui.add(egui::DragValue::new(&mut enc.port).range(1..=65535));
                             ui.end_row();
+                            ui.label(tr("Format"));
+                            {
+                                use crate::config::StreamFormat;
+                                let before = enc.format;
+                                egui::ComboBox::from_id_salt(("fmt", i)).width(230.0).selected_text(tr(enc.format.label())).show_ui(ui, |ui| {
+                                    for f in StreamFormat::ALL {
+                                        ui.selectable_value(&mut enc.format, f, tr(f.label()));
+                                    }
+                                });
+                                if enc.format != before {
+                                    // follow the format in the mount point's ending (/radio.mp3 → /radio.opus)
+                                    let (old, new) = (before.extension(), enc.format.extension());
+                                    if !old.is_empty() && !new.is_empty() && enc.mount.ends_with(old) {
+                                        enc.mount = format!("{}{new}", &enc.mount[..enc.mount.len() - old.len()]);
+                                    }
+                                }
+                            }
+                            ui.label(RichText::new(match (enc.kind, enc.format) {
+                                (ServerKind::Shoutcast, f) if !matches!(f, crate::config::StreamFormat::Mp3 | crate::config::StreamFormat::Aac | crate::config::StreamFormat::Custom) => tr("⚠ Shoutcast only takes MP3 or AAC"),
+                                (_, crate::config::StreamFormat::Opus | crate::config::StreamFormat::Vorbis | crate::config::StreamFormat::Flac) => tr("Ogg: some servers show titles only for MP3/AAC"),
+                                _ => "",
+                            }).small().color(AMBER));
+                            ui.label("");
+                            ui.end_row();
+                            if enc.format == crate::config::StreamFormat::Custom {
+                                ui.label(tr("Command"));
+                                ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.command).hint_text("ffmpeg -f s16le -ar 44100 -ac 2 -i - … -"));
+                                ui.label(tr("Content type"));
+                                ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.content_type).hint_text("audio/aac"));
+                                ui.end_row();
+                                ui.label("");
+                                ui.label(
+                                    RichText::new(tr("The program gets 16-bit 44.1 kHz stereo PCM on its input and must write the stream to its output. {bitrate} = the bitrate in kbps."))
+                                        .small()
+                                        .color(GRAY),
+                                );
+                                ui.end_row();
+                            }
                             ui.label(tr("Mount"));
                             ui.add_sized([230.0, 26.0], egui::TextEdit::singleline(&mut enc.mount));
                             ui.label(tr("Bitrate (kbps)"));
                             egui::ComboBox::from_id_salt(("br", i)).selected_text(enc.bitrate_kbps.to_string()).show_ui(ui, |ui| {
-                                for b in [64, 96, 128, 160, 192, 256, 320] {
+                                let low: &[u32] = if enc.format == crate::config::StreamFormat::Mp3 { &[] } else { &[24, 32, 48] };
+                                for &b in low.iter().chain(&[64, 96, 128, 160, 192, 256, 320]) {
                                     ui.selectable_value(&mut enc.bitrate_kbps, b, b.to_string());
                                 }
                             });
@@ -2555,6 +2781,8 @@ impl App {
     fn tab_generator(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let cat_names: Vec<String> = core.cfg.categories.iter().map(|c| c.name.clone()).collect();
         let tpl_names: Vec<String> = core.cfg.templates.iter().map(|t| t.name.clone()).collect();
+        let rules: Vec<(u64, String, bool)> = core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone(), r.adverts)).collect();
+        let first_jingle = rules.iter().find(|r| !r.2).map(|r| format!("rule:{}", r.0));
         let mut gen: Option<(String, bool)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.strong(tr("Auto-playlist"));
@@ -2583,7 +2811,7 @@ impl App {
                     ui.add(egui::DragValue::new(&mut c.min_secs).range(0.0..=3600.0).suffix("s"));
                     ui.label("–");
                     ui.add(egui::DragValue::new(&mut c.max_secs).range(0.0..=7200.0).suffix("s"));
-                    if ui.small_button("🗑").clicked() {
+                    if delete_button(ui, ("category", i), tr("this category")) {
                         del = Some(i);
                     }
                 });
@@ -2624,7 +2852,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(format!("{}.", k + 1));
                         ui.add(egui::DragValue::new(&mut p.count).range(1..=20).suffix(" ×"));
-                        name_combo(ui, ("pat", k), &mut p.category, &cat_names);
+                        source_combo(ui, ("pat", k), &mut p.category, &cat_names, &rules);
                         if ui.small_button("✖").clicked() {
                             pdel = Some(k);
                         }
@@ -2636,14 +2864,19 @@ impl App {
                 if ui.button(tr("➕ Add pattern step")).clicked() {
                     t.pattern.push(PatternItem::default());
                 }
-                ui.label(RichText::new(tr("Markers (jingles / ads / hour markers inserted at intervals):")).color(GRAY));
+                ui.label(
+                    RichText::new(tr("Jingles, adverts and other inserts by time (counted along the generated running order):"))
+                        .color(GRAY),
+                );
                 let mut mdel = None;
                 for (k, m) in t.markers.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(tr("every"));
                         ui.add(egui::DragValue::new(&mut m.every_mins).range(1..=600).suffix(" min"));
-                        ui.label(tr("insert from"));
-                        name_combo(ui, ("mk", k), &mut m.category, &cat_names);
+                        ui.label(tr("insert"));
+                        ui.add(egui::DragValue::new(&mut m.count).range(1..=10).suffix(" ×"));
+                        ui.label(tr("from"));
+                        source_combo(ui, ("mk", k), &mut m.category, &cat_names, &rules);
                         if ui.small_button("✖").clicked() {
                             mdel = Some(k);
                         }
@@ -2652,9 +2885,20 @@ impl App {
                 if let Some(k) = mdel {
                     t.markers.remove(k);
                 }
-                if ui.button(tr("➕ Add marker")).clicked() {
-                    t.markers.push(Marker::default());
-                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(first_jingle.is_some(), egui::Button::new(tr("➕ Add jingles")))
+                        .on_hover_text(tr("Uses the files of a jingle rule (Advertisement scheduler) every 15 minutes"))
+                        .on_disabled_hover_text(tr("Make a jingle rule in the Advertisement scheduler first, or add a Jingles category"))
+                        .clicked()
+                    {
+                        t.markers.push(Marker { category: first_jingle.clone().unwrap_or_default(), every_mins: 15, count: 1 });
+                    }
+                    if ui.button(tr("➕ Add insert")).clicked() {
+                        t.markers.push(Marker::default());
+                    }
+                    ui.checkbox(&mut t.hour_markers, tr("Hour marker at the top of every hour"));
+                });
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new(tr("▶ Generate (replace playlist)")).color(GREEN)).clicked() {
                         gen = Some((t.name.clone(), false));
@@ -2662,7 +2906,7 @@ impl App {
                     if ui.button(tr("Append to playlist")).clicked() {
                         gen = Some((t.name.clone(), true));
                     }
-                    if ui.button(tr("🗑 Delete template")).clicked() {
+                    if delete_button(ui, ("template", self.tpl_sel), tr("this template")) {
                         del_tpl = true;
                     }
                 });
@@ -2677,110 +2921,6 @@ impl App {
                 core.say(format!("Generated {c} tracks from '{n}'"));
             }
         }
-    }
-
-    /// Song-count rules: "after every 5 songs play 2 adverts" (and the same for jingles).
-    fn rotation_rules_ui(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        use crate::config::RotPick;
-        ui.strong(tr("Every N songs"));
-        ui.label(
-            RichText::new(tr(
-                "After every N songs, these are added straight after the song that is starting. Adverts and jingles don't count as songs.",
-            ))
-            .small()
-            .color(GRAY),
-        );
-        let mut rdel = None;
-        for i in 0..core.cfg.rotations.len() {
-            let r = &mut core.cfg.rotations[i];
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut r.enabled, "");
-                    ui.add(egui::TextEdit::singleline(&mut r.name).desired_width(110.0));
-                    ui.selectable_value(&mut r.adverts, true, tr("Adverts"));
-                    ui.selectable_value(&mut r.adverts, false, tr("Jingles"));
-                    ui.label(tr("· every"));
-                    ui.add(egui::DragValue::new(&mut r.every_n).range(1..=100));
-                    ui.label(tr("songs play"));
-                    if r.pick == RotPick::All {
-                        ui.label(tr("all of them"));
-                    } else {
-                        ui.add(egui::DragValue::new(&mut r.count).range(1..=20));
-                    }
-                    if ui.small_button("🗑").on_hover_text(tr("Delete this rule")).clicked() {
-                        rdel = Some(i);
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(tr("Which:"));
-                    ui.radio_value(&mut r.pick, RotPick::Random, tr("random"));
-                    ui.radio_value(&mut r.pick, RotPick::InOrder, tr("in order (takes turns)"));
-                    ui.radio_value(&mut r.pick, RotPick::All, tr("all"));
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(tr("From:"));
-                    if r.files.is_empty() {
-                        ui.add(egui::TextEdit::singleline(&mut r.folder).desired_width(240.0).hint_text(tr("folder")));
-                        if ui.button(tr("Folder…")).clicked() {
-                            self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::RotFolder(i, p)));
-                        }
-                        ui.label(tr("or"));
-                    }
-                    if ui.button(tr("Choose files…")).clicked() {
-                        self.dlg(move || {
-                            rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(|v| Dlg::RotFiles(i, v))
-                        });
-                    }
-                });
-                if !r.files.is_empty() {
-                    let mut fdel = None;
-                    let mut up = None;
-                    for (k, f) in r.files.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            if ui.small_button("✖").clicked() {
-                                fdel = Some(k);
-                            }
-                            if k > 0 && ui.small_button("⬆").on_hover_text(tr("Play earlier (in order)")).clicked() {
-                                up = Some(k);
-                            }
-                            let name = std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                            let mark = if r.pick == RotPick::InOrder && k == r.next % r.files.len().max(1) { "▶ " } else { "" };
-                            ui.label(format!("{mark}{name}"));
-                        });
-                    }
-                    if let Some(k) = fdel {
-                        r.files.remove(k);
-                    }
-                    if let Some(k) = up {
-                        r.files.swap(k, k - 1);
-                    }
-                    ui.label(
-                        RichText::new(tr("These files are used instead of a folder. Remove them all to go back to a folder."))
-                            .small()
-                            .color(GRAY),
-                    );
-                }
-            });
-        }
-        if let Some(i) = rdel {
-            core.cfg.rotations.remove(i);
-        }
-        ui.horizontal(|ui| {
-            if ui.button(tr("➕ Advert rule")).clicked() {
-                core.cfg.rotations.push(crate::config::Rotation {
-                    name: "Adverts".into(),
-                    adverts: true,
-                    every_n: 5,
-                    count: 2,
-                    enabled: true,
-                    ..Default::default()
-                });
-            }
-            if ui.button(tr("➕ Jingle rule")).clicked() {
-                core.cfg.rotations.push(crate::config::Rotation { enabled: true, ..Default::default() });
-            }
-        });
     }
 
     fn tab_plugins(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
@@ -2874,72 +3014,6 @@ impl App {
                 .color(GRAY),
         );
         ui.label(RichText::new(tr("Plugins run with your account's rights — only add ones you trust.")).small().color(AMBER));
-    }
-
-    fn tab_ads(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            self.rotation_rules_ui(ui, core);
-            ui.separator();
-            ui.strong(tr("Commercials at set times"));
-            let mut del = None;
-            for i in 0..core.cfg.ads.len() {
-                let a: &mut Ad = &mut core.cfg.ads[i];
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut a.enabled, "");
-                    ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(110.0));
-                    ui.add(egui::TextEdit::singleline(&mut a.path).desired_width(280.0).hint_text(tr("audio file")));
-                    if ui.button("…").clicked() {
-                        self.dlg(move || {
-                            rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::AdPath(i, p))
-                        });
-                    }
-                    ui.label(tr("from"));
-                    ui.add(egui::TextEdit::singleline(&mut a.start_date).desired_width(80.0).hint_text(tr("YYYY-MM-DD")));
-                    ui.label(tr("to"));
-                    ui.add(egui::TextEdit::singleline(&mut a.end_date).desired_width(80.0).hint_text(tr("YYYY-MM-DD")));
-                    for (d, l) in a.days.iter_mut().zip(["M", "T", "W", "T", "F", "S", "S"]) {
-                        ui.checkbox(d, l);
-                    }
-                    if ui.small_button("🗑").clicked() {
-                        del = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = del {
-                core.cfg.ads.remove(i);
-            }
-            if ui.button(tr("➕ Add commercial")).clicked() {
-                core.cfg.ads.push(Ad::default());
-            }
-            ui.separator();
-            ui.strong(tr("Commercial breaks  (queues the active ads right after the current track)"));
-            let mut del = None;
-            for i in 0..core.cfg.ad_breaks.len() {
-                let b: &mut AdBreak = &mut core.cfg.ad_breaks[i];
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut b.enabled, "");
-                    ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(110.0));
-                    ui.add(egui::DragValue::new(&mut b.hour).range(0..=23).custom_formatter(|v, _| format!("{:02}", v as u32)));
-                    ui.label(":");
-                    ui.add(egui::DragValue::new(&mut b.minute).range(0..=59).custom_formatter(|v, _| format!("{:02}", v as u32)));
-                    for (d, l) in b.days.iter_mut().zip(["M", "T", "W", "T", "F", "S", "S"]) {
-                        ui.checkbox(d, l);
-                    }
-                    ui.label(tr("max spots"));
-                    ui.add(egui::DragValue::new(&mut b.max_ads).range(0..=50));
-                    ui.label(RichText::new(tr("(0 = all)")).small().color(GRAY));
-                    if ui.small_button("🗑").clicked() {
-                        del = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = del {
-                core.cfg.ad_breaks.remove(i);
-            }
-            if ui.button(tr("➕ Add break")).clicked() {
-                core.cfg.ad_breaks.push(AdBreak::default());
-            }
-        });
     }
 
     fn tab_dsp(&mut self, ui: &mut egui::Ui, core: &mut Playout) {

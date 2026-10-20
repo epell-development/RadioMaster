@@ -1097,8 +1097,8 @@ impl App {
         }
         ui.horizontal(|ui| {
             ui.label(tr("Day"));
-            let r = ui.add(egui::TextEdit::singleline(&mut self.az.history_date).desired_width(100.0));
-            if r.lost_focus() || ui.button(tr("Show")).clicked() {
+            let picked = super::date_edit(ui, "az_history_date", &mut self.az.history_date, false);
+            if picked || ui.button(tr("Show")).clicked() {
                 self.az_fetch(core, "history");
             }
         });

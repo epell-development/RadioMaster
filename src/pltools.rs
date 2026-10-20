@@ -302,6 +302,9 @@ impl App {
         let (mut ok, mut cancel) = (false, false);
         let title = if d.edit.is_some() { d.kind.title().replace("Add", "Edit") } else { d.kind.title().to_string() };
         Self::window_for(ctx, &title, [460.0, 300.0]).id(egui::Id::new("item_dlg")).collapsible(false).open(&mut open).show(ctx, |ui| {
+            // the fields scroll; OK / Cancel always stay on screen
+            let max_h = (ui.ctx().screen_rect().height() - 220.0).max(160.0);
+            egui::ScrollArea::vertical().id_salt("item_dlg_scroll").max_height(max_h).show(ui, |ui| {
             egui::Grid::new("item_dlg_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                 let name_row = |ui: &mut egui::Ui, d: &mut ItemDlg, hint: &str| {
                     ui.label(tr("Name"));
@@ -361,16 +364,7 @@ impl App {
                         ui.label(RichText::new(format!("Now: \"{}\"  ·  {{h12}} {{h24}} {{mm}} {{ampm}} {{time}}", crate::live::announce_text(&a.template, &Local::now()))).small().color(GRAY));
                         ui.end_row();
                         ui.label(tr("Voice"));
-                        if self.voices.is_empty() {
-                            ui.add(egui::TextEdit::singleline(&mut a.voice).hint_text(tr("default voice")).desired_width(300.0));
-                        } else {
-                            egui::ComboBox::from_id_salt("tts_voice").width(300.0).selected_text(if a.voice.is_empty() { "Default".to_string() } else { a.voice.clone() }).show_ui(ui, |ui| {
-                                ui.selectable_value(&mut a.voice, String::new(), tr("Default"));
-                                for v in &self.voices {
-                                    ui.selectable_value(&mut a.voice, v.clone(), v);
-                                }
-                            });
-                        }
+                        voice_picker(ui, "tts_voice", &mut a.voice, tr("Default"));
                         ui.end_row();
                         ui.label(tr("Recordings"));
                         ui.horizontal(|ui| {
@@ -481,7 +475,15 @@ impl App {
                     }
                     DlgKind::Tts => {
                         ui.label(tr("Say"));
-                        ui.add(egui::TextEdit::multiline(&mut d.text).desired_rows(3).desired_width(300.0).hint_text("That was {last}. Coming up: {next}."));
+                        // a fixed-height box that scrolls: long text never pushes the buttons off screen
+                        egui::ScrollArea::vertical().id_salt("tts_text").max_height(110.0).min_scrolled_height(110.0).show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut d.text)
+                                    .desired_rows(5)
+                                    .desired_width(330.0)
+                                    .hint_text("That was {last}. Coming up: {next}."),
+                            );
+                        });
                         ui.end_row();
                         ui.label("");
                         ui.label(
@@ -491,19 +493,7 @@ impl App {
                         );
                         ui.end_row();
                         ui.label(tr("Voice"));
-                        if self.voices.is_empty() {
-                            ui.add(egui::TextEdit::singleline(&mut d.voice).hint_text(tr("same as time announcements")).desired_width(300.0));
-                        } else {
-                            egui::ComboBox::from_id_salt("tts_item_voice")
-                                .width(300.0)
-                                .selected_text(if d.voice.is_empty() { "Same as time announcements".to_string() } else { d.voice.clone() })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut d.voice, String::new(), tr("Same as time announcements"));
-                                    for v in &self.voices {
-                                        ui.selectable_value(&mut d.voice, v.clone(), v);
-                                    }
-                                });
-                        }
+                        voice_picker(ui, "tts_item_voice", &mut d.voice, tr("Same as time announcements"));
                         ui.end_row();
                         ui.label(tr("Speed"));
                         ui.add(egui::Slider::new(&mut d.rate, -10..=10).text(tr("slower ↔ faster")));
@@ -559,6 +549,7 @@ impl App {
                         name_row(ui, &mut d, "shown in the playlist (optional)");
                     }
                 }
+            });
             });
             if !d.err.is_empty() {
                 ui.colored_label(RED, &d.err);
@@ -873,15 +864,9 @@ impl App {
             self.open_item_dlg(DlgKind::Teaser);
         }
         if item(ui, edit, tr("Add time announcement…"), "") {
-            if self.voices.is_empty() {
-                self.voices = crate::live::list_voices();
-            }
             self.open_item_dlg(DlgKind::TimeAnnounce);
         }
         if item(ui, edit, tr("Add text to speech…"), "Alt+T") {
-            if self.voices.is_empty() {
-                self.voices = crate::live::list_voices();
-            }
             self.open_item_dlg(DlgKind::Tts);
         }
         if item(ui, edit, tr("Add comment…"), "Alt+W") {
@@ -1048,9 +1033,6 @@ impl App {
                 self.open_item_dlg(DlgKind::Command);
             }
             if press(Modifiers::ALT, Key::T) {
-                if self.voices.is_empty() {
-                    self.voices = crate::live::list_voices();
-                }
                 self.open_item_dlg(DlgKind::Tts);
             }
             if press(Modifiers::COMMAND, Key::P) {
@@ -1150,11 +1132,14 @@ impl App {
         if press(Modifiers::COMMAND, Key::L) {
             self.workzones.show_left = !self.workzones.show_left;
         }
-        for (k, tab) in [(Key::F1, Tab::FileExplorer), (Key::F2, Tab::Search), (Key::F3, Tab::Scheduler)] {
+        for (k, tab) in [(Key::F1, Tab::FileExplorer), (Key::F2, Tab::Search)] {
             if press(Modifiers::NONE, k) {
                 self.workzones.show_left = true;
                 self.workzones.left.add(tab);
             }
+        }
+        if press(Modifiers::NONE, Key::F3) {
+            self.open_tool(ToolWin::Scheduler);
         }
         if press(Modifiers::NONE, Key::F4) {
             self.open_tool(ToolWin::AudioFx);
@@ -1253,3 +1238,29 @@ pub(super) const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
 ];
+
+/// Voice choice with a search box (there can be hundreds of voices). `none` = the empty choice.
+pub(super) fn voice_picker(ui: &mut egui::Ui, id: &str, voice: &mut String, none: &str) {
+    let voices = crate::live::voices();
+    if voices.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(voice).hint_text(none).desired_width(260.0));
+            ui.spinner().on_hover_text(tr("Looking for the computer's voices…"));
+        });
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+        return;
+    }
+    let fid = egui::Id::new(("voice_filter", id));
+    let mut filter: String = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
+    let shown = if voice.is_empty() { none.to_string() } else { voice.clone() };
+    egui::ComboBox::from_id_salt(id).width(330.0).height(360.0).selected_text(shown).show_ui(ui, |ui| {
+        ui.add(egui::TextEdit::singleline(&mut filter).hint_text(tr("🔍 search voices")).desired_width(300.0));
+        ui.label(RichText::new(format!("{} {}", voices.len(), tr("voices on this computer"))).small().color(GRAY));
+        ui.selectable_value(voice, String::new(), none);
+        let f = filter.to_lowercase();
+        for v in voices.iter().filter(|v| f.is_empty() || v.to_lowercase().contains(&f)) {
+            ui.selectable_value(voice, v.clone(), v);
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(fid, filter));
+}

@@ -17,10 +17,11 @@ pub(super) enum ToolWin {
     History,
     Notepad,
     Plugins,
+    Scheduler,
 }
 
 impl ToolWin {
-    pub(super) const ALL: [ToolWin; 10] = [
+    pub(super) const ALL: [ToolWin; 11] = [
         ToolWin::FadeEditor,
         ToolWin::Generator,
         ToolWin::Ads,
@@ -31,6 +32,7 @@ impl ToolWin {
         ToolWin::History,
         ToolWin::Notepad,
         ToolWin::Plugins,
+        ToolWin::Scheduler,
     ];
     /// Whether an operator with these permissions may open this tool.
     pub(super) fn allowed(self, p: &crate::auth::Perms) -> bool {
@@ -43,6 +45,7 @@ impl ToolWin {
             ToolWin::AzuraCast => p.tool(tool::AZURACAST),
             ToolWin::AudioFx => p.tool(tool::AUDIO_FX),
             ToolWin::Plugins => p.tool(tool::PLUGINS),
+            ToolWin::Scheduler => p.tool(tool::SCHEDULER),
             ToolWin::Reports => p.tool(tool::REPORTS),
             ToolWin::History => p.tool(tool::HISTORY),
             ToolWin::Notepad => p.tool(tool::NOTEPAD),
@@ -61,6 +64,7 @@ impl ToolWin {
             ToolWin::History => "Play history",
             ToolWin::Notepad => "Notepad",
             ToolWin::Plugins => "Plugins",
+            ToolWin::Scheduler => "Event scheduler",
         }
     }
     pub(super) fn icon(self) -> &'static str {
@@ -75,13 +79,14 @@ impl ToolWin {
             ToolWin::History => "📜",
             ToolWin::Notepad => "📝",
             ToolWin::Plugins => "🔌",
+            ToolWin::Scheduler => "⏰",
         }
     }
     fn size(self) -> [f32; 2] {
         match self {
             ToolWin::FadeEditor => [1060.0, 620.0],
             ToolWin::Generator => [820.0, 560.0],
-            ToolWin::Ads => [860.0, 440.0],
+            ToolWin::Ads => [1000.0, 600.0],
             ToolWin::AudioFx => [760.0, 560.0],
             ToolWin::Streams => [820.0, 520.0],
             ToolWin::AzuraCast => [900.0, 560.0],
@@ -89,6 +94,7 @@ impl ToolWin {
             ToolWin::History => [560.0, 480.0],
             ToolWin::Notepad => [560.0, 460.0],
             ToolWin::Plugins => [720.0, 520.0],
+            ToolWin::Scheduler => [900.0, 560.0],
         }
     }
 }
@@ -227,6 +233,15 @@ impl App {
         }
     }
 
+    /// Open a tool from a menu or button. The track editor starts on the selected (or on-air) track.
+    pub(super) fn launch_tool(&mut self, core: &mut Playout, w: ToolWin) {
+        if w == ToolWin::FadeEditor && w.allowed(&self.perm) {
+            self.open_fade_editor(core, None);
+        } else {
+            self.open_tool(w);
+        }
+    }
+
     pub(super) fn open_tool(&mut self, w: ToolWin) {
         if w.allowed(&self.perm) {
             self.tool_open.insert(w);
@@ -346,6 +361,10 @@ impl App {
                         self.tab_reports(ui, core); // has its own scrolling list
                         return;
                     }
+                    if w == ToolWin::Ads {
+                        self.tab_ads(ui, core); // list + editor, each scrolling
+                        return;
+                    }
                     egui::ScrollArea::both().id_salt(("tool_scroll", w as u8)).auto_shrink([false, false]).show(ui, |ui| match w {
                         ToolWin::Generator => self.tab_generator(ui, core),
                         ToolWin::Ads => self.tab_ads(ui, core),
@@ -353,6 +372,7 @@ impl App {
                         ToolWin::Streams => self.tab_streaming(ui, core),
                         ToolWin::Notepad => self.tab_segment(ui, core),
                         ToolWin::Plugins => self.tab_plugins(ui, core),
+                        ToolWin::Scheduler => self.tab_scheduler(ui, core),
                         ToolWin::AzuraCast => {}
                         ToolWin::Reports => self.tab_reports(ui, core),
                         ToolWin::History => self.tab_history(ui, core),

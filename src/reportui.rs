@@ -208,9 +208,9 @@ impl App {
         // ---- when
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tr("Period")).strong());
-            ui.add(egui::TextEdit::singleline(&mut self.rep.from).desired_width(84.0).hint_text("YYYY-MM-DD"));
+            super::date_edit(ui, "rep_from", &mut self.rep.from, false);
             ui.label("–");
-            ui.add(egui::TextEdit::singleline(&mut self.rep.to).desired_width(84.0).hint_text("YYYY-MM-DD"));
+            super::date_edit(ui, "rep_to", &mut self.rep.to, false);
             let today = Local::now().date_naive();
             let month_start = today.with_day(1).unwrap_or(today);
             let last_month_end = month_start - chrono::Duration::days(1);
