@@ -5,10 +5,55 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# a new push to a pull request cancels the run for the older commit
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Quick checks that need no full build: formatting, versions, generated files, icons, the website, the workflows.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Formatting (cargo fmt)
+        run: cargo fmt --check
+      - name: Same version in Cargo.toml, Cargo.lock, the installer and CHANGELOG.md
+        run: python3 tools/check_versions.py
+      - name: Generated files are up to date (updates page, translation template)
+        run: |
+          python3 tools/build_updates.py
+          python3 tools/extract_strings.py
+          git diff --exit-code -- site lang || {
+            echo "::error::Run python3 tools/build_updates.py and python3 tools/extract_strings.py, then commit the result."
+            exit 1
+          }
+      - name: Translations are valid JSON
+        run: for f in lang/*.json; do python3 -m json.tool "$f" >/dev/null || { echo "::error file=$f::not valid JSON"; exit 1; }; done
+      - name: Every icon character can be drawn
+        run: |
+          cargo fetch --locked
+          pip install --quiet fonttools
+          python3 tools/check_glyphs.py
+      - name: Website links
+        run: |
+          mkdir -p site/img
+          cp docs/screenshots/*.png assets/icon.png docs/social-card.png site/img/
+          python3 tools/check_site.py
+      - name: Workflow files (actionlint)
+        run: |
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
+          ./actionlint -color
+
   test-linux:
     runs-on: ubuntu-latest
     steps:
@@ -16,15 +61,36 @@ jobs:
       - name: System libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+
+  # The headless server, built on the same Ubuntu as the release, then started and signed in to.
+  server-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --bin RadioMaster-Server
+      - name: Smoke test
+        run: tools/smoke_server.sh target/debug/RadioMaster-Server
 
   build-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
   build-windows:
@@ -32,7 +98,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --release --locked
       - name: Installer
         shell: pwsh
@@ -48,3 +118,18 @@ jobs:
             target/release/RadioMaster.exe
             target/release/RadioMaster-Server.exe
             dist/RadioMaster-Setup-*.exe
+
+  # One check that is green only when every job above passed. Make this the required check
+  # in branch protection (Settings → Branches → main → Require status checks → "CI OK").
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs: [checks, test-linux, server-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

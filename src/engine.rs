@@ -913,7 +913,7 @@ impl<S: Source<Item = f32>> Iterator for StudioGate<S> {
     fn next(&mut self) -> Option<f32> {
         let x = self.inner.next()?;
         // the gain changes once per stereo frame so both channels get the same level
-        if self.n % 2 == 0 {
+        if self.n.is_multiple_of(2) {
             if self.mic.load(Ordering::Relaxed) {
                 self.g = (self.g - 1.0 / (0.05 * SR as f32)).max(0.0);
             } else if self.g < 1.0 {
@@ -1023,7 +1023,7 @@ mod tests {
             bus.next();
             bus.next();
             frames += 1;
-            if frames % 4096 == 0 {
+            if frames.is_multiple_of(4096) {
                 std::thread::sleep(std::time::Duration::from_micros(200)); // let the reader keep up
             }
         }
@@ -1068,7 +1068,7 @@ mod tests {
                 if self.0 >= AHEAD_BLOCK * 6 {
                     return None;
                 }
-                if self.0 >= AHEAD_BLOCK * 2 && self.0 % AHEAD_BLOCK == 0 {
+                if self.0 >= AHEAD_BLOCK * 2 && self.0.is_multiple_of(AHEAD_BLOCK) {
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
                 self.0 += 1;
