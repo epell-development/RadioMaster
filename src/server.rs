@@ -945,6 +945,14 @@ mod tests {
         }
     }
 
+    /// A station with one empty playlist. The data folder is shared by every test in the process (it
+    /// is set once), so playlists another test saved there must not leak into this one.
+    fn station_on(engine: Engine) -> Arc<Mutex<Playout>> {
+        let mut p = Playout::new(engine, crate::config::Config::default());
+        p.set_tabs(TabsWire { tabs: vec![sync::TabWire { name: "Main".into(), ..Default::default() }], playing: 0 });
+        Arc::new(Mutex::new(p))
+    }
+
     fn row(name: &str) -> PlEntry {
         PlEntry::file(Track { path: format!("/srv/music/{name}.mp3").into(), title: name.into(), ..Default::default() })
     }
@@ -980,7 +988,7 @@ mod tests {
         crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
         let station_engine = Engine::new_detached();
         let _clock = station_engine.start_null_driver();
-        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let station = station_on(station_engine.clone());
         let cfg = ServerCfg {
             user: "dj".into(),
             password_hash: crate::auth::hash("a long enough password").unwrap(),
@@ -1053,7 +1061,7 @@ mod tests {
     #[test]
     fn app_and_server_stay_in_step() {
         crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        let station = station_on(Engine::new_detached());
         station.lock().append_to_tab(0, vec![row("one"), row("two")]);
         let cfg = ServerCfg {
             user: "studio".into(),
@@ -1118,7 +1126,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::config::set_data_dir(dir.clone());
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        let station = station_on(Engine::new_detached());
         station.lock().append_to_tab(0, vec![row("one")]);
         let cfg = ServerCfg {
             user: "studio".into(),
@@ -1214,7 +1222,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::config::set_data_dir(dir.clone());
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        let station = station_on(Engine::new_detached());
         let cfg = ServerCfg {
             user: "studio".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),
@@ -1252,7 +1260,7 @@ mod tests {
         crate::config::set_data_dir(dir);
         let station_engine = Engine::new_detached();
         let _clock = station_engine.start_null_driver();
-        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let station = station_on(station_engine.clone());
         let cfg = ServerCfg {
             user: "dj".into(),
             password_hash: crate::auth::hash("a long enough password").unwrap(),
