@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.8 — 2026-10-25
+**New**
+- HTTPS for RadioMaster Server (`--https`): use your own certificate (e.g. Let's Encrypt) or let the
+  server make a self-signed one, which the app shows by its fingerprint and trusts once you agree. The
+  app warns if the certificate changes later
+- Web portal for RadioMaster Server (`--portal`, port 9260 by default): run the station from a browser,
+  including on a phone, with what's on air, the transport buttons, volume, playlists, streams, history
+  and the log
+- Connect to Remote Server on the login screen: sign in with the server's account without a local login
+- Settings → Devices → Sound card buffer: Low delay, Normal, Slow computer or Very slow computer
+
+**Fixed**
+- Playback stuttered on slow PCs: songs are now decoded ahead on their own thread and the sound card gets
+  a bigger buffer, so a slow disk or a busy CPU no longer causes gaps
+- Playback stopped (and Play did nothing until a restart) when another app such as Spotify took over the
+  sound card; RadioMaster now reopens the device within about 2 seconds and keeps the stream and
+  automation running in the meantime
+- No sound in the app while connected to RadioMaster Server: the app now plays the station's on-air mix
+  on its own outputs ("Hear the station here" in the connection window turns it off)
+- The Mic button while connected to a server: your microphone now goes to the server and on air, with
+  the station's mic settings
+
+**Changed**
+- Less work on the UI and audio threads: faster Search tab and file explorer, event plugins start in the
+  background, and unchanged files aren't rewritten on every save
+- Website: a RadioMaster Server page and a "How to start an internet radio station" guide
+
 ## v0.2.7 — 2026-10-25
 **New**
 - RadioMaster Server: a headless version for Linux and Windows Server that plays, schedules and streams
