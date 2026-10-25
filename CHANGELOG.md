@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.6 — 2026-10-25
+**New**
+- Library cleanup (Tools → Library cleanup): finds duplicate tracks (identical files and, optionally, the
+  same song in different files), keeps the best copy and moves playlist rows, cues and play counts over
+  to it; finds tracks and playlist rows whose file is missing and relinks them by file name or artist and
+  title; lists files that won't play; merges different spellings of the same genre or artist and fills
+  in the artist for "Artist - Title" files. Every change is previewed first, removed files go to a
+  "Removed tracks" folder unless you choose to delete them for good, and everything is logged to
+  cleanup-log.csv. It has its own permission, off for accounts without settings access
+- Playlist → Add event: an Event row runs a scheduler action when playback reaches it — e.g. end a
+  scheduled show's playlist with "Put a playlist tab on air → Main" and Main carries on where it left
+  off instead of dead air
+- New action "Play the on-air playlist again from the top" keeps a playlist looping; it works in the
+  event scheduler too
+
+**Changed**
+- Website: clearer title and description, social sharing card, FAQ section, sitemap and a 404 page
+
 ## v0.2.5 — 2026-10-20
 **New**
 - Advertisement scheduler redesigned: one list of advert and jingle rules on the left, the chosen rule
