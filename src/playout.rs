@@ -2459,14 +2459,39 @@ impl Playout {
         if self.forward(|tab| sync::Cmd::Generate { tab, name: name.to_string(), append }) {
             return 0;
         }
+        let Some(rows) = self.generated_rows(name, append) else { return 0 };
+        let n = rows.iter().filter(|r| r.is_file()).count();
+        if !append {
+            self.clear_playlist();
+        }
+        self.playlist.extend(rows);
+        n
+    }
+
+    /// When rows added now would start on air: after the playlist (`append`), or now.
+    pub fn generate_start(&self, append: bool) -> DateTime<Local> {
+        if !append || self.playlist.is_empty() {
+            return Local::now();
+        }
+        let k = self.playlist.len();
+        let starts = self.projected_starts(true);
+        let last = &self.playlist[k - 1];
+        starts[k - 1].map(|s| s.at).unwrap_or_else(Local::now) + CDur::milliseconds((self.row_span(last) * 1000.0) as i64)
+    }
+
+    /// The playlist rows template `name` makes, laid out from when they would start (None: it
+    /// made nothing; the reason is in the log).
+    pub fn generated_rows(&mut self, name: &str, append: bool) -> Option<Vec<PlEntry>> {
         let Some(tpl) = self.cfg.templates.iter().find(|t| t.name == name).cloned() else {
             self.say(format!("Template '{name}' not found"));
-            return 0;
+            return None;
         };
         // advert / jingle rules used as pattern steps or markers: their files join the pool
         let mut lib = self.library.clone();
         let mut preset: HashMap<String, Vec<usize>> = HashMap::new();
-        for src in tpl.pattern.iter().map(|p| &p.category).chain(tpl.markers.iter().map(|m| &m.category)) {
+        let sources = tpl.pattern.iter().chain(tpl.dayparts.iter().flat_map(|d| d.pattern.iter())).map(|p| &p.category);
+        let sources: Vec<String> = sources.chain(tpl.markers.iter().map(|m| &m.category)).cloned().collect();
+        for src in &sources {
             let Some(id) = src.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) else { continue };
             if preset.contains_key(src) {
                 continue;
@@ -2478,42 +2503,48 @@ impl Playout {
             }
             preset.insert(src.clone(), (start..lib.len()).collect());
         }
-        let tracks = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset);
-        let n = tracks.len();
-        if n == 0 {
+        let mut t = self.generate_start(append);
+        let span = |tr: &Track| self.span_of(tr);
+        let made = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset, t.naive_local(), &span);
+        if !made.iter().any(|g| matches!(g, crate::generator::Gen::Track { insert: false, .. })) {
             self.say("Generator produced nothing — scan the library and check category filters");
-            return 0;
+            return None;
         }
-        if !append {
-            self.clear_playlist();
-        }
-        // when the new rows would start, so hour markers land on the right hours
-        let starts = self.projected_starts(true);
-        let mut t = match self.playlist.len() {
-            0 => Local::now(),
-            k => {
-                let last = &self.playlist[k - 1];
-                starts[k - 1].map(|s| s.at).unwrap_or_else(Local::now) + CDur::milliseconds((self.row_span(last) * 1000.0) as i64)
-            }
-        };
-        for tr in tracks {
-            let span = self.span_of(&tr);
+        let mut rows = vec![];
+        for g in made {
+            let (row, span) = match g {
+                crate::generator::Gen::Track { track, .. } => {
+                    let span = self.span_of(&track);
+                    (PlEntry::file(track), span)
+                }
+                crate::generator::Gen::TimeAnnounce => {
+                    (PlEntry::special(ItemKind::TimeAnnounce, "", crate::generator::TIME_SECS), crate::generator::TIME_SECS)
+                }
+            };
             if tpl.hour_markers {
                 use chrono::Timelike;
                 let after = t + CDur::milliseconds((span * 1000.0) as i64);
                 if after.hour() != t.hour() || after.date_naive() != t.date_naive() {
-                    // this track would run over the top of the hour: the next hour starts with a marker
-                    self.playlist.push(PlEntry::file(tr));
+                    // this row would run over the top of the hour: the next hour starts with a marker
+                    rows.push(row);
                     let h = after.hour();
-                    self.playlist.push(PlEntry::special(ItemKind::HourMarker { hour: h, minute: 0, hard: false, wait: true }, "", 0.0));
+                    rows.push(PlEntry::special(ItemKind::HourMarker { hour: h, minute: 0, hard: false, wait: true }, "", 0.0));
                     t = marker_target(h, 0, after);
                     continue;
                 }
             }
             t += CDur::milliseconds((span * 1000.0) as i64);
-            self.playlist.push(PlEntry::file(tr));
+            rows.push(row);
         }
-        n
+        Some(rows)
+    }
+
+    /// Put rows made by `generated_rows` (e.g. a preview the user liked) into the playlist.
+    pub fn use_generated(&mut self, rows: Vec<PlEntry>, append: bool) {
+        if !append {
+            self.clear_playlist();
+        }
+        self.playlist.extend(rows);
     }
 
     fn export_now(&self, t: &Track) {
@@ -2646,6 +2677,8 @@ impl Playout {
                 self.playlist.iter_mut().for_each(|e| e.played = false);
                 self.pending_jump = Some(0);
             }
+            // playlist event rows don't carry an item (the scheduler's events do)
+            ActionKind::InsertItem => {}
         }
         // another playlist goes on air next tick: don't start this list's next row in between
         self.pending_tab.is_some() || self.state == PlayState::Stopped
@@ -2690,6 +2723,26 @@ impl Playout {
             ActionKind::RestartPlaylist => {
                 self.playlist.iter_mut().for_each(|r| r.played = false);
                 self.play_index(0, xf);
+            }
+            ActionKind::InsertItem => {
+                let Some(mut row) = e.item.clone() else {
+                    self.say(format!("Scheduler: '{}' has nothing to insert", e.name));
+                    return;
+                };
+                row.played = false;
+                let at = self.current.map(|c| c + 1).unwrap_or(0);
+                // the last one hasn't played yet (e.g. playback is stopped): don't pile them up
+                let waiting = self.playlist.get(at).is_some_and(|r| !r.played && r.kind == row.kind && r.track.title == row.track.title);
+                if !waiting {
+                    self.insert_rows(at, vec![row]);
+                }
+                if e.play_now {
+                    if self.state == PlayState::Stopped {
+                        self.play_index(at, xf);
+                    } else {
+                        self.next();
+                    }
+                }
             }
         }
     }
@@ -2977,6 +3030,56 @@ mod tests {
             wait();
         }
         assert_eq!(p.library.last().unwrap().title, "Old");
+    }
+
+    #[test]
+    fn scheduler_inserts_a_playlist_item_next() {
+        let mut p = playout();
+        p.playlist = vec![file("a", 180.0), file("b", 180.0)];
+        p.current = Some(0);
+        let e =
+            Event { action: ActionKind::InsertItem, item: Some(PlEntry::special(ItemKind::TimeAnnounce, "", 4.0)), ..Default::default() };
+        p.run_event(&e);
+        assert_eq!(p.playlist.len(), 3);
+        assert!(matches!(p.playlist[1].kind, ItemKind::TimeAnnounce), "goes in after the track on air");
+        // it hasn't played yet when the next one comes round: no second copy
+        p.run_event(&e);
+        assert_eq!(p.playlist.len(), 3);
+        // an event without an item does nothing
+        p.run_event(&Event { action: ActionKind::InsertItem, ..Default::default() });
+        assert_eq!(p.playlist.len(), 3);
+    }
+
+    #[test]
+    fn generated_rows_follow_the_clock_and_go_in() {
+        use crate::config::{Category, Marker, PatternItem, Template};
+        let mut p = playout();
+        p.library = (0..30)
+            .map(|i| Track {
+                path: PathBuf::from(format!("/m/t{i}.mp3")),
+                artist: format!("A{i}"),
+                title: format!("T{i}"),
+                duration: 200.0,
+                ..Default::default()
+            })
+            .collect();
+        p.cfg.categories = vec![Category { name: "Music".into(), ..Default::default() }];
+        p.cfg.templates = vec![Template {
+            name: "Clock".into(),
+            minutes: 130,
+            pattern: vec![PatternItem { category: "Music".into(), count: 1 }],
+            markers: vec![Marker { category: crate::generator::TIME_SOURCE.into(), on_clock: true, every_mins: 60, ..Default::default() }],
+            ..Default::default()
+        }];
+        let rows = p.generated_rows("Clock", false).unwrap();
+        let ann = rows.iter().filter(|r| matches!(r.kind, ItemKind::TimeAnnounce)).count();
+        assert!((2..=3).contains(&ann), "one per top of the hour in 130 minutes ({ann})");
+        assert!(p.playlist.is_empty(), "a preview changes nothing");
+        p.use_generated(rows.clone(), false);
+        assert_eq!(p.playlist.len(), rows.len());
+        let before = p.playlist.len();
+        let n = p.generate_playlist("Clock", true);
+        assert!(n > 0 && p.playlist.len() > before + n - 1, "appended after the list");
     }
 
     #[test]

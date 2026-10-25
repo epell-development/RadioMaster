@@ -376,14 +376,7 @@ impl AdRule {
     pub fn in_force(&self, now: &DateTime<Local>) -> bool {
         use chrono::Timelike;
         let today = now.format("%Y-%m-%d").to_string();
-        let h = now.hour();
-        let hours_ok = if self.from_hour == self.to_hour {
-            true
-        } else if self.from_hour < self.to_hour {
-            h >= self.from_hour && h < self.to_hour
-        } else {
-            h >= self.from_hour || h < self.to_hour
-        };
+        let hours_ok = hours_ok(self.from_hour, self.to_hour, now.hour());
         self.enabled
             && (self.from_date.trim().is_empty() || today.as_str() >= self.from_date.trim())
             && (self.to_date.trim().is_empty() || today.as_str() <= self.to_date.trim())
@@ -457,14 +450,40 @@ impl AdRule {
 pub struct Category {
     pub name: String,
     pub folder: String,
+    /// one genre, or several separated by commas ("Rock, Pop"): a track needs one of them
     pub genre: String,
     pub min_secs: f32,
     /// 0 = no maximum
     pub max_secs: f32,
+    /// release years (0 = no limit)
+    pub min_year: u32,
+    pub max_year: u32,
+    /// leave out tracks whose artist, title, genre or path has one of these words (comma separated)
+    pub exclude: String,
 }
 impl Default for Category {
     fn default() -> Self {
-        Self { name: "Music".into(), folder: String::new(), genre: String::new(), min_secs: 0.0, max_secs: 0.0 }
+        Self {
+            name: "Music".into(),
+            folder: String::new(),
+            genre: String::new(),
+            min_secs: 0.0,
+            max_secs: 0.0,
+            min_year: 0,
+            max_year: 0,
+            exclude: String::new(),
+        }
+    }
+}
+
+/// `h` is between the hours `from` and `to` (from == to: all day; 22 → 6 runs over midnight).
+pub fn hours_ok(from: u32, to: u32, h: u32) -> bool {
+    if from == to {
+        true
+    } else if from < to {
+        h >= from && h < to
+    } else {
+        h >= from || h < to
     }
 }
 
@@ -483,26 +502,88 @@ impl Default for PatternItem {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Marker {
-    /// a category name, or "rule:<id>" for the files of an advert / jingle rule
+    /// a category name, "rule:<id>" for the files of an advert / jingle rule, or
+    /// `generator::TIME_SOURCE` for a time announcement
     pub category: String,
+    /// after every N songs, every N minutes, or at set times (like an advert / jingle rule)
+    pub trigger: Trigger,
+    pub every_songs: u32,
     pub every_mins: u32,
+    /// every N minutes counted from the top of the hour (:00, :15…) instead of from the start
+    pub on_clock: bool,
+    /// (hour, minute) for `Trigger::Times`
+    pub times: Vec<(u32, u32)>,
     /// how many to insert each time
     pub count: u32,
+    /// only between these hours (from == to: all day)
+    pub from_hour: u32,
+    pub to_hour: u32,
 }
 impl Default for Marker {
     fn default() -> Self {
-        Self { category: "Music".into(), every_mins: 60, count: 1 }
+        Self {
+            category: "Music".into(),
+            // inserts made before 0.2.9 only had "every N minutes"
+            trigger: Trigger::Minutes,
+            every_songs: 4,
+            every_mins: 60,
+            on_clock: false,
+            times: vec![],
+            count: 1,
+            from_hour: 0,
+            to_hour: 0,
+        }
     }
+}
+
+/// A different pattern for part of the day, e.g. talk and fewer songs on weekday mornings.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct Daypart {
+    pub name: String,
+    pub from_hour: u32,
+    pub to_hour: u32,
+    /// Monday … Sunday
+    pub days: [bool; 7],
+    pub pattern: Vec<PatternItem>,
+}
+impl Default for Daypart {
+    fn default() -> Self {
+        Self { name: "Mornings".into(), from_hour: 6, to_hour: 10, days: [true; 7], pattern: vec![PatternItem::default()] }
+    }
+}
+impl Daypart {
+    pub fn covers(&self, t: &chrono::NaiveDateTime) -> bool {
+        use chrono::{Datelike, Timelike};
+        self.days[t.weekday().num_days_from_monday() as usize] && hours_ok(self.from_hour, self.to_hour, t.hour())
+    }
+}
+
+/// How long a generated playlist runs.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum GenLength {
+    /// `Template::minutes`
+    #[default]
+    Minutes,
+    /// until the clock reaches `Template::until` (the next time it comes round)
+    Until,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Template {
     pub name: String,
+    pub length: GenLength,
     pub minutes: u32,
+    /// (hour, minute) for `GenLength::Until`
+    pub until: (u32, u32),
     pub pattern: Vec<PatternItem>,
+    /// patterns used instead of `pattern` at some times of day (the first that covers the time wins)
+    pub dayparts: Vec<Daypart>,
     pub markers: Vec<Marker>,
     pub artist_gap: u32,
+    /// the same song doesn't come back within this many minutes (0 = whenever its pool runs out)
+    pub song_gap_mins: u32,
     /// put an hour marker at the top of every hour
     pub hour_markers: bool,
 }
@@ -510,10 +591,14 @@ impl Default for Template {
     fn default() -> Self {
         Self {
             name: "Default".into(),
+            length: GenLength::Minutes,
             minutes: 120,
+            until: (0, 0),
             pattern: vec![PatternItem::default()],
+            dayparts: vec![],
             markers: vec![],
             artist_gap: 5,
+            song_gap_mins: 0,
             hour_markers: false,
         }
     }
