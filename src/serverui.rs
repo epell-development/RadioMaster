@@ -69,6 +69,8 @@ pub(super) struct ServerUi {
     pw_current: String,
     pw_new: String,
     pw_again: String,
+    /// a new Cloudflare Tunnel token typed in Server settings (the saved one is never shown)
+    tunnel_token: String,
     /// "Add library folder" while connected: a folder on the server, typed in
     lib_folder: Option<String>,
     conn: Option<Connected>,
@@ -99,6 +101,7 @@ impl Default for ServerUi {
             pw_current: String::new(),
             pw_new: String::new(),
             pw_again: String::new(),
+            tunnel_token: String::new(),
             lib_folder: None,
             conn: None,
         }
@@ -750,6 +753,34 @@ impl App {
                 if !info.fingerprint.is_empty() {
                     ui.label(RichText::new(format!("{} {}", tr("Certificate SHA-256:"), info.fingerprint)).small().monospace());
                 }
+                if info.cert_expires > 0 {
+                    if let Some(d) = chrono::DateTime::from_timestamp(info.cert_expires, 0) {
+                        ui.label(RichText::new(format!("{} {}", tr("Certificate valid until"), d.format("%Y-%m-%d"))).small().color(GRAY));
+                    }
+                }
+                ui.add_enabled_ui(info.https, |ui| {
+                    ui.checkbox(&mut info.acme, tr("Get a free certificate from Let's Encrypt"))
+                        .on_hover_text(tr("Browsers and apps trust it like any website. Port 80 of each domain name has to reach the server; it is renewed on its own."));
+                    if info.acme {
+                        egui::Grid::new("srv_acme").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                            ui.label(tr("Domain names"));
+                            ui.add(egui::TextEdit::singleline(&mut info.acme_domains).hint_text("radio.example.com").desired_width(260.0));
+                            ui.end_row();
+                            ui.label(tr("Email (optional)"));
+                            ui.add(egui::TextEdit::singleline(&mut info.acme_email).desired_width(260.0));
+                            ui.end_row();
+                        });
+                        ui.checkbox(&mut info.acme_staging, tr("Use Let's Encrypt's staging server (for trying it out)"));
+                        let color = match info.acme_state.as_str() {
+                            "ok" => GREEN,
+                            "error" => RED,
+                            _ => GRAY,
+                        };
+                        if !info.acme_message.is_empty() {
+                            ui.colored_label(color, format!("Let's Encrypt: {}", info.acme_message));
+                        }
+                    }
+                });
                 ui.checkbox(&mut info.portal, tr("Web portal: run the station from a browser"));
                 ui.add_enabled_ui(info.portal, |ui| {
                     ui.horizontal(|ui| {
@@ -765,6 +796,39 @@ impl App {
                         .small()
                         .color(GRAY),
                 );
+                ui.checkbox(&mut info.tunnel, tr("Put the web portal on the internet with a Cloudflare Tunnel"))
+                    .on_hover_text(tr("No port forwarding needed. The server runs Cloudflare's cloudflared program, which has to be installed on it."));
+                if info.tunnel {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Tunnel token"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut srv.tunnel_token)
+                                .password(true)
+                                .hint_text(if info.tunnel_token_set { tr("saved (type to replace)") } else { tr("none: a quick tunnel") })
+                                .desired_width(240.0),
+                        );
+                    });
+                    ui.label(
+                        RichText::new(tr("Make a tunnel in the Cloudflare dashboard (Zero Trust → Networks → Tunnels) for your own domain, and point it at http://localhost and the portal port. Without a token you get a random trycloudflare.com address."))
+                            .small()
+                            .color(GRAY),
+                    );
+                    let color = match info.tunnel_state.as_str() {
+                        "running" => GREEN,
+                        "error" => RED,
+                        _ => GRAY,
+                    };
+                    if !info.tunnel_state.is_empty() {
+                        let mut line = format!("Cloudflare Tunnel: {}", info.tunnel_state);
+                        if !info.tunnel_url.is_empty() {
+                            line += &format!(" · {}", info.tunnel_url);
+                        }
+                        if !info.tunnel_message.is_empty() {
+                            line += &format!(" · {}", info.tunnel_message);
+                        }
+                        ui.colored_label(color, line);
+                    }
+                }
                 if info.restart_needed {
                     ui.colored_label(AMBER, tr("Saved: restart RadioMaster Server to use them."));
                 }
@@ -828,7 +892,14 @@ impl App {
                 https: info.https,
                 portal: info.portal,
                 portal_port: if info.portal_port == info.port { 0 } else { info.portal_port },
+                acme: Some(info.acme),
+                acme_domains: Some(info.acme_domains.clone()),
+                acme_email: Some(info.acme_email.clone()),
+                acme_staging: Some(info.acme_staging),
+                tunnel: Some(info.tunnel),
+                tunnel_token: (!self.srv.tunnel_token.trim().is_empty()).then(|| self.srv.tunnel_token.trim().to_string()),
             };
+            self.srv.tunnel_token.clear();
             self.srv.settings_msg = (false, String::new());
             self.server_request(Some(u));
         }

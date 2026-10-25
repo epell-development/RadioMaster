@@ -24,28 +24,79 @@ pub const DEFAULT_PORTAL_PORT: u16 = 9260;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Cmd {
-    PlayPressed { tab: usize, selected: Option<usize> },
-    PlayIndex { tab: usize, row: usize, xfade: f32 },
+    PlayPressed {
+        tab: usize,
+        selected: Option<usize>,
+    },
+    PlayIndex {
+        tab: usize,
+        row: usize,
+        xfade: f32,
+    },
     PauseToggle,
     Stop,
     Next,
     Prev,
-    Volume { v: f32 },
-    Seek { secs: f32 },
-    Cart { idx: usize },
+    Volume {
+        v: f32,
+    },
+    Seek {
+        secs: f32,
+    },
+    Cart {
+        idx: usize,
+    },
     StopCarts,
-    TabOnAir { tab: usize },
-    EncoderStart { i: usize },
-    EncoderStop { i: usize },
-    Command { tab: usize, text: String },
-    Event { event: Event },
-    Generate { tab: usize, name: String, append: bool },
-    FireRule { tab: usize, id: u64, after: Option<usize> },
+    TabOnAir {
+        tab: usize,
+    },
+    EncoderStart {
+        i: usize,
+    },
+    EncoderStop {
+        i: usize,
+    },
+    Command {
+        tab: usize,
+        text: String,
+    },
+    Event {
+        event: Event,
+    },
+    Generate {
+        tab: usize,
+        name: String,
+        append: bool,
+    },
+    FireRule {
+        tab: usize,
+        id: u64,
+        after: Option<usize>,
+    },
     Rescan,
-    WriteTags { track: Track },
-    SetCues { path: PathBuf, cues: Cues, duration: f32 },
-    ClearCues { path: PathBuf },
+    WriteTags {
+        track: Track,
+    },
+    SetCues {
+        path: PathBuf,
+        cues: Cues,
+        duration: f32,
+    },
+    ClearCues {
+        path: PathBuf,
+    },
     ReanalyseCues,
+    /// files (or folders) on the server into a playlist at `at` (None: at the end)
+    Insert {
+        tab: usize,
+        paths: Vec<PathBuf>,
+        at: Option<usize>,
+    },
+    /// take rows out of a playlist
+    RemoveRows {
+        tab: usize,
+        rows: Vec<usize>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -159,6 +210,27 @@ pub struct ServerInfo {
     pub portal_port: u16,
     /// the saved HTTPS / portal settings differ from what is running
     pub restart_needed: bool,
+    /// a newer RadioMaster release than this server (empty: up to date, or not known yet)
+    pub latest: String,
+    /// its release page
+    pub release_page: String,
+    /// when the certificate in use runs out (unix seconds; 0 without HTTPS)
+    pub cert_expires: i64,
+    /// Let's Encrypt: on, the domain names (comma-separated), contact email, staging server
+    pub acme: bool,
+    pub acme_domains: String,
+    pub acme_email: String,
+    pub acme_staging: bool,
+    /// how getting the certificate went: "", working, ok or error, and what happened
+    pub acme_state: String,
+    pub acme_message: String,
+    /// Cloudflare Tunnel: on, and whether a tunnel token is saved (the token itself is never sent back)
+    pub tunnel: bool,
+    pub tunnel_token_set: bool,
+    /// "", starting, running or error; the public address (quick tunnels); what went wrong
+    pub tunnel_state: String,
+    pub tunnel_url: String,
+    pub tunnel_message: String,
 }
 
 /// Changes from the Server settings window.
@@ -175,6 +247,14 @@ pub struct ServerUpdate {
     pub https: bool,
     pub portal: bool,
     pub portal_port: u16,
+    /// Let's Encrypt and Cloudflare Tunnel (None: leave as they are, which is what older apps send)
+    pub acme: Option<bool>,
+    pub acme_domains: Option<String>,
+    pub acme_email: Option<String>,
+    pub acme_staging: Option<bool>,
+    pub tunnel: Option<bool>,
+    /// a new tunnel token (an empty one removes it: a quick tunnel)
+    pub tunnel_token: Option<String>,
 }
 
 /// How many log lines and history items a client is sent.
@@ -458,6 +538,17 @@ impl Playout {
             Cmd::SetCues { path, cues, duration } => self.set_manual_cues(&path, cues, duration),
             Cmd::ClearCues { path } => self.clear_manual_cues(&path),
             Cmd::ReanalyseCues => self.reanalyse_cues(),
+            Cmd::Insert { tab, paths, at } if tab_ok(self, tab) => {
+                self.with_tab(tab, |p| {
+                    let rows: Vec<PlEntry> = p.expand(paths).iter().map(|f| p.entry_quick(f)).collect();
+                    p.insert_rows(at.unwrap_or(usize::MAX), rows);
+                });
+                self.save_tabs();
+            }
+            Cmd::RemoveRows { tab, rows } if tab_ok(self, tab) => {
+                self.with_tab(tab, |p| p.remove(&rows.into_iter().collect()));
+                self.save_tabs();
+            }
             other => self.say(format!("Server: ignored {other:?} (that playlist is gone)")),
         }
     }

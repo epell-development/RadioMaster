@@ -500,6 +500,12 @@ fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, c
     });
 }
 
+/// Something a background thread calls to have the window drawn again.
+fn repainter(ctx: &egui::Context) -> impl Fn() + Send + 'static {
+    let ctx = ctx.clone();
+    move || ctx.request_repaint()
+}
+
 fn host_of(url: &str) -> String {
     let u = url.trim().trim_start_matches("https://").trim_start_matches("http://");
     u.split('/').next().unwrap_or("").split(':').next().unwrap_or("").to_string()
@@ -1073,7 +1079,7 @@ impl App {
                         ui.close_menu();
                     }
                     if ui.button(tr("Check for updates…")).clicked() {
-                        crate::updater::check(self.updates.clone(), ctx.clone(), true);
+                        crate::updater::check(self.updates.clone(), repainter(ctx), true);
                         self.show_update = true;
                         ui.close_menu();
                     }
@@ -3378,7 +3384,7 @@ impl App {
             }
         });
         if start_download {
-            crate::updater::download(self.updates.clone(), ctx.clone());
+            crate::updater::download(self.updates.clone(), repainter(ctx));
         }
         if let Some(p) = install {
             match crate::updater::run_installer(&p) {
@@ -3549,7 +3555,7 @@ impl eframe::App for App {
         if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
             // at start-up, then every 6 hours for stations that run for weeks
             self.update_next = Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
-            crate::updater::check(self.updates.clone(), ctx.clone(), false);
+            crate::updater::check(self.updates.clone(), repainter(ctx), false);
         }
         self.update_window(ctx, &mut core);
         self.apply_tab_ops(&mut core);
