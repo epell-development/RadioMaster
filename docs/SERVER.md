@@ -42,7 +42,9 @@ encoders. Run `RadioMaster-Server --help` for every option.
 | `--data FOLDER` | the data folder (default `~/.config/RadioMaster-Server`, or `%APPDATA%\RadioMaster-Server` on Windows) |
 | `--https`, `--no-https` | serve over HTTPS (see [HTTPS](#https)) |
 | `--cert FILE`, `--key FILE` | a PEM certificate (chain) and its private key for HTTPS; without them the server makes its own |
+| `--acme DOMAINS`, `--acme-email`, `--acme-staging`, `--acme-http-port N`, `--no-acme` | a free [Let's Encrypt certificate](#lets-encrypt) for these domain names |
 | `--portal`, `--no-portal`, `--portal-port N` | the [web portal](#web-portal) and its port (default 9260) |
+| `--tunnel`, `--no-tunnel`, `--tunnel-token TOKEN`, `--cloudflared FILE` | put the portal on the internet with a [Cloudflare Tunnel](#cloudflare-tunnel) |
 | `--no-audio` | don't use a sound card: stream only |
 | `--list-devices` | list the sound cards |
 
@@ -75,8 +77,10 @@ HTTPS** (it takes effect when the server restarts). Everything between the apps,
 then encrypted, and the port answers plain `http://` only with a pointer to `https://`.
 
 - **Your own certificate** (for example Let's Encrypt's): `--cert /etc/letsencrypt/live/radio.example.com/fullchain.pem --key /etc/letsencrypt/live/radio.example.com/privkey.pem`. The
-  app and browsers trust it like any website. The server account must be able to read both files; restart the
-  server after the certificate is renewed.
+  app and browsers trust it like any website. The server account must be able to read both files. When the
+  files are renewed (certbot, win-acme…), the server picks up the new certificate within a few minutes, without
+  a restart.
+- **A free certificate from Let's Encrypt, looked after by the server:** see [Let's Encrypt](#lets-encrypt).
 - **No certificate:** the server makes a self-signed one the first time (`tls-cert.pem` and `tls-key.pem` in
   its data folder) and prints its SHA-256 fingerprint at start-up. The first time an app connects, it shows
   the fingerprint and asks you to trust it; check it against the one the server printed (it is also in
@@ -85,15 +89,76 @@ then encrypted, and the port answers plain `http://` only with a pointer to `htt
 
 An address typed without `https://` still finds a server that uses HTTPS.
 
+### Let's Encrypt
+The server can get its own certificate from Let's Encrypt and renew it by itself (30 days before it runs out),
+so browsers and apps trust it with no warning. You need a domain name (e.g. `radio.example.com`) that points
+at the server, and **port 80** of that name has to reach the server (forward it on your router), because
+Let's Encrypt checks the name by fetching a file from `http://radio.example.com/.well-known/acme-challenge/…`.
+
+```
+RadioMaster-Server --setup --acme radio.example.com --acme-email you@example.com
+```
+
+or in the app: **File → Server settings… → Use HTTPS → Get a free certificate from Let's Encrypt**, with the
+domain names (comma-separated) and an optional email. Until the first certificate arrives the server uses its
+self-signed one; the new one is swapped in without a restart, and the settings window shows how it went and
+when the certificate runs out. Tick *staging* to try it out first (Let's Encrypt limits how often real
+certificates can be asked for; staging certificates aren't trusted by browsers).
+
+On Linux, listening on port 80 needs root or `sudo setcap cap_net_bind_service=+ep RadioMaster-Server`. Port
+80 also sends browsers to the `https://` portal. If something else (IIS, nginx) already uses port 80, pass
+`/.well-known/acme-challenge/` on to the server's port and start it with `--acme-http-port 0`; or let that
+program get the certificate (win-acme, certbot) and give the files to the server with `--cert` and `--key`.
+
+### Behind a reverse proxy (IIS, nginx, Caddy)
+A proxy that serves HTTPS itself can talk to the server over plain HTTP. Either:
+
+- turn the server's HTTPS **off** and let the proxy do it (simplest), or
+- keep it on: plain requests that come from a proxy saying the browser used HTTPS (`X-Forwarded-Proto: https`,
+  IIS's `X-ARR-SSL`, Cloudflare's `CF-Visitor`) are served as they are instead of being sent to `https://`.
+  (Before 0.2.9 that redirect sent browsers round in a loop, `ERR_TOO_MANY_REDIRECTS`.)
+
+**IIS** (URL Rewrite + Application Request Routing): add a reverse-proxy rule to `http://localhost:9260` for
+the portal (or 9259 for the apps), keep *Reverse rewrite host in response headers* off, and set the ARR proxy's
+*Response buffer threshold* to 0 so the station's sound reaches the app straight away. **nginx:** set
+`proxy_buffering off;` and `proxy_set_header X-Forwarded-Proto $scheme;`.
+
+### Cloudflare Tunnel
+A Cloudflare Tunnel puts the web portal on the internet with no port forwarding and no certificate to look
+after. Install Cloudflare's `cloudflared` on the server (or put it next to `RadioMaster-Server`), then either:
+
+- **Your own domain:** in the Cloudflare dashboard, *Zero Trust → Networks → Tunnels → Create a tunnel*, add a
+  public hostname (e.g. `radio.example.com`) with the service `http://localhost:9260`, and copy the tunnel's
+  token. Start the server with `--tunnel-token <token>` (or set `CLOUDFLARE_TUNNEL_TOKEN`), or paste it in
+  **Server settings → Cloudflare Tunnel**.
+- **Just try it:** `--tunnel` with no token gives a random `https://….trycloudflare.com` address (it changes
+  each time the tunnel starts); it is printed in the log and shown in Server settings.
+
+The server starts `cloudflared`, starts it again if it stops, and stops it on exit. Switching the tunnel on
+or off in Server settings takes effect at once. The desktop app can connect through the tunnel address too.
+
 ## Web portal
 The web portal runs the station from a browser on any computer, tablet or phone, with nothing to install.
 Turn it on with `--setup --portal` (choose the port with `--portal-port`, default 9260), or in the app with
 **File → Server settings… → Web portal** (after a restart). Open `http://<server>:9260` (or `https://` with
 HTTPS on) and sign in with the server's username and password.
 
-It shows what's on air with its progress and levels, play / pause / stop / next / previous, the volume, the
-playlists (double-click a row to play it), the streams with start and stop, recently played and the station
-log. The portal needs a port of its own; allow it through the firewall like the main port.
+It works on phones (the sections sit along the bottom of the screen) as well as computers:
+
+- **Studio:** what's on air with its progress and levels, play / pause / stop / next / previous, the volume, the
+  playlists (double-click a row to play it, ✕ to take it out) and the streams with start and stop.
+- **Library:** search the server's library and add songs to any playlist, at the end or to play next; rescan.
+- **Carts:** the cart wall; tap a pad to play it, or *Edit pads* to choose each pad's sound and name.
+- **Generator:** make a playlist from a template, keep the on-air playlist filled, and edit the templates and
+  categories (folders are the server's).
+- **Adverts:** the advert and jingle rules: switch them on and off, play one now, add and edit them.
+- **AzuraCast:** the station's now playing and listeners, skip, restart, start and stop broadcasting and the
+  AutoDJ, switch AzuraCast playlists on and off, and the connection settings (the calls go
+  through the server, with the API key from Settings → AzuraCast).
+- **Log:** recently played and the station log.
+
+A banner says when a newer RadioMaster release is out than the server runs. The portal needs a port of its
+own; allow it through the firewall like the main port.
 
 ## Connect from the desktop app
 **From the login screen:** **Connect to Remote Server…** below the sign-in box connects without a local
