@@ -1093,7 +1093,7 @@ impl App {
                             }
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
-                                ui.hyperlink_to("RadioMaster website", "https://epell-development.github.io/RadioMaster/");
+                                ui.hyperlink_to("RadioMaster website", "https://radiomaster.dovafm.com/");
                                 ui.label("·");
                                 ui.hyperlink_to("GitHub", "https://github.com/epell-development/RadioMaster");
                                 ui.label("·");
