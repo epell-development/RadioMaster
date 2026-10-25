@@ -15,7 +15,33 @@
 use anyhow::Result;
 use rodio::{source::UniformSourceIterator, Decoder, Source};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::BufReader, path::Path};
+use std::{
+    fs::File,
+    io::BufReader,
+    path::Path,
+    time::{Duration, Instant},
+};
+
+/// Passes samples through, pausing after every `every` samples for as long as producing them took.
+struct Gentle<I> {
+    inner: I,
+    n: usize,
+    every: usize,
+    t: Instant,
+}
+
+impl<I: Iterator<Item = f32>> Iterator for Gentle<I> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        self.n += 1;
+        if self.n >= self.every {
+            self.n = 0;
+            std::thread::sleep(self.t.elapsed().min(Duration::from_millis(500)));
+            self.t = Instant::now();
+        }
+        self.inner.next()
+    }
+}
 
 /// Seconds per analysis bin.
 pub const BIN: f32 = 0.02;
@@ -32,12 +58,14 @@ impl Waveform {
         self.peaks.len() as f32 * BIN
     }
 
-    /// Decode a file and build its waveform. Runs on a background thread.
+    /// Decode a file and build its waveform. Runs on a background thread, at a gentle pace: it
+    /// rests as long as it works, so on a slow PC playback and the window keep a core to themselves.
     pub fn analyze(path: &Path) -> Result<Waveform> {
-        let dec = Decoder::new(BufReader::new(File::open(path)?))?;
+        let dec = Decoder::new(BufReader::with_capacity(256 * 1024, File::open(path)?))?;
         let rate = 22_050u32; // half rate is plenty for envelopes and twice as fast
         let src = UniformSourceIterator::<_, f32>::new(dec.convert_samples::<f32>(), 2, rate);
-        Ok(Self::from_interleaved(src, rate))
+        let gentle = Gentle { inner: src, n: 0, every: rate as usize * 2 * 5, t: Instant::now() };
+        Ok(Self::from_interleaved(gentle, rate))
     }
 
     pub fn from_interleaved<I: Iterator<Item = f32>>(mut src: I, rate: u32) -> Waveform {

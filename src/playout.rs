@@ -70,8 +70,12 @@ struct SavedTabs {
     playing: usize,
 }
 
+type Encode = Box<dyn FnOnce() -> Option<String> + Send>;
+
 enum WriteJob {
     Write(PathBuf, String),
+    /// turned into text on the writer thread (big playlists take a while to serialize)
+    Encode(PathBuf, Encode),
     Append(PathBuf, String),
     Flush(mpsc::Sender<()>),
 }
@@ -82,12 +86,27 @@ fn writer() -> Option<std::sync::MutexGuard<'static, mpsc::Sender<WriteJob>>> {
     TX.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<WriteJob>();
         thread::spawn(move || {
+            // what each file was last given: an unchanged file isn't written again (the periodic save)
+            let mut last: HashMap<PathBuf, u64> = HashMap::new();
+            let mut write = |p: PathBuf, d: String| {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                d.hash(&mut h);
+                let h = h.finish();
+                if last.get(&p) == Some(&h) && p.exists() {
+                    return;
+                }
+                let tmp = p.with_extension("tmp");
+                if std::fs::write(&tmp, d).is_ok() && std::fs::rename(&tmp, &p).is_ok() {
+                    last.insert(p, h);
+                }
+            };
             while let Ok(job) = rx.recv() {
                 match job {
-                    WriteJob::Write(p, d) => {
-                        let tmp = p.with_extension("tmp");
-                        if std::fs::write(&tmp, d).is_ok() {
-                            let _ = std::fs::rename(&tmp, &p);
+                    WriteJob::Write(p, d) => write(p, d),
+                    WriteJob::Encode(p, f) => {
+                        if let Some(d) = f() {
+                            write(p, d);
                         }
                     }
                     WriteJob::Append(p, d) => {
@@ -111,24 +130,50 @@ fn writer() -> Option<std::sync::MutexGuard<'static, mpsc::Sender<WriteJob>>> {
 /// Write a file off the playout lock (the disk can be slow; playback and the UI must not wait).
 /// Writes go through one thread, in order, and land atomically via a temporary file.
 pub(crate) fn write_in_background(path: PathBuf, data: String) {
-    if let Some(tx) = writer() {
-        if tx.send(WriteJob::Write(path.clone(), data.clone())).is_ok() {
-            return;
+    let job = match writer() {
+        Some(tx) => match tx.send(WriteJob::Write(path, data)) {
+            Ok(()) => return,
+            Err(mpsc::SendError(job)) => job,
+        },
+        None => WriteJob::Write(path, data),
+    };
+    if let WriteJob::Write(path, data) = job {
+        let _ = std::fs::write(path, data);
+    }
+}
+
+/// Like `write_in_background`, but `value` is also turned into JSON on the writer thread, so a
+/// big playlist or config never holds up the UI or playback while it is serialized.
+pub(crate) fn write_json_in_background<T: Serialize + Send + 'static>(path: PathBuf, value: T, pretty: bool) {
+    let encode: Encode = Box::new(move || if pretty { serde_json::to_string_pretty(&value) } else { serde_json::to_string(&value) }.ok());
+    let job = match writer() {
+        Some(tx) => match tx.send(WriteJob::Encode(path, encode)) {
+            Ok(()) => return,
+            Err(mpsc::SendError(job)) => job,
+        },
+        None => WriteJob::Encode(path, encode),
+    };
+    if let WriteJob::Encode(path, f) = job {
+        if let Some(d) = f() {
+            let _ = std::fs::write(path, d);
         }
     }
-    let _ = std::fs::write(path, data);
 }
 
 /// Add to the end of a file on the background writer (after any writes already queued).
 fn append_in_background(path: PathBuf, data: String) {
-    if let Some(tx) = writer() {
-        if tx.send(WriteJob::Append(path.clone(), data.clone())).is_ok() {
-            return;
+    let job = match writer() {
+        Some(tx) => match tx.send(WriteJob::Append(path, data)) {
+            Ok(()) => return,
+            Err(mpsc::SendError(job)) => job,
+        },
+        None => WriteJob::Append(path, data),
+    };
+    if let WriteJob::Append(path, data) = job {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = f.write_all(data.as_bytes());
         }
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        use std::io::Write;
-        let _ = f.write_all(data.as_bytes());
     }
 }
 
@@ -617,16 +662,12 @@ impl Playout {
         }
         self.cfg.save();
         if self.cues_dirty {
-            let v: Vec<(&PathBuf, &Cues)> = self.cues.iter().collect();
-            if let Ok(j) = serde_json::to_string(&v) {
-                write_in_background(data_dir().join("cues.json"), j);
-            }
+            let v: Vec<(PathBuf, Cues)> = self.cues.iter().map(|(p, c)| (p.clone(), *c)).collect();
+            write_json_in_background(data_dir().join("cues.json"), v, false);
             self.cues_dirty = false;
         }
         if self.plays_dirty {
-            if let Ok(j) = serde_json::to_string(&self.plays) {
-                write_in_background(data_dir().join("plays.json"), j);
-            }
+            write_json_in_background(data_dir().join("plays.json"), self.plays.clone(), false);
             self.plays_dirty = false;
         }
         self.save_tabs();
@@ -676,9 +717,7 @@ impl Playout {
                 SavedTab { name: t.name.clone(), entries: entries.clone(), current }
             })
             .collect();
-        if let Ok(j) = serde_json::to_string(&SavedTabs { tabs, playing: self.playing_tab }) {
-            write_in_background(data_dir().join("playlists.json"), j);
-        }
+        write_json_in_background(data_dir().join("playlists.json"), SavedTabs { tabs, playing: self.playing_tab }, false);
     }
 
     fn swap_tab(&mut self, v: usize) {

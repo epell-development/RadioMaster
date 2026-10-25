@@ -616,6 +616,9 @@ pub struct AudioDevices {
     pub input: String,
     /// Where the fade editor's preview plays (empty = system default). Never goes to the stream.
     pub preview: String,
+    /// Sound card buffer in milliseconds (0 = the default, `audio::DEFAULT_BUFFER_MS`).
+    /// Bigger rides out a slow or busy computer without crackling, at the cost of a little delay.
+    pub buffer_ms: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -780,9 +783,7 @@ impl Config {
     }
     /// Save on the background writer (the disk can be slow; the UI and playout must not wait).
     pub fn save(&self) {
-        if let Ok(s) = serde_json::to_string_pretty(self) {
-            crate::playout::write_in_background(Self::path(), s);
-        }
+        crate::playout::write_json_in_background(Self::path(), self.clone(), true);
     }
 }
 
