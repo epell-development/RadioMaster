@@ -221,3 +221,19 @@ nav.links a.active { color: var(--fg); }
 .news b { color: var(--accent-2); font: 600 .78rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
 .news span { color: var(--fg); font-weight: 600; }
 .news:hover { border-color: var(--accent); }
+/* article pages (server, guides) */
+.crumbs { font: 400 .82rem/1.4 var(--mono); color: var(--muted); margin-bottom: 18px; }
+.crumbs a { color: var(--muted); }
+.crumbs a:hover { color: var(--fg); }
+.page-h { margin-top: 14px; font-size: clamp(2.6rem, 6vw, 4.4rem); text-transform: uppercase; font-weight: 800; }
+.prose { max-width: 76ch; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.prose li { min-width: 0; }
+.prose h2 { font-size: clamp(1.7rem, 3.4vw, 2.4rem); margin-top: 28px; }
+.prose h3 { font-size: 1.25rem; margin-top: 10px; }
+.prose p, .prose li { color: var(--muted); }
+.prose p b, .prose li b { color: var(--fg); font-weight: 600; }
+.prose ul, .prose ol { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; }
+.prose code { font: 400 .88em/1 var(--mono); color: #cfe3f7; }
+.prose .code pre { padding-top: 14px; }
+.prose table { margin: 4px 0; }
+.related { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }

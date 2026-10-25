@@ -1,0 +1,20 @@
+# RadioMaster
+
+> RadioMaster is free, open-source (MIT) radio automation software for Windows, macOS and Linux, made by DovaFM Digital Entertainment Group. It runs a radio station from one screen: playlist tabs with live start times, hour markers, smart crossfades, advert and jingle scheduling, a playlist generator, an event scheduler, a cart wall, microphone ducking, voice tracking, text to speech, Icecast/Shoutcast streaming (MP3, AAC, Opus, Ogg Vorbis, FLAC) and AzuraCast station management. RadioMaster Server is a headless version for Linux and Windows Server that the desktop app controls with File → Connect to Server.
+
+RadioMaster is an independent project and is not affiliated with RadioBOSS, SAM Broadcaster, ZaraRadio or AzuraCast. There is no account, subscription or paid edition.
+
+## Pages
+
+- [RadioMaster home](https://radiomaster.dovafm.com/): features, screenshots, downloads and FAQ
+- [RadioMaster Server](https://radiomaster.dovafm.com/server/): headless radio automation for Linux and Windows Server, setup and connecting from the desktop app
+- [How to start an internet radio station for free](https://radiomaster.dovafm.com/guides/start-an-internet-radio-station/): step-by-step guide
+- [Updates](https://radiomaster.dovafm.com/updates/): release notes for every version
+
+## Links
+
+- [Downloads (GitHub releases)](https://github.com/epell-development/RadioMaster/releases/latest)
+- [Source code](https://github.com/epell-development/RadioMaster)
+- [Server guide](https://github.com/epell-development/RadioMaster/blob/main/docs/SERVER.md)
+- [Plugins and remote control API](https://github.com/epell-development/RadioMaster/blob/main/PLUGINS.md)
+- [Support Discord](https://discord.gg/zVxeUXCjhc)
