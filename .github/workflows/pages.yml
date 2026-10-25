@@ -4,7 +4,7 @@ name: Website
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'docs/screenshots/**', 'assets/icon.png', 'CHANGELOG.md', 'tools/build_updates.py', '.github/workflows/pages.yml']
+    paths: ['site/**', 'docs/screenshots/**', 'docs/social-card.png', 'assets/icon.png', 'CHANGELOG.md', 'tools/build_updates.py', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,7 @@ jobs:
           mkdir -p site/img
           cp docs/screenshots/*.png site/img/
           cp assets/icon.png site/img/
+          cp docs/social-card.png site/img/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

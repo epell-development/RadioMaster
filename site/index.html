@@ -4,8 +4,79 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="img/icon.png">
-<title>RadioMaster</title>
-<meta name="description" content="RadioMaster — free radio automation for Windows, macOS and Linux. Playlists, hour markers, smart crossfades, Icecast/Shoutcast streaming and AzuraCast station management.">
+<link rel="apple-touch-icon" href="img/icon.png">
+<title>RadioMaster — Free, Open-Source Radio Automation Software for Windows, macOS &amp; Linux</title>
+<meta name="description" content="RadioMaster is free, open-source radio automation software for Windows, macOS and Linux. Run a 24/7 station with playlists, hour markers, crossfades, advert scheduling, Icecast/Shoutcast streaming and AzuraCast.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://epell-development.github.io/RadioMaster/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="RadioMaster — Free, Open-Source Radio Automation Software">
+<meta property="og:description" content="Run your radio station from one screen: playlists, hour markers, crossfades, adverts, Icecast/Shoutcast streaming and AzuraCast. Free for Windows, macOS and Linux.">
+<meta property="og:url" content="https://epell-development.github.io/RadioMaster/">
+<meta property="og:image" content="https://epell-development.github.io/RadioMaster/img/social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="RadioMaster: free, open-source radio automation for Windows, macOS and Linux">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="RadioMaster — Free, Open-Source Radio Automation Software">
+<meta name="twitter:description" content="Playlists, hour markers, crossfades, adverts, Icecast/Shoutcast streaming and AzuraCast. Free for Windows, macOS and Linux.">
+<meta name="twitter:image" content="https://epell-development.github.io/RadioMaster/img/social-card.png">
+<link rel="alternate" type="application/atom+xml" title="RadioMaster releases" href="https://github.com/epell-development/RadioMaster/releases.atom">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://epell-development.github.io/RadioMaster/#app",
+      "name": "RadioMaster",
+      "alternateName": ["Radio Master", "RadioMaster radio automation"],
+      "description": "Free, open-source radio automation software for Windows, macOS and Linux: playlists with live start times, hour markers, smart crossfades, advert and jingle scheduling, a playlist generator, Icecast/Shoutcast streaming and AzuraCast station management.",
+      "applicationCategory": "MultimediaApplication",
+      "applicationSubCategory": "Radio automation software",
+      "operatingSystem": "Windows 10, Windows 11, macOS 12+, Linux",
+      "softwareVersion": "0.2.5",
+      "license": "https://opensource.org/licenses/MIT",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "url": "https://epell-development.github.io/RadioMaster/",
+      "downloadUrl": "https://github.com/epell-development/RadioMaster/releases/latest",
+      "installUrl": "https://github.com/epell-development/RadioMaster/releases/latest",
+      "releaseNotes": "https://epell-development.github.io/RadioMaster/updates/",
+      "image": "https://epell-development.github.io/RadioMaster/img/social-card.png",
+      "screenshot": "https://epell-development.github.io/RadioMaster/img/main.png",
+      "featureList": ["Playlist tabs with live start times", "Hour markers (wait, soft, hard)", "Smart crossfades and silence trimming", "Advert and jingle scheduler", "Playlist generator", "Event scheduler", "Cart wall and microphone ducking", "Voice tracking", "Text to speech", "Icecast and Shoutcast streaming (MP3, AAC, Opus, Ogg Vorbis, FLAC)", "AzuraCast station management", "Users and permissions", "PDF and CSV play reports", "Plugins and remote control API"],
+      "publisher": { "@id": "https://epell-development.github.io/RadioMaster/#org" }
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "name": "RadioMaster source code",
+      "codeRepository": "https://github.com/epell-development/RadioMaster",
+      "programmingLanguage": "Rust",
+      "license": "https://opensource.org/licenses/MIT",
+      "targetProduct": { "@id": "https://epell-development.github.io/RadioMaster/#app" }
+    },
+    {
+      "@type": "Organization",
+      "@id": "https://epell-development.github.io/RadioMaster/#org",
+      "name": "DovaFM Digital Entertainment Group",
+      "url": "https://deg.dovafm.com",
+      "sameAs": ["https://github.com/epell-development", "https://discord.gg/zVxeUXCjhc"]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://epell-development.github.io/RadioMaster/#site",
+      "name": "RadioMaster",
+      "url": "https://epell-development.github.io/RadioMaster/",
+      "publisher": { "@id": "https://epell-development.github.io/RadioMaster/#org" }
+    }
+  ]
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -15,7 +86,7 @@
 
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="#top"><img src="img/icon.png" alt=""><span>Radio<b>Master</b></span></a>
+    <a class="brand" href="#top"><img src="img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
     <nav class="links" aria-label="Sections">
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#playlist">Playlist</a>
@@ -31,9 +102,9 @@
 <main id="top">
   <div class="wrap hero">
     <div>
-      <p class="eyebrow">Free radio automation · Windows · macOS · Linux</p>
-      <h1 style="margin-top:14px">Your studio.<br><span>Your control.</span></h1>
-      <p class="lede">RadioMaster runs your station from one screen: playlists with live start times, hour markers that keep you on the clock, smart crossfades, Icecast and Shoutcast streaming, and full AzuraCast station management.</p>
+      <h1 class="kicker">RadioMaster · Free, open-source radio automation software for Windows, macOS and Linux</h1>
+      <p class="slogan" style="margin-top:14px">Your studio.<br><span>Your control.</span></p>
+      <p class="lede">RadioMaster is free, open-source radio automation software that runs your station from one screen: playlists with live start times, hour markers that keep you on the clock, smart crossfades, Icecast and Shoutcast streaming, and full AzuraCast station management.</p>
       <div class="cta">
         <a class="btn primary" id="dl-main" href="#download">Download <small id="dl-main-os">free</small></a>
         <a class="btn ghost" href="https://github.com/epell-development/RadioMaster">View source</a>
@@ -69,7 +140,7 @@
       <div class="head">
         <p class="eyebrow">What's on the desk</p>
         <h2>Everything a live studio needs</h2>
-        <p class="lede">Built for stations that run around the clock and for presenters who jump in live.</p>
+        <p class="lede">Broadcast automation for internet radio, community, student, hospital and FM stations: built for stations that run around the clock and for presenters who jump in live.</p>
       </div>
       <div class="features">
         <div class="feature"><span class="tag">Playlists</span><h3>As many as you need</h3><p>Playlist tabs side by side. The one marked ▶ is on air; play any row of another tab and it goes to air. Every row shows its projected start time.</p></div>
@@ -127,14 +198,14 @@
         <p class="eyebrow">Screens</p>
         <h2>See it running</h2>
       </div>
-      <figure class="shot-main" style="margin:0"><img id="shot" src="img/main.png" alt="RadioMaster main window with playlist, library and side panels" width="1280" height="780"></figure>
+      <figure class="shot-main" style="margin:0"><img id="shot" src="img/main.png" alt="RadioMaster radio automation software: main window with playlist, library and side panels" width="1280" height="780"></figure>
       <p class="caption" id="shot-cap">The main window: playlist tabs with start times and hour lines in the centre, panels left and right.</p>
       <div class="thumbs" role="group" aria-label="Choose a screenshot">
-        <button type="button" aria-pressed="true" data-src="img/main.png" data-cap="The main window: playlist tabs with start times and hour lines in the centre, panels left and right." data-alt="RadioMaster main window"><img src="img/main.png" alt="" loading="lazy"><span>Main window</span></button>
-        <button type="button" aria-pressed="false" data-src="img/playlist-menu.png" data-cap="The Playlist menu: files, streams, commands, pauses, teasers, time announcements, containers, voice tracks and more." data-alt="The Playlist menu open"><img src="img/playlist-menu.png" alt="" loading="lazy"><span>Playlist menu</span></button>
-        <button type="button" aria-pressed="false" data-src="img/hour-marker.png" data-cap="Waiting for the 2:00 hour marker. Rows that will be skipped are struck through and start times update live." data-alt="Playlist waiting for an hour marker"><img src="img/hour-marker.png" alt="" loading="lazy"><span>Hour markers</span></button>
-        <button type="button" aria-pressed="false" data-src="img/additional-window.png" data-cap="An Additional window beside the main window. Open as many as you like and move them to other screens." data-alt="Main window with an Additional window beside it"><img src="img/additional-window.png" alt="" loading="lazy"><span>Additional windows</span></button>
-        <button type="button" aria-pressed="false" data-src="img/track-info.png" data-cap="The playlist follows the on-air song, and the Track Info panel shows last, on air and next with your own notes about each song and artist." data-alt="Track Info panel next to the playlist"><img src="img/track-info.png" alt="" loading="lazy"><span>Track Info</span></button>
+        <button type="button" aria-pressed="true" data-src="img/main.png" data-cap="The main window: playlist tabs with start times and hour lines in the centre, panels left and right." data-alt="RadioMaster main window"><img src="img/main.png" alt="" loading="lazy" width="1280" height="780"><span>Main window</span></button>
+        <button type="button" aria-pressed="false" data-src="img/playlist-menu.png" data-cap="The Playlist menu: files, streams, commands, pauses, teasers, time announcements, containers, voice tracks and more." data-alt="The Playlist menu open"><img src="img/playlist-menu.png" alt="" loading="lazy" width="1280" height="780"><span>Playlist menu</span></button>
+        <button type="button" aria-pressed="false" data-src="img/hour-marker.png" data-cap="Waiting for the 2:00 hour marker. Rows that will be skipped are struck through and start times update live." data-alt="Playlist waiting for an hour marker"><img src="img/hour-marker.png" alt="" loading="lazy" width="1280" height="780"><span>Hour markers</span></button>
+        <button type="button" aria-pressed="false" data-src="img/additional-window.png" data-cap="An Additional window beside the main window. Open as many as you like and move them to other screens." data-alt="Main window with an Additional window beside it"><img src="img/additional-window.png" alt="" loading="lazy" width="1600" height="780"><span>Additional windows</span></button>
+        <button type="button" aria-pressed="false" data-src="img/track-info.png" data-cap="The playlist follows the on-air song, and the Track Info panel shows last, on air and next with your own notes about each song and artist." data-alt="Track Info panel next to the playlist"><img src="img/track-info.png" alt="" loading="lazy" width="1600" height="780"><span>Track Info</span></button>
       </div>
     </div>
   </section>
@@ -155,7 +226,7 @@
         </ul>
         <p class="note">Optional. Without a server RadioMaster streams to any Icecast or Shoutcast host.</p>
       </div>
-      <figure><img src="img/azuracast.png" alt="The AzuraCast station manager window" width="1280" height="780"></figure>
+      <figure><img src="img/azuracast.png" alt="The AzuraCast station manager window in RadioMaster" width="1280" height="780" loading="lazy"></figure>
     </div>
   </section>
 
@@ -203,6 +274,108 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       </div>
     </div>
   </section>
+  <section class="block" id="faq">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">Questions</p>
+        <h2>Radio automation, answered</h2>
+      </div>
+      <div class="faq">
+        <details open>
+          <summary><h3>What is RadioMaster?</h3></summary>
+          <p>RadioMaster is free, open-source radio automation software for Windows, macOS and Linux. It plays your station from one screen: playlist tabs with live start times, hour markers, smart crossfades, adverts and jingles, a cart wall, voice tracks, text to speech, Icecast and Shoutcast streaming and AzuraCast station management. It suits internet radio, community, student, hospital and FM stations.</p>
+        </details>
+        <details>
+          <summary><h3>Is RadioMaster really free?</h3></summary>
+          <p>Yes. RadioMaster is open source under the MIT licence. There is no account, subscription, trial or paid edition: every feature is in the free download, and the <a href="https://github.com/epell-development/RadioMaster">source code is on GitHub</a>.</p>
+        </details>
+        <details>
+          <summary><h3>Does RadioMaster run on Mac and Linux?</h3></summary>
+          <p>Yes. The same app with the same features runs on Windows 10 and 11, macOS 12 or newer, and 64-bit Linux (PulseAudio, PipeWire or ALSA). Each release has a Windows installer and portable zip, a macOS app and a Linux tar.gz.</p>
+        </details>
+        <details>
+          <summary><h3>Can RadioMaster run a station 24/7 without a presenter?</h3></summary>
+          <p>Yes. Build playlists with the playlist generator, keep them on the clock with hour markers, schedule adverts and jingles by song count, minutes or set times, and use the event scheduler to put playlists on air, generate new ones or run station commands at set times.</p>
+        </details>
+        <details>
+          <summary><h3>Can I stream to Icecast, Shoutcast or AzuraCast?</h3></summary>
+          <p>Yes. RadioMaster has a built-in encoder for Icecast 2 and Shoutcast 2, including AzuraCast DJ ports, in MP3, AAC, Opus, Ogg Vorbis or FLAC. Several streams can run at once with automatic reconnect and track titles. Sound-card outputs for an FM transmitter work at the same time.</p>
+        </details>
+        <details>
+          <summary><h3>Is RadioMaster an alternative to RadioBOSS, SAM Broadcaster or ZaraRadio?</h3></summary>
+          <p>RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products.</p>
+        </details>
+        <details>
+          <summary><h3>Where do I get help?</h3></summary>
+          <p>Ask on the <a href="https://discord.gg/zVxeUXCjhc">RadioMaster Support Discord</a> or <a href="https://github.com/epell-development/RadioMaster/issues">open an issue on GitHub</a>. Every release and what changed is on the <a href="updates/">Updates page</a>, and installed copies update themselves in one click.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is RadioMaster?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "RadioMaster is free, open-source radio automation software for Windows, macOS and Linux. It plays your station from one screen: playlist tabs with live start times, hour markers, smart crossfades, adverts and jingles, a cart wall, voice tracks, text to speech, Icecast and Shoutcast streaming and AzuraCast station management. It suits internet radio, community, student, hospital and FM stations."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is RadioMaster really free?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. RadioMaster is open source under the MIT licence. There is no account, subscription, trial or paid edition: every feature is in the free download, and the source code is on GitHub."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does RadioMaster run on Mac and Linux?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. The same app with the same features runs on Windows 10 and 11, macOS 12 or newer, and 64-bit Linux (PulseAudio, PipeWire or ALSA). Each release has a Windows installer and portable zip, a macOS app and a Linux tar.gz."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can RadioMaster run a station 24/7 without a presenter?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Build playlists with the playlist generator, keep them on the clock with hour markers, schedule adverts and jingles by song count, minutes or set times, and use the event scheduler to put playlists on air, generate new ones or run station commands at set times."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I stream to Icecast, Shoutcast or AzuraCast?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. RadioMaster has a built-in encoder for Icecast 2 and Shoutcast 2, including AzuraCast DJ ports, in MP3, AAC, Opus, Ogg Vorbis or FLAC. Several streams can run at once with automatic reconnect and track titles. Sound-card outputs for an FM transmitter work at the same time."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is RadioMaster an alternative to RadioBOSS, SAM Broadcaster or ZaraRadio?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Where do I get help?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Ask on the RadioMaster Support Discord or open an issue on GitHub. Every release and what changed is on the Updates page, and installed copies update themselves in one click."
+      }
+    }
+  ]
+}
+</script>
 </main>
 
 <footer>
@@ -212,11 +385,12 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
       <a href="updates/">Updates</a>
+      <a href="#faq">FAQ</a>
       <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
     </div>
-    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS) or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio or AzuraCast. Names are used only to describe compatibility.</p>
     <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
   </div>
 </footer>

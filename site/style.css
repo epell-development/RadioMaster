@@ -53,8 +53,9 @@ nav.links a:hover { color: var(--fg); }
 
 /* ---------- hero */
 .hero { padding-block: 56px 40px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 48px; align-items: center; }
-.hero h1 { font-size: clamp(3.2rem, 7.6vw, 6.2rem); font-weight: 800; text-transform: uppercase; line-height: .9; }
-.hero h1 span { color: var(--accent); }
+.hero h1.kicker { font: 600 .78rem/1.5 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent-2); max-width: 60ch; }
+.hero .slogan { margin: 0; font-family: var(--display); font-size: clamp(3.2rem, 7.6vw, 6.2rem); font-weight: 800; text-transform: uppercase; line-height: .9; text-wrap: balance; }
+.hero .slogan span { color: var(--accent); }
 .hero .lede { margin-top: 20px; }
 .hero .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
 .hero .fine { margin-top: 14px; color: var(--muted); font-size: .88rem; }
@@ -182,6 +183,17 @@ tr:last-child td { border-bottom: 0; }
 .req b { color: var(--fg); font-weight: 600; }
 @media (max-width: 1100px) { .desk { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .desk { grid-template-columns: 1fr; } }
+
+/* FAQ */
+.faq { display: grid; border-top: 1px solid var(--line); max-width: 900px; }
+.faq details { border-bottom: 1px solid var(--line); }
+.faq summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; font: 600 1.4rem/1 var(--mono); color: var(--accent-2); flex: none; }
+.faq details[open] summary::after { content: "\2212"; }
+.faq summary h3 { font-size: 1.45rem; letter-spacing: .01em; }
+.faq summary:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; border-radius: 4px; }
+.faq p { margin: 0 0 20px; color: var(--muted); max-width: 72ch; }
 
 footer { border-top: 1px solid var(--line); padding-block: 36px 48px; color: var(--muted); font-size: .88rem; }
 footer .wrap { display: grid; gap: 10px; }
