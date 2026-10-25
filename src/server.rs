@@ -816,18 +816,13 @@ impl Api {
     }
 
     /// A file's bytes, for previews, waveforms and copies. Others than administrators only get files
-    /// the station uses: in a library folder, the library, a playlist or the cart wall.
+    /// in the library folders.
     fn send_file(&self, req: tiny_http::Request, me: &Operator, path: &str) {
         let path = std::path::PathBuf::from(path);
-        let ok = me.admin || within(&self.library_roots(), &path) || {
-            // (exactly a path the station has: what it names is the station's anyway)
-            let c = self.core.lock();
-            c.library.iter().any(|t| t.path == path)
-                || c.playlist.iter().chain(c.tabs.iter().flat_map(|t| t.entries.iter())).any(|e| e.track.path == path)
-                || c.cfg.carts.iter().any(|k| std::path::Path::new(&k.path) == path)
-        };
+        // (not "any file a playlist names": a presenter could name any file in one)
+        let ok = me.admin || within(&self.library_roots(), &path);
         if !ok {
-            return respond(req, error(403, "that file isn't one the station uses"), false);
+            return respond(req, error(403, "only the server's administrators can fetch files outside its library folders"), false);
         }
         match std::fs::File::open(&path) {
             Ok(f) if path.is_file() => {

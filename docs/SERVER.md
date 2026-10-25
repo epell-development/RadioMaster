@@ -188,8 +188,7 @@ Passwords are checked with Argon2 (only the hashes are stored, in `operators.jso
 day without use, and repeated wrong passwords are slowed down. Each account can do only what its permissions
 allow, but an account that may edit playlists can add `RUN` commands that start programs on the server, so give
 that only to people you trust, use strong passwords and run the server under its own unprivileged account (the
-systemd unit does). Non-administrators can only download files the station uses (in a library folder, the
-library, a playlist or the cart wall). On a network you don't trust, or over the internet, turn on
+systemd unit does). Non-administrators can only download, browse and upload files in the library folders. On a network you don't trust, or over the internet, turn on
 [HTTPS](#https) (or put the server behind an HTTPS reverse proxy such as Caddy or nginx, or a VPN). Without it
 the password and everything else go over the network unencrypted. The web portal uses the same sign-in, and
 its pages refuse to be shown inside other sites. With nginx, switch response buffering off
