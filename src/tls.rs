@@ -110,6 +110,14 @@ fn write_private(path: &Path, text: &str) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         o.mode(0o600);
     }
+    // Windows: the data folder is in the user's own profile, whose permissions it inherits; the file
+    // is also hidden so it isn't picked up by accident
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        o.attributes(FILE_ATTRIBUTE_HIDDEN);
+    }
     o.open(path)?.write_all(text.as_bytes())
 }
 
@@ -155,7 +163,14 @@ fn connection(tcp: TcpStream, backend: SocketAddr, config: Arc<rustls::ServerCon
     }
     let mut conn = rustls::ServerConnection::new(config).map_err(io::Error::other)?;
     let mut raw = tcp.try_clone()?;
+    // the same for the handshake: done within a few seconds or dropped
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while conn.is_handshaking() {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Ok(());
+        }
+        raw.set_read_timeout(Some(left))?;
         conn.complete_io(&mut raw)?;
     }
     tcp.set_read_timeout(Some(IDLE))?;
@@ -262,7 +277,14 @@ fn flush(c: &mut rustls::ServerConnection, out: &mut TcpStream) -> io::Result<()
 fn plain_http(mut tcp: TcpStream) -> io::Result<()> {
     let mut head = Vec::new();
     let mut buf = [0u8; 2048];
+    // the whole request head within a few seconds: a client dripping bytes doesn't keep the thread
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < 16 * 1024 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Ok(());
+        }
+        tcp.set_read_timeout(Some(left))?;
         let n = tcp.read(&mut buf)?;
         if n == 0 {
             break;

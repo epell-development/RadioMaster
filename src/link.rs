@@ -108,20 +108,33 @@ fn call<T: DeserializeOwned>(agent: &ureq::Agent, base: &str, token: &str, path:
             })
         }
         // (without the URL, which the app shows already)
-        Err(ureq::Error::Transport(t)) => {
-            let full = format!("{t:?}");
-            Err(Fail::Other(if full.contains(crate::tls::UNTRUSTED) {
-                crate::tls::UNTRUSTED.into()
-            } else if full.contains(crate::tls::CHANGED) {
-                crate::tls::CHANGED.into()
-            } else {
-                match t.message() {
-                    Some(m) => format!("{} ({m})", t.kind()),
-                    None => t.kind().to_string(),
-                }
-            }))
-        }
+        Err(ureq::Error::Transport(t)) => Err(Fail::Other(match trust_mark(&t) {
+            Some(mark) => mark.into(),
+            None => match t.message() {
+                Some(m) => format!("{} ({m})", t.kind()),
+                None => t.kind().to_string(),
+            },
+        })),
     }
+}
+
+/// The certificate check's verdict (`tls::UNTRUSTED` or `tls::CHANGED`), found in the error's causes.
+fn trust_mark(t: &ureq::Transport) -> Option<&'static str> {
+    let mark = |m: &str| [crate::tls::UNTRUSTED, crate::tls::CHANGED].into_iter().find(|k| m == *k);
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(t);
+    while let Some(e) = cause {
+        // rustls' error travels inside an io::Error
+        let inner = e.downcast_ref::<std::io::Error>().and_then(|io| io.get_ref()).map(|i| i as &(dyn std::error::Error + 'static));
+        for e in [Some(e), inner].into_iter().flatten() {
+            if let Some(rustls::Error::General(m)) = e.downcast_ref::<rustls::Error>() {
+                if let Some(k) = mark(m) {
+                    return Some(k);
+                }
+            }
+        }
+        cause = e.source();
+    }
+    None
 }
 
 #[derive(Deserialize)]
