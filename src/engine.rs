@@ -984,14 +984,15 @@ mod tests {
         let first: Vec<f32> = (0..AHEAD_BLOCK * 2).map(|_| bus.next().unwrap()).collect();
         assert!(first.iter().all(|x| (x - 0.5).abs() < 1e-6), "the first blocks are ready as soon as the track starts");
         // the decoder is stuck on the disk now: the mix carries on (silence) instead of waiting for it
-        let stalled: Vec<f32> = (0..BLOCK_FRAMES * 2).map(|_| bus.next().unwrap()).collect();
+        let mix_block = super::BLOCK_FRAMES * 2; // samples the mixer makes per refill
+        let stalled: Vec<f32> = (0..mix_block).map(|_| bus.next().unwrap()).collect();
         assert!(t.elapsed() < std::time::Duration::from_millis(100), "the mix waited for the disk");
         assert!(stalled.iter().all(|&x| x == 0.0));
         assert!(!engine.take_ended(), "a stall is not the end of the track");
         // it catches up and the whole track is played, then reported as ended
         let mut heard = first.len();
         for _ in 0..2000 {
-            heard += (0..BLOCK_FRAMES * 2).map(|_| bus.next().unwrap()).filter(|x| (x - 0.5).abs() < 1e-6).count();
+            heard += (0..mix_block).map(|_| bus.next().unwrap()).filter(|x| (x - 0.5).abs() < 1e-6).count();
             if engine.take_ended() {
                 break;
             }
