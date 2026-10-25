@@ -266,7 +266,7 @@ impl App {
                 if d.items.is_empty() {
                     return Err("Add at least one file".into());
                 }
-                let durs: Vec<f32> = d.items.iter().map(|p| crate::library::Track::from_path(p).duration).collect();
+                let durs: Vec<f32> = d.items.iter().map(|p| crate::library::read_track(p).duration).collect();
                 let total: f32 = durs.iter().sum();
                 let secs = if d.random { total / durs.len() as f32 } else { total };
                 PlEntry::special(
@@ -278,14 +278,14 @@ impl App {
             DlgKind::TrackList => {
                 let src = d.text.trim();
                 let p = std::path::Path::new(src);
-                let files = if p.is_dir() { crate::library::audio_files_in(p) } else { crate::playout::m3u_paths(p) };
+                let files = if p.is_dir() { crate::library::audio_files_cached(p) } else { crate::playout::m3u_paths(p) };
                 if files.is_empty() {
                     return Err("Choose a folder (or .m3u) that contains audio files".into());
                 }
                 let sample: Vec<f32> = files
                     .iter()
                     .step_by((files.len() / 25).max(1))
-                    .map(|f| crate::library::Track::from_path(f).duration)
+                    .map(|f| crate::library::read_track(f).duration)
                     .filter(|d| *d > 0.0)
                     .collect();
                 let avg = if sample.is_empty() { 210.0 } else { sample.iter().sum::<f32>() / sample.len() as f32 };
@@ -904,7 +904,7 @@ impl App {
             self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
         }
         if item(ui, edit, tr("Add folder…"), "Alt+D") {
-            self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AddFolder));
+            self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::add_folder));
         }
         if item(ui, edit, tr("Add URL…"), "Alt+U") {
             self.open_item_dlg(DlgKind::Url);
@@ -952,10 +952,10 @@ impl App {
         }
         ui.separator();
         if item(ui, edit, tr("Insert playlist"), "") {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::InsertPlaylist));
+            self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::insert_playlist));
         }
         if item(ui, edit, tr("Insert tracks from playlist…"), "") {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::InsertFromPlaylist));
+            self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::insert_from_playlist));
         }
         ui.separator();
         ui.menu_button(tr("Extra"), |ui| {
@@ -1085,7 +1085,7 @@ impl App {
                 self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
             }
             if press(Modifiers::ALT, Key::D) {
-                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AddFolder));
+                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::add_folder));
             }
             if press(Modifiers::ALT, Key::U) {
                 self.open_item_dlg(DlgKind::Url);
@@ -1115,7 +1115,7 @@ impl App {
                 self.tab_ops.push(super::plview::TabOp::New);
             }
             if press(Modifiers::COMMAND, Key::O) {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::LoadM3u));
+                self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
             }
             if press(Modifiers::COMMAND, Key::S) {
                 let name = format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));

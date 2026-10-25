@@ -30,10 +30,26 @@ impl Track {
         }
     }
 
+    /// A row for a file whose tags haven't been read yet: just the file name.
+    pub fn placeholder(p: &Path) -> Track {
+        let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        Track { path: p.to_path_buf(), title: stem, ..Default::default() }
+    }
+
+    /// Whether this is still the `placeholder` for its file.
+    pub fn is_placeholder(&self) -> bool {
+        self.duration == 0.0
+            && self.artist.is_empty()
+            && self.album.is_empty()
+            && self.genre.is_empty()
+            && self.year.is_empty()
+            && self.comment.is_empty()
+            && self.path.file_stem().is_some_and(|s| s.to_string_lossy() == self.title)
+    }
+
     /// Read tags + duration. Never fails: falls back to the file name.
     pub fn from_path(p: &Path) -> Track {
-        let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        let mut t = Track { path: p.to_path_buf(), title: stem, ..Default::default() };
+        let mut t = Track::placeholder(p);
         if let Ok(probe) = Probe::open(p) {
             if let Ok(tf) = probe.read() {
                 t.duration = tf.properties().duration().as_secs_f32();
@@ -111,6 +127,7 @@ pub fn write_tags(t: &Track) -> anyhow::Result<()> {
         }
     }
     tf.save_to_path(&t.path, WriteOptions::default())?;
+    forget_track(&t.path);
     Ok(())
 }
 
@@ -153,9 +170,125 @@ pub fn cover_bytes(p: &Path) -> Option<Vec<u8>> {
 }
 
 // ------------------------------------------------------------------ fast checks for the UI
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+/// Files and folders a path list stands for: folders become the audio files in them (read the disk;
+/// call it off the UI thread).
+pub fn expand_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = vec![];
+    for p in paths {
+        if p.is_dir() {
+            out.extend(audio_files_in(&p));
+        } else if is_audio(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn track_cache() -> &'static Mutex<HashMap<PathBuf, (SystemTime, u64, Track)>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (SystemTime, u64, Track)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `Track::from_path`, remembered until the file changes (a quick look at its size and date instead of
+/// reading the tags again).
+pub fn read_track(p: &Path) -> Track {
+    let Ok(meta) = std::fs::metadata(p) else { return Track::from_path(p) };
+    let stamp = (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len());
+    if let Some((m, l, t)) = track_cache().lock().unwrap().get(p) {
+        if (*m, *l) == stamp {
+            return t.clone();
+        }
+    }
+    let t = Track::from_path(p);
+    let mut c = track_cache().lock().unwrap();
+    if c.len() > 100_000 {
+        c.clear();
+    }
+    c.insert(p.to_path_buf(), (stamp.0, stamp.1, t.clone()));
+    t
+}
+
+fn forget_track(p: &Path) {
+    track_cache().lock().unwrap().remove(p);
+}
+
+struct TagReader {
+    pending: Mutex<HashSet<PathBuf>>,
+    done: Mutex<Vec<Track>>,
+    tx: Mutex<mpsc::Sender<PathBuf>>,
+}
+
+fn tag_reader() -> &'static TagReader {
+    static READER: OnceLock<TagReader> = OnceLock::new();
+    READER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<PathBuf>();
+        std::thread::spawn(move || {
+            while let Ok(p) = rx.recv() {
+                let t = read_track(&p);
+                if let Some(r) = READER.get() {
+                    r.pending.lock().unwrap().remove(&p);
+                    r.done.lock().unwrap().push(t);
+                }
+            }
+        });
+        TagReader { pending: Mutex::new(HashSet::new()), done: Mutex::new(vec![]), tx: Mutex::new(tx) }
+    })
+}
+
+/// Read a file's tags in the background; the result comes out of `tags_read`.
+pub fn read_tags_later(p: &Path) {
+    let r = tag_reader();
+    if r.pending.lock().unwrap().insert(p.to_path_buf()) {
+        let _ = r.tx.lock().unwrap().send(p.to_path_buf());
+    }
+}
+
+/// Tags read in the background since the last call.
+pub fn tags_read() -> Vec<Track> {
+    std::mem::take(&mut *tag_reader().done.lock().unwrap())
+}
+
+struct FolderCache {
+    seen: Mutex<HashMap<PathBuf, (Instant, Vec<PathBuf>)>>,
+    tx: Mutex<mpsc::Sender<PathBuf>>,
+}
+
+fn folder_cache() -> &'static FolderCache {
+    static CACHE: OnceLock<FolderCache> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<PathBuf>();
+        std::thread::spawn(move || {
+            while let Ok(p) = rx.recv() {
+                let files = audio_files_in(&p);
+                if let Some(c) = CACHE.get() {
+                    c.seen.lock().unwrap().insert(p, (Instant::now(), files));
+                }
+            }
+        });
+        FolderCache { seen: Mutex::new(HashMap::new()), tx: Mutex::new(tx) }
+    })
+}
+
+/// `audio_files_in` for folders that playout picks from again and again (advert / jingle rules, track
+/// lists): the first call reads the folder, later ones get the remembered list while it is re-read
+/// in the background every minute.
+pub fn audio_files_cached(dir: &Path) -> Vec<PathBuf> {
+    let c = folder_cache();
+    if let Some((at, files)) = c.seen.lock().unwrap().get_mut(dir) {
+        if at.elapsed() > Duration::from_secs(60) {
+            *at = Instant::now(); // keep the old list until the new one lands
+            let _ = c.tx.lock().unwrap().send(dir.to_path_buf());
+        }
+        return files.clone();
+    }
+    let files = audio_files_in(dir);
+    c.seen.lock().unwrap().insert(dir.to_path_buf(), (Instant::now(), files.clone()));
+    files
+}
 
 struct MissingCache {
     seen: Mutex<HashMap<PathBuf, (bool, Instant)>>,
