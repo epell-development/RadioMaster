@@ -47,7 +47,8 @@
       "@type": "BreadcrumbList",
       "itemListElement": [
         { "@type": "ListItem", "position": 1, "name": "RadioMaster", "item": "https://radiomaster.dovafm.com/" },
-        { "@type": "ListItem", "position": 2, "name": "Start an internet radio station", "item": "https://radiomaster.dovafm.com/guides/start-an-internet-radio-station/" }
+        { "@type": "ListItem", "position": 2, "name": "Guides", "item": "https://radiomaster.dovafm.com/guides/" },
+        { "@type": "ListItem", "position": 3, "name": "Start an internet radio station", "item": "https://radiomaster.dovafm.com/guides/start-an-internet-radio-station/" }
       ]
     }
   ]
@@ -60,25 +61,28 @@
 </head>
 <body>
 
+<!-- NAV -->
 <header class="top">
   <div class="wrap">
     <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
-    <nav class="links" aria-label="Sections">
-      <a class="hide-sm" href="/#features">Features</a>
-      <a class="hide-sm" href="/server/">Server</a>
-      <a class="hide-sm active" href="/guides/start-an-internet-radio-station/">Guide</a>
-      <a class="hide-sm" href="/updates/">Updates</a>
-      <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
-      <a class="hide-sm" href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
-      <a class="btn primary small" href="/#download">Download</a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
     </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
   </div>
 </header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
 
 <main id="top">
-  <section class="wrap" style="padding-block:56px 24px">
-    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / Start an internet radio station</nav>
-    <p class="eyebrow">Guide</p>
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Start an internet radio station</nav>
+    <p class="eyebrow">Guide · Get started</p>
     <h1 class="page-h">How to start an internet radio station for free</h1>
     <p class="lede" style="margin-top:16px">You need four things to put a station on the internet: music you're allowed to play, a streaming server that listeners connect to, radio automation software that plays and mixes your programme, and a computer to run it on. This guide walks through each step using free tools, with <a href="/">RadioMaster</a> as the automation software.</p>
   </section>
@@ -106,25 +110,25 @@
       <h2>5. Build your library and playlists</h2>
       <ol>
         <li>Add your music folders to the <b>Library</b>. RadioMaster reads the tags and analyses each track so silence is trimmed and fades sound right.</li>
-        <li>Drag songs into a playlist tab, or let <b>Tools → Playlist generator</b> build hours of programming from your categories and templates.</li>
+        <li>Drag songs into a playlist tab, or let <b>Tools → Playlist generator</b> build hours of programming from your categories and templates (see the <a href="/guides/playlist-generator/">playlist generator guide</a>).</li>
         <li>Add <a href="/#playlist">hour markers</a> so the station stays on the clock: wait for the top of the hour, finish the song and jump, or cut in exactly on time for the news.</li>
-        <li>Put jingles and station IDs on the <b>Jingles → Cart wall</b>, and use <b>Tools → Advertisement scheduler</b> for rules like "every 5 songs, play 2 adverts".</li>
+        <li>Put jingles and station IDs on the <b>Jingles → Cart wall</b>, and use <b>Tools → Advertisement scheduler</b> for rules like "every 5 songs, play 2 adverts" (see <a href="/guides/advertisement-scheduler/">scheduling adverts and jingles</a>).</li>
       </ol>
 
       <h2>6. Connect to your stream</h2>
-      <p>Open <b>Tools → Streams / encoders</b>, add an encoder and fill in the server address, port, mount and password from step 3. Pick a format: MP3 at 128 kbps is understood by every player, while AAC and Opus sound better at lower bitrates. You can run several encoders at once, for example a high and a low quality stream, and RadioMaster reconnects on its own and sends the song titles to the server.</p>
+      <p>Open <b>Tools → Streams / encoders</b>, add an encoder and fill in the server address, port, mount and password from step 3. Pick a format: MP3 at 128 kbps is understood by every player, while AAC and Opus sound better at lower bitrates. You can run several encoders at once, for example a high and a low quality stream, and RadioMaster reconnects on its own and sends the song titles to the server. The <a href="/guides/stream-to-icecast-shoutcast/">streaming guide</a> has every setting.</p>
 
       <h2>7. Go live</h2>
-      <p>Press play and your station is on air. When a presenter wants to talk, switch on the microphone and the music ducks under the voice. Record <b>voice tracks</b> to sound live while you're away, use <b>text to speech</b> for time checks and "coming up next" links, and give each presenter their own login with <a href="/#features">users and permissions</a>.</p>
+      <p>Press play and your station is on air. When a presenter wants to talk, switch on the microphone and the music ducks under the voice. Record <b>voice tracks</b> to sound live while you're away, use <b>text to speech</b> for time checks and "coming up next" links, and give each presenter their own login with <a href="/guides/users-and-permissions/">users and permissions</a>. The <a href="/guides/live-shows/">live show guide</a> covers the mic, cart wall and voice tracks.</p>
 
       <h2>8. Run it 24/7</h2>
-      <p>The <b>Tools → Event scheduler</b> puts playlists on air, generates new ones or runs station commands at set times, so the station keeps going overnight. If you'd rather not leave a desktop computer on, <a href="/server/">RadioMaster Server</a> runs the whole station on a Linux machine, a VPS or Windows Server without a window, and presenters control it from the desktop app.</p>
+      <p>The <a href="/guides/event-scheduler/"><b>Tools → Event scheduler</b></a> puts playlists on air, generates new ones or runs station commands at set times, so the station keeps going overnight. If you'd rather not leave a desktop computer on, <a href="/server/">RadioMaster Server</a> runs the whole station on a Linux machine, a VPS or Windows Server without a window, and presenters control it from the desktop app, from anywhere (see <a href="/guides/broadcast-from-anywhere/">broadcast from anywhere</a>).</p>
 
       <h2>9. Get listeners</h2>
       <ul>
         <li>Put a player on your website that points at your stream address.</li>
         <li>List the station in internet radio directories; many read their details from your Icecast or Shoutcast server.</li>
-        <li>Share the stream link on social media and post what's on air with a <a href="https://github.com/epell-development/RadioMaster/blob/main/PLUGINS.md">RadioMaster plugin</a>, for example to Discord.</li>
+        <li>Share the stream link on social media and post what's on air with a <a href="/guides/plugins/">RadioMaster plugin</a>, for example to Discord.</li>
         <li>Check <b>Tools → Reports</b> for what played, and your stream server's stats for who listened.</li>
       </ul>
 
@@ -136,18 +140,38 @@
       </div>
     </article>
   </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/stream-to-icecast-shoutcast/"><span class="tag">Get started</span><b>Stream to Icecast or Shoutcast</b><span>Add an encoder, pick a format and bitrate, and send song titles to your listeners.</span></a>
+<a class="guide-card" href="/guides/playlist-generator/"><span class="tag">Run the station</span><b>Use the playlist generator</b><span>Categories, templates and patterns that build hours of programming in one click.</span></a>
+<a class="guide-card" href="/guides/advertisement-scheduler/"><span class="tag">Run the station</span><b>Schedule adverts and jingles</b><span>Rules for every N songs, every N minutes or set times, with run dates for each advert.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
 </main>
 
+<!-- FOOTER -->
 <footer>
   <div class="wrap">
     <div class="row">
       <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
-      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
-      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="/guides/">Guides</a>
       <a href="/server/">RadioMaster Server</a>
-      <a href="/guides/start-an-internet-radio-station/">Start a radio station</a>
+      <a href="/server/docs/">Server docs</a>
       <a href="/updates/">Updates</a>
       <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
     </div>
@@ -155,6 +179,7 @@
     <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
   </div>
 </footer>
+<!-- /FOOTER -->
 
 </body>
 </html>

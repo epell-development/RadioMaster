@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>How to Use the RadioMaster Playlist Generator: Categories, Templates and Auto-Playlist</title>
+<meta name="description" content="Build hours of radio programming automatically with RadioMaster&#x27;s playlist generator: make categories from folders and genres, write a template with a pattern, artist separation, jingles and hour markers, then generate or keep the playlist filled.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/playlist-generator/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to use the playlist generator">
+<meta property="og:description" content="Categories, templates, patterns, jingle inserts and auto-playlist: build hours of programming in one click.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/playlist-generator/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="RadioMaster radio automation software">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to use the playlist generator">
+<meta name="twitter:description" content="Categories, templates, patterns, jingle inserts and auto-playlist: build hours of programming in one click.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/playlist-generator/#article",
+      "headline": "How to use the playlist generator",
+      "description": "Build hours of radio programming automatically with RadioMaster's playlist generator: make categories from folders and genres, write a template with a pattern, artist separation, jingles and hour markers, then generate or keep the playlist filled.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/playlist-generator/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Playlist generator",
+          "item": "https://radiomaster.dovafm.com/guides/playlist-generator/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Playlist generator</nav>
+    <p class="eyebrow">Guide · Run the station</p>
+    <h1 class="page-h">How to use the playlist generator</h1>
+    <p class="lede" style="margin-top:16px">The playlist generator builds hours of programming from your music library in one click. You tell it what pools of songs you have (categories) and how an hour should sound (a template), and it fills the playlist, keeps artists apart and drops in jingles and hour markers for you.</p>
+    <nav class="toc" aria-label="On this page"><a href="#before">Before you start</a><a href="#categories">Categories</a><a href="#templates">Templates</a><a href="#generate">Generate</a><a href="#auto">Auto-playlist</a><a href="#schedule">On a schedule</a><a href="#tips">Tips</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="before" style="margin-top:0">Before you start</h2>
+      <p>The generator picks songs from the <b>Library</b>, so add your music folders there first (the Library tab, then <b>Rescan library</b> from the File menu after you add new files). Open the generator with <b>Tools → Playlist generator</b> or <kbd>Ctrl+G</kbd>. It has three parts, top to bottom: Auto-playlist, Categories and Templates.</p>
+      <p class="tip"><b>Can't open it?</b> The playlist generator is a tool an administrator can allow or block per user. See <a href="/guides/users-and-permissions/">users and permissions</a>.</p>
+
+      <h2 id="categories">1. Make your categories</h2>
+      <p>A category is a pool of tracks the generator can pick from. Each one has a name and up to three filters; leave a filter empty to mean "any".</p>
+      <div class="rundown-table"><table><thead><tr><th>Filter</th><th>What it matches</th></tr></thead><tbody><tr><td class="k">folder</td><td>Tracks whose file is inside this folder (or any folder in it). Use <b>…</b> to pick it.</td></tr><tr><td class="k">genre</td><td>Tracks whose genre tag contains this text, ignoring capitals. <code>rock</code> matches Rock, Soft Rock and Rock &amp; Roll.</td></tr><tr><td class="k">length</td><td>Shortest and longest track in seconds. A maximum of 0 means no limit. Handy for keeping long album versions or short IDs out.</td></tr></tbody></table></div>
+      <p>A typical music station might have:</p>
+      <div class="rundown-table"><table><thead><tr><th>Category</th><th>Filters</th></tr></thead><tbody><tr><td class="it">Current</td><td>folder <code>D:\Music\Current</code></td></tr><tr><td class="it">Recurrent</td><td>folder <code>D:\Music\Recurrent</code></td></tr><tr><td class="it">Gold</td><td>folder <code>D:\Music\Gold</code>, length 120–420 s</td></tr><tr><td class="it">Station IDs</td><td>folder <code>D:\Jingles\IDs</code>, length 0–30 s</td></tr></tbody></table></div>
+      <p>Press <b>➕ Add category</b> for each one. The delete button asks <b>Delete! / Keep</b> first, so a stray click won't lose anything.</p>
+
+      <h2 id="templates">2. Write a template</h2>
+      <p>A template describes how the programming should sound. Press <b>➕ New</b> under Templates, then set:</p>
+      <ul>
+        <li><b>Name</b>: what you'll pick it by, for example <i>Daytime</i> or <i>Overnight</i>.</li>
+        <li><b>Length</b>: how much to make, from 5 minutes to 24 hours (1440 minutes).</li>
+        <li><b>Artist separation</b>: how many tracks must pass before the same artist can play again. 8 to 12 suits most music stations.</li>
+      </ul>
+      <h3>The pattern</h3>
+      <p>The pattern is the running order the generator repeats until the length is reached. Each step is a count and a source: a category, or the files of one of your <a href="/guides/advertisement-scheduler/">advert or jingle rules</a>. Press <b>➕ Add pattern step</b> for each step. For example:</p>
+      <div class="rundown-table"><table><thead><tr><th>Step</th><th>Count</th><th>From</th></tr></thead><tbody><tr><td class="it">1.</td><td>2 ×</td><td>Current</td></tr><tr><td class="it">2.</td><td>1 ×</td><td>Gold</td></tr><tr><td class="it">3.</td><td>1 ×</td><td>Recurrent</td></tr><tr><td class="it">4.</td><td>1 ×</td><td>Station IDs</td></tr></tbody></table></div>
+      <p>That gives Current, Current, Gold, Recurrent, ID, then round again.</p>
+      <h3>Inserts by time</h3>
+      <p>Below the pattern you can add things that go in by time instead of by position, such as "every 15 min insert 1 × Station IDs". Press <b>➕ Add insert</b>, then set the minutes, the count and the source. <b>➕ Add jingles</b> is a shortcut that adds your first jingle rule every 15 minutes.</p>
+      <p>Times are counted along the generated running order using each track's length, so an insert every 30 minutes lands roughly every half hour of airtime wherever the playlist starts.</p>
+      <h3>Hour markers</h3>
+      <p>Tick <b>Hour marker at the top of every hour</b> and the generator places an <a href="/#playlist">hour marker</a> where each new hour starts, so the station stays on the clock even if the songs run long or short.</p>
+
+      <h2 id="generate">3. Generate</h2>
+      <ul>
+        <li><b>▶ Generate (replace playlist)</b> clears the playlist and fills it with the template.</li>
+        <li><b>Append to playlist</b> adds the new tracks after the last row, keeping what's already there.</li>
+      </ul>
+      <p>The log shows how many tracks were made. If it says the generator produced nothing, check that the library has been scanned and that your category filters match some tracks.</p>
+
+      <h2 id="auto">Keep the playlist filled automatically</h2>
+      <p>At the top of the window, tick <b>Keep the playlist filled automatically</b>, pick a template and how many minutes should always be left (for example "when under 30 min left"). RadioMaster checks every couple of seconds and appends a fresh batch from that template whenever the playlist runs low, so the station never runs dry.</p>
+
+      <h2 id="schedule">Generate on a schedule</h2>
+      <p>To make a new playlist at set times, use the <a href="/guides/event-scheduler/">event scheduler</a> actions <b>Generate a new playlist from a template</b> or <b>Add tracks from a template after the playlist</b>. The same thing works as a station command in a playlist command row or from a plugin:</p>
+      <div class="code"><pre>GENERATE Overnight
+APPEND Daytime</pre></div>
+
+      <h2 id="tips">Tips</h2>
+      <ul>
+        <li>Within one generated playlist, every track in a category plays once before any of them repeats, so big categories stay fresh.</li>
+        <li>If artist separation can't be met (a small category with few artists), the generator still picks a track rather than leaving a gap.</li>
+        <li>Timed inserts (jingles, IDs, adverts) don't count towards artist separation.</li>
+        <li>Make a template per daypart (Breakfast, Daytime, Evening, Overnight) and switch between them with the event scheduler.</li>
+        <li>While connected to <a href="/server/">RadioMaster Server</a>, the library and folders are the server's, so a category folder is typed the way the server sees it, for example <code>/srv/music/current</code>.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/advertisement-scheduler/"><span class="tag">Run the station</span><b>Schedule adverts and jingles</b><span>Rules for every N songs, every N minutes or set times, with run dates for each advert.</span></a>
+<a class="guide-card" href="/guides/event-scheduler/"><span class="tag">Run the station</span><b>Automate with the event scheduler</b><span>Generate tomorrow&#x27;s playlist, switch shows and run commands at set times.</span></a>
+<a class="guide-card" href="/guides/users-and-permissions/"><span class="tag">Run the station</span><b>Set up users and permissions</b><span>A login for every presenter, and exactly which tools each one can open.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

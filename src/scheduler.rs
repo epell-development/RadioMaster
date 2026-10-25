@@ -145,7 +145,7 @@ impl Event {
         let end = self.until.0.min(23) * 60 + self.until.1.min(59);
         let off = (now + 1440 - start) % 1440;
         let span = if end == start { 1439 } else { (end + 1440 - start) % 1440 };
-        off <= span && off % self.repeat_mins == 0
+        off <= span && off.is_multiple_of(self.repeat_mins)
     }
 
     /// "at 12:00", or "every 60 min from 06:00 to 22:00".
@@ -154,7 +154,7 @@ impl Event {
             return format!("at {:02}:{:02}", self.hour, self.minute);
         }
         let m = self.repeat_mins;
-        let every = if m % 60 == 0 { format!("{} h", m / 60) } else { format!("{m} min") };
+        let every = if m.is_multiple_of(60) { format!("{} h", m / 60) } else { format!("{m} min") };
         format!("every {every} from {:02}:{:02} to {:02}:{:02}", self.hour, self.minute, self.until.0, self.until.1)
     }
 }
