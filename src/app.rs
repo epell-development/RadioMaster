@@ -222,6 +222,9 @@ pub struct App {
     lib_filter: String,
     lib_filtered: Vec<usize>,
     lib_key: (String, u64),
+    /// lower-case "artist\ntitle\nalbum\ngenre" of every library track and where its album ends, made
+    /// once per library version instead of on every keystroke of a search
+    lib_lower: (u64, Vec<(String, usize)>),
     /// Search tab: (search text, library version) and its hits, so the library isn't searched every frame
     search_hits: ((String, u64), Vec<usize>),
     /// selected library tracks (library indexes)
@@ -273,6 +276,8 @@ pub struct App {
     icon_tex: Option<egui::TextureHandle>,
     view_pl: usize,
     renaming: Option<(usize, String)>,
+    /// the playlist tab under the mouse: only its total length is added up (for its tooltip)
+    tab_hovered: Option<usize>,
     tab_ops: Vec<plview::TabOp>,
     scroll_to: Option<usize>,
     /// (tab, on-air row) the playlist last scrolled to follow
@@ -553,6 +558,7 @@ impl App {
             lib_filter: String::new(),
             lib_filtered: vec![],
             lib_key: (String::new(), 0),
+            lib_lower: (0, vec![]),
             search_hits: ((String::new(), 0), vec![]),
             lib_sel: BTreeSet::new(),
             lib_anchor: None,
@@ -605,6 +611,7 @@ impl App {
             icon_tex: None,
             view_pl: usize::MAX,
             renaming: None,
+            tab_hovered: None,
             tab_ops: vec![],
             scroll_to: None,
             followed: None,
@@ -1563,20 +1570,8 @@ impl App {
         }
         let key = (self.lib_filter.to_lowercase(), core.library_ver);
         if key != self.search_hits.0 {
-            let needle = &key.0;
-            let hits = core
-                .library
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| {
-                    t.artist.to_lowercase().contains(needle)
-                        || t.title.to_lowercase().contains(needle)
-                        || t.album.to_lowercase().contains(needle)
-                        || t.genre.to_lowercase().contains(needle)
-                })
-                .take(150)
-                .map(|(i, _)| i)
-                .collect();
+            let needle = key.0.as_str();
+            let hits = self.lib_lower(core).iter().enumerate().filter(|(_, (t, _))| t.contains(needle)).take(150).map(|(i, _)| i).collect();
             self.search_hits = (key, hits);
         }
         let hits = &self.search_hits.1;
@@ -1636,11 +1631,11 @@ impl App {
         ui.label(if on.is_empty() { "Silence / idle".to_string() } else { on });
         ui.separator();
         ui.strong(tr("Projected start times"));
-        let starts = core.projected_starts(true);
+        let mut starts = core.starts(true);
         let next = core.current.map(|n| n + 1).unwrap_or(0);
         for (i, e) in core.playlist.iter().enumerate().skip(next).take(14) {
             ui.horizontal(|ui| {
-                let t = starts.get(i).copied().flatten();
+                let t = starts.get(i);
                 ui.monospace(t.map(|s| s.at.format("%H:%M:%S").to_string()).unwrap_or_else(|| "--:--:--".into()));
                 let mut txt = RichText::new(e.title());
                 if t.is_some_and(|s| s.skipped) {
@@ -2111,23 +2106,34 @@ impl App {
         self.show_profiles = open;
     }
 
+    /// See `lib_lower`.
+    fn lib_lower(&mut self, core: &Playout) -> &[(String, usize)] {
+        if self.lib_lower.0 != core.library_ver {
+            let text = core
+                .library
+                .iter()
+                .map(|t| {
+                    let s = format!("{}\n{}\n{}", t.artist, t.title, t.album).to_lowercase();
+                    let album_end = s.len();
+                    (s + "\n" + &t.genre.to_lowercase(), album_end)
+                })
+                .collect();
+            self.lib_lower = (core.library_ver, text);
+        }
+        &self.lib_lower.1
+    }
+
     /// Keep the filtered library list (library tab, track editor list) in step with the search text.
     pub(super) fn refresh_lib_filter(&mut self, core: &Playout) {
         let key = (self.lib_filter.to_lowercase(), core.library_ver);
         if key != self.lib_key {
-            let f = key.0.clone();
-            self.lib_filtered = core
-                .library
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| {
-                    f.is_empty()
-                        || t.artist.to_lowercase().contains(&f)
-                        || t.title.to_lowercase().contains(&f)
-                        || t.album.to_lowercase().contains(&f)
-                })
-                .map(|(i, _)| i)
-                .collect();
+            // typing more letters only narrows the tracks already shown
+            let narrow = key.1 == self.lib_key.1 && key.0.contains(self.lib_key.0.as_str());
+            let shown = std::mem::take(&mut self.lib_filtered);
+            let f = key.0.as_str();
+            let text = self.lib_lower(core);
+            let hit = |&i: &usize| f.is_empty() || text[i].0[..text[i].1].contains(f);
+            self.lib_filtered = if narrow { shown.into_iter().filter(hit).collect() } else { (0..text.len()).filter(hit).collect() };
             self.lib_key = key;
         }
     }
