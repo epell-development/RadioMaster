@@ -126,6 +126,19 @@ MP3 is built in. AAC, Opus, Ogg Vorbis and FLAC are made by [ffmpeg](https://ffm
 **Custom encoder** runs any program you give it: it receives 16-bit 44.1 kHz stereo PCM on stdin and writes the
 stream to stdout (`{bitrate}` is replaced with the bitrate).
 
+## Library cleanup (Tools → Library cleanup)
+- **Duplicates**: byte-for-byte identical copies, and (optionally) the same song in different files (same artist and
+  title, lengths within 3 seconds). The best copy is kept (lossless, then highest bitrate); playlist rows, cue points
+  and play counts of the removed copies move to it.
+- **Missing & broken**: library tracks and playlist rows whose file has gone are looked for in the library folders
+  (and any folder you add) by file name, then by artist and title, and can be pointed at the file found. Files that
+  can't be played (empty, damaged, not audio) are listed too.
+- **Genres** and **Artists**: spellings of the same value ("Hip-Hop" / "hip hop", "R&B" / "RnB", "Beatles, The" /
+  "The Beatles", "ft." / "feat.") are suggested for merging, and any spellings can be merged by hand. Untagged files
+  named "Artist - Title" can have their artist filled in.
+- Nothing changes until you have looked at the list and pressed **Do it**. Removed files go to the `Removed tracks`
+  folder in the data folder unless you choose *delete for good*, and every change is written to `cleanup-log.csv`.
+
 ## Reports (Tools → Reports)
 Pick **Everything, Songs, Adverts, Jingles** or **Speech, voice & other**, a period (Today, This week, Last month…
 or any dates), and optionally only items containing a word. Click an item to see every time it played.

@@ -4,6 +4,7 @@ mod audio;
 mod auth;
 mod azuracast;
 mod browser;
+mod cleanup;
 mod config;
 mod dsp;
 mod engine;

@@ -18,10 +18,11 @@ pub(super) enum ToolWin {
     Notepad,
     Plugins,
     Scheduler,
+    Cleanup,
 }
 
 impl ToolWin {
-    pub(super) const ALL: [ToolWin; 11] = [
+    pub(super) const ALL: [ToolWin; 12] = [
         ToolWin::FadeEditor,
         ToolWin::Generator,
         ToolWin::Ads,
@@ -33,6 +34,7 @@ impl ToolWin {
         ToolWin::Notepad,
         ToolWin::Plugins,
         ToolWin::Scheduler,
+        ToolWin::Cleanup,
     ];
     /// Whether an operator with these permissions may open this tool.
     pub(super) fn allowed(self, p: &crate::auth::Perms) -> bool {
@@ -49,6 +51,7 @@ impl ToolWin {
             ToolWin::Reports => p.tool(tool::REPORTS),
             ToolWin::History => p.tool(tool::HISTORY),
             ToolWin::Notepad => p.tool(tool::NOTEPAD),
+            ToolWin::Cleanup => p.tool(tool::LIBRARY_CLEANUP),
         }
     }
 
@@ -65,6 +68,7 @@ impl ToolWin {
             ToolWin::Notepad => "Notepad",
             ToolWin::Plugins => "Plugins",
             ToolWin::Scheduler => "Event scheduler",
+            ToolWin::Cleanup => "Library cleanup",
         }
     }
     pub(super) fn icon(self) -> &'static str {
@@ -80,6 +84,7 @@ impl ToolWin {
             ToolWin::Notepad => "📝",
             ToolWin::Plugins => "🔌",
             ToolWin::Scheduler => "⏰",
+            ToolWin::Cleanup => "✨",
         }
     }
     fn size(self) -> [f32; 2] {
@@ -95,6 +100,7 @@ impl ToolWin {
             ToolWin::Notepad => [560.0, 460.0],
             ToolWin::Plugins => [720.0, 520.0],
             ToolWin::Scheduler => [900.0, 560.0],
+            ToolWin::Cleanup => [900.0, 600.0],
         }
     }
 }
@@ -335,6 +341,7 @@ impl App {
         // a tool the operator may not use (e.g. after signing in as someone else) closes
         let perm = self.perm;
         self.tool_open.retain(|w| w.allowed(&perm));
+        self.clean_poll(core);
         for w in ToolWin::ALL {
             if !self.tool_open.contains(&w) {
                 continue;
@@ -365,6 +372,10 @@ impl App {
                         self.tab_ads(ui, core); // list + editor, each scrolling
                         return;
                     }
+                    if w == ToolWin::Cleanup {
+                        self.tab_cleanup(ui, core); // its lists scroll on their own
+                        return;
+                    }
                     egui::ScrollArea::both().id_salt(("tool_scroll", w as u8)).auto_shrink([false, false]).show(ui, |ui| match w {
                         ToolWin::Generator => self.tab_generator(ui, core),
                         ToolWin::Ads => self.tab_ads(ui, core),
@@ -376,7 +387,7 @@ impl App {
                         ToolWin::AzuraCast => {}
                         ToolWin::Reports => self.tab_reports(ui, core),
                         ToolWin::History => self.tab_history(ui, core),
-                        ToolWin::FadeEditor => {}
+                        ToolWin::FadeEditor | ToolWin::Cleanup => {}
                     });
                 },
             );

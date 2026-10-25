@@ -2002,6 +2002,107 @@ impl Playout {
         }
     }
 
+    // ------------------------------------------------------- library cleanup
+    /// Write library.json on the background writer.
+    pub fn save_library(&self) {
+        if let Ok(s) = serde_json::to_string(&self.library) {
+            write_in_background(data_dir().join("library.json"), s);
+        }
+    }
+
+    /// Every file row in every playlist tab (the playing one included), as (path, label).
+    pub fn playlist_files(&self) -> Vec<(PathBuf, String)> {
+        let tabs = self.tabs.iter().map(|t| &t.entries);
+        std::iter::once(&self.playlist)
+            .chain(tabs)
+            .flatten()
+            .filter(|e| e.is_file())
+            .map(|e| (e.track.path.clone(), e.track.label()))
+            .collect()
+    }
+
+    /// Point everything that uses a file (library, playlist rows in every tab, cue points, play
+    /// counts) at another one. `pairs`: old path, and the new file with its tags (read off the UI
+    /// thread). When the new file is already in the library the old entry goes.
+    pub fn relink(&mut self, pairs: Vec<(PathBuf, Track)>) {
+        let tracks: HashMap<PathBuf, Track> = pairs
+            .iter()
+            .map(|(_, t)| (t.path.clone(), self.lib_index.get(&t.path).map(|&i| self.library[i].clone()).unwrap_or_else(|| t.clone())))
+            .collect();
+        let pairs: Vec<(PathBuf, PathBuf)> = pairs.into_iter().map(|(from, t)| (from, t.path)).collect();
+        let map: HashMap<&PathBuf, &PathBuf> = pairs.iter().map(|(a, b)| (a, b)).collect();
+        let in_lib: std::collections::HashSet<PathBuf> =
+            pairs.iter().filter(|(_, to)| self.lib_index.contains_key(to)).map(|(_, to)| to.clone()).collect();
+        self.library.retain(|t| map.get(&t.path).is_none_or(|to| !in_lib.contains(*to)));
+        for t in self.library.iter_mut() {
+            if let Some(to) = map.get(&t.path) {
+                t.path = (*to).clone();
+            }
+        }
+        self.reindex();
+        let tabs = self.tabs.iter_mut().map(|t| &mut t.entries);
+        for e in std::iter::once(&mut self.playlist).chain(tabs).flatten().filter(|e| e.is_file()) {
+            if let Some(to) = map.get(&e.track.path) {
+                e.track = tracks[*to].clone();
+            }
+        }
+        for (from, to) in &pairs {
+            if !self.cues.contains_key(to) {
+                if let Some(c) = self.cues.remove(from) {
+                    self.cues.insert(to.clone(), c);
+                    self.cues_dirty = true;
+                }
+            }
+            if let Some(n) = self.plays.remove(from) {
+                let e = self.plays.entry(to.clone()).or_insert(n);
+                *e = (*e).max(n);
+                self.plays_dirty = true;
+            }
+        }
+        self.save_library();
+        self.save_all();
+    }
+
+    /// Take files out of the library (the files themselves are left alone).
+    pub fn forget_tracks(&mut self, paths: &std::collections::HashSet<PathBuf>) {
+        self.library.retain(|t| !paths.contains(&t.path));
+        self.reindex();
+        self.save_library();
+    }
+
+    /// Remove the playlist rows (in every tab) that play these files. Returns how many went.
+    pub fn remove_rows_for(&mut self, paths: &std::collections::HashSet<PathBuf>) -> usize {
+        let gone = |e: &PlEntry| e.is_file() && paths.contains(&e.track.path);
+        let before: usize = self.playlist.len() + self.tabs.iter().map(|t| t.entries.len()).sum::<usize>();
+        let sel: BTreeSet<usize> =
+            self.playlist.iter().enumerate().filter(|(i, e)| gone(e) && Some(*i) != self.current).map(|(i, _)| i).collect();
+        self.remove(&sel);
+        for t in self.tabs.iter_mut() {
+            let cur = t.current.and_then(|c| t.entries.get(c)).map(|e| (e.track.path.clone(), e.title()));
+            t.entries.retain(|e| !gone(e));
+            t.current = cur.and_then(|(p, n)| t.entries.iter().position(|e| e.track.path == p && e.title() == n));
+        }
+        let after: usize = self.playlist.len() + self.tabs.iter().map(|t| t.entries.len()).sum::<usize>();
+        self.save_all();
+        before - after
+    }
+
+    /// Tags the cleanup tool has written: show them in the library and the playlists.
+    pub fn tags_written(&mut self, tracks: Vec<Track>) {
+        for t in tracks {
+            if let Some(&i) = self.lib_index.get(&t.path) {
+                self.library[i] = t.clone();
+            }
+            let tabs = self.tabs.iter_mut().map(|t| &mut t.entries);
+            for e in std::iter::once(&mut self.playlist).chain(tabs).flatten().filter(|e| e.is_file() && e.track.path == t.path) {
+                e.track = t.clone();
+            }
+        }
+        self.library_ver += 1;
+        self.save_library();
+        self.save_all();
+    }
+
     // ------------------------------------------------------------- encoders
     pub fn start_encoder(&mut self, i: usize) {
         if i >= self.cfg.encoders.len() {
