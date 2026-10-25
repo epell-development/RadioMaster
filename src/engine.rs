@@ -420,7 +420,8 @@ pub struct Engine {
     /// mirrors `Shared::mic_on` without the lock, for the studio monitor gates
     mic_live: Arc<AtomicBool>,
     /// the last `set_mic` values (a lock of its own, so the audio thread is never waited on)
-    mic_set: Arc<Mutex<Option<(bool, f32, f32)>>>,
+    /// (gain and duck as bits: any change at all, however small, counts as a change)
+    mic_set: Arc<Mutex<Option<(bool, u32, u32)>>>,
 }
 
 fn open(path: &Path) -> Result<(Pcm, f32)> {
@@ -695,7 +696,8 @@ impl Engine {
 
     /// Called every UI frame: the mixer lock is only taken when something actually changed.
     pub fn set_mic(&self, on: bool, gain: f32, duck: f32) {
-        if std::mem::replace(&mut *self.mic_set.lock(), Some((on, gain, duck))) == Some((on, gain, duck)) {
+        let key = Some((on, gain.to_bits(), duck.to_bits()));
+        if std::mem::replace(&mut *self.mic_set.lock(), key) == key {
             return;
         }
         self.mic_live.store(on, Ordering::Relaxed);
