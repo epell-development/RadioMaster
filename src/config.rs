@@ -766,9 +766,10 @@ impl Config {
     pub fn new_rule_id(&self) -> u64 {
         self.ad_rules.iter().map(|r| r.id).max().unwrap_or(0) + 1
     }
+    /// Save on the background writer (the disk can be slow; the UI and playout must not wait).
     pub fn save(&self) {
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(Self::path(), s);
+            crate::playout::write_in_background(Self::path(), s);
         }
     }
 }

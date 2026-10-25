@@ -72,6 +72,7 @@ struct SavedTabs {
 
 enum WriteJob {
     Write(PathBuf, String),
+    Append(PathBuf, String),
     Flush(mpsc::Sender<()>),
 }
 
@@ -89,6 +90,12 @@ fn writer() -> Option<std::sync::MutexGuard<'static, mpsc::Sender<WriteJob>>> {
                             let _ = std::fs::rename(&tmp, &p);
                         }
                     }
+                    WriteJob::Append(p, d) => {
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+                            use std::io::Write;
+                            let _ = f.write_all(d.as_bytes());
+                        }
+                    }
                     WriteJob::Flush(done) => {
                         let _ = done.send(());
                     }
@@ -103,13 +110,26 @@ fn writer() -> Option<std::sync::MutexGuard<'static, mpsc::Sender<WriteJob>>> {
 
 /// Write a file off the playout lock (the disk can be slow; playback and the UI must not wait).
 /// Writes go through one thread, in order, and land atomically via a temporary file.
-fn write_in_background(path: PathBuf, data: String) {
+pub(crate) fn write_in_background(path: PathBuf, data: String) {
     if let Some(tx) = writer() {
         if tx.send(WriteJob::Write(path.clone(), data.clone())).is_ok() {
             return;
         }
     }
     let _ = std::fs::write(path, data);
+}
+
+/// Add to the end of a file on the background writer (after any writes already queued).
+fn append_in_background(path: PathBuf, data: String) {
+    if let Some(tx) = writer() {
+        if tx.send(WriteJob::Append(path.clone(), data.clone())).is_ok() {
+            return;
+        }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let _ = f.write_all(data.as_bytes());
+    }
 }
 
 /// Wait until every queued write has reached the disk (used when the program closes).
@@ -147,6 +167,40 @@ pub fn marker_target(hour: u32, minute: u32, reference: DateTime<Local>) -> Date
         t -= CDur::days(1);
     }
     t
+}
+
+/// A line of an M3U: a RadioMaster special row, or a file that exists (and whether it is a voice track).
+pub enum M3uRow {
+    Row(PlEntry),
+    File(PathBuf, bool),
+}
+
+/// Read an M3U and check which of its files exist (reads the disk; call it off the UI thread).
+pub fn parse_m3u(path: &Path) -> Vec<M3uRow> {
+    let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
+    let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let mut out = vec![];
+    let mut voice = false;
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if line == "#RADIOMASTER-VOICE" {
+            voice = true;
+            continue;
+        }
+        if let Some(e) = crate::items::from_m3u_comment(line) {
+            out.push(M3uRow::Row(e));
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        let p = PathBuf::from(line);
+        let p = if p.is_absolute() { p } else { base.join(p) };
+        if p.exists() {
+            out.push(M3uRow::File(p, voice));
+        }
+        voice = false;
+    }
+    out
 }
 
 /// File paths listed in an .m3u/.m3u8 file (relative paths resolved against its folder).
@@ -379,6 +433,7 @@ impl Playout {
     // ---------------------------------------------------------------- tick
     pub fn tick(&mut self) {
         self.drain_scan();
+        self.drain_tags();
         self.drain_tag_writes();
         self.drain_log();
         {
@@ -1433,7 +1488,7 @@ impl Playout {
     fn pick_from_list(&mut self, source: &str) -> Option<Track> {
         let p = Path::new(source.trim());
         let files: Vec<PathBuf> = if p.is_dir() {
-            library::audio_files_in(p)
+            library::audio_files_cached(p)
         } else if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("m3u") || e.eq_ignore_ascii_case("m3u8")) {
             m3u_paths(p).into_iter().filter(|f| f.exists()).collect()
         } else {
@@ -1605,7 +1660,7 @@ impl Playout {
         } else if !r.files.is_empty() {
             r.files.iter().map(PathBuf::from).filter(|p| p.exists()).collect()
         } else if !r.folder.trim().is_empty() {
-            library::audio_files_in(Path::new(&r.folder))
+            library::audio_files_cached(Path::new(&r.folder))
         } else {
             vec![]
         }
@@ -1770,19 +1825,52 @@ impl Playout {
     }
 
     // ------------------------------------------------------------- playlist
+    /// A row for a file with its tags (from the library, or read now).
     pub fn entry_for(&self, p: &Path) -> PlEntry {
         let track = match self.lib_index.get(p) {
             Some(&i) => self.library[i].clone(),
-            None => Track::from_path(p),
+            None => library::read_track(p),
         };
         PlEntry::file(track)
     }
 
-    fn expand(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    /// A row for a file without waiting for the disk: files outside the library show their file
+    /// name until their tags have been read in the background (`drain_tags` fills them in).
+    pub fn entry_quick(&self, p: &Path) -> PlEntry {
+        match self.lib_index.get(p) {
+            Some(&i) => PlEntry::file(self.library[i].clone()),
+            None => {
+                library::read_tags_later(p);
+                PlEntry::file(Track::placeholder(p))
+            }
+        }
+    }
+
+    /// Put tags read in the background into the rows still showing just a file name.
+    fn drain_tags(&mut self) {
+        let read = library::tags_read();
+        if read.is_empty() {
+            return;
+        }
+        let by_path: HashMap<&PathBuf, &Track> = read.iter().map(|t| (&t.path, t)).collect();
+        let tabs = self.tabs.iter_mut().map(|t| &mut t.entries);
+        for e in std::iter::once(&mut self.playlist).chain(tabs).flatten() {
+            if e.is_file() && e.track.is_placeholder() {
+                if let Some(t) = by_path.get(&e.track.path) {
+                    e.track = (*t).clone();
+                }
+            }
+        }
+    }
+
+    /// Library tracks as they are; folders become their audio files (remembered between calls).
+    fn expand(&self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut out = vec![];
         for p in paths {
-            if p.is_dir() {
-                out.extend(library::audio_files_in(&p));
+            if self.lib_index.contains_key(&p) {
+                out.push(p);
+            } else if p.is_dir() {
+                out.extend(library::audio_files_cached(&p));
             } else if library::is_audio(&p) {
                 out.push(p);
             }
@@ -1791,15 +1879,15 @@ impl Playout {
     }
 
     pub fn add_paths(&mut self, paths: Vec<PathBuf>) {
-        for p in Self::expand(paths) {
-            let e = self.entry_for(&p);
+        for p in self.expand(paths) {
+            let e = self.entry_quick(&p);
             self.playlist.push(e);
         }
     }
 
     pub fn insert_next(&mut self, paths: Vec<PathBuf>) {
         let at = self.current.map(|c| c + 1).unwrap_or(0);
-        let rows: Vec<PlEntry> = Self::expand(paths).iter().map(|p| self.entry_for(p)).collect();
+        let rows: Vec<PlEntry> = self.expand(paths).iter().map(|p| self.entry_quick(p)).collect();
         self.insert_rows(at, rows);
     }
 
@@ -1938,34 +2026,23 @@ impl Playout {
 
     /// Rows stored in an M3U (RadioMaster special rows included).
     pub fn read_m3u(&self, path: &Path) -> Vec<PlEntry> {
-        let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
-        let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-        let mut out = vec![];
-        let mut voice = false;
-        for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            if line == "#RADIOMASTER-VOICE" {
-                voice = true;
-                continue;
-            }
-            if let Some(e) = crate::items::from_m3u_comment(line) {
-                out.push(e);
-                continue;
-            }
-            if line.starts_with('#') {
-                continue;
-            }
-            let p = PathBuf::from(line);
-            let p = if p.is_absolute() { p } else { base.join(p) };
-            if p.exists() {
-                let mut e = self.entry_for(&p);
-                if voice {
-                    e.kind = ItemKind::VoiceTrack;
+        self.m3u_rows(parse_m3u(path))
+    }
+
+    /// Playlist rows for what `parse_m3u` read.
+    pub fn m3u_rows(&self, rows: Vec<M3uRow>) -> Vec<PlEntry> {
+        rows.into_iter()
+            .map(|r| match r {
+                M3uRow::Row(e) => e,
+                M3uRow::File(p, voice) => {
+                    let mut e = self.entry_quick(&p);
+                    if voice {
+                        e.kind = ItemKind::VoiceTrack;
+                    }
+                    e
                 }
-                out.push(e);
-            }
-            voice = false;
-        }
-        out
+            })
+            .collect()
     }
 
     pub fn load_m3u(&mut self, path: &Path) {
@@ -1973,6 +2050,11 @@ impl Playout {
         if rows.is_empty() && !path.exists() {
             return;
         }
+        self.replace_rows(rows);
+    }
+
+    /// Replace the whole list (as loading an M3U does).
+    pub fn replace_rows(&mut self, rows: Vec<PlEntry>) {
         self.playlist = rows;
         self.current = None;
         self.pending_jump = None;
@@ -2018,11 +2100,9 @@ impl Playout {
             }
         }
         if let Some(v) = done {
-            if let Ok(s) = serde_json::to_string(&v) {
-                let _ = std::fs::write(data_dir().join("library.json"), s);
-            }
             self.library = v;
             self.reindex();
+            self.save_library();
             self.scanning = false;
             self.scan_rx = None;
             self.say(format!("Library scan complete: {} tracks", self.library.len()));
@@ -2370,10 +2450,7 @@ impl Playout {
         let q = |s: &str| s.replace('"', "'").replace(['\n', '\r'], " ");
         let path = path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
         let line = format!("\"{}\",\"{}\",\"{kind}\",\"{}\",\"{:.1}\"\n", time, q(text), q(&path), secs.max(0.0));
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(data_dir().join("history.csv")) {
-            use std::io::Write;
-            let _ = f.write_all(line.as_bytes());
-        }
+        append_in_background(data_dir().join("history.csv"), line);
         self.history.push(HistoryItem { time, text: text.to_string(), kind });
         if self.history.len() > 500 {
             self.history.remove(0);
@@ -2396,7 +2473,7 @@ impl Playout {
             }
             ActionKind::PlayFile | ActionKind::InsertNext => {
                 if Path::new(path).exists() {
-                    let rows: Vec<PlEntry> = Self::expand(vec![PathBuf::from(path)]).iter().map(|p| self.entry_for(p)).collect();
+                    let rows: Vec<PlEntry> = self.expand(vec![PathBuf::from(path)]).iter().map(|p| self.entry_quick(p)).collect();
                     self.insert_rows(i + 1, rows);
                 } else {
                     self.say(format!("Event: file not found: {path}"));
@@ -2604,6 +2681,29 @@ mod tests {
             std::hint::black_box(p.projected_starts(true));
         }
         eprintln!("projected_starts x{} rows: {:?} each", p.playlist.len(), t.elapsed() / 20);
+    }
+
+    #[test]
+    fn rows_added_without_tags_get_them_in_the_background() {
+        let dir = std::env::temp_dir().join("rm_test_quick_rows");
+        let _ = std::fs::create_dir_all(&dir);
+        let wav = dir.join("two_seconds.wav");
+        crate::engine::write_wav(&wav, &vec![0.0; 44100 * 2 * 2], 2, 44100).unwrap();
+        std::fs::write(dir.join("list.m3u"), "#EXTM3U\ntwo_seconds.wav\nmissing.wav\n").unwrap();
+        let mut p = playout();
+        let rows = p.m3u_rows(parse_m3u(&dir.join("list.m3u")));
+        assert_eq!(rows.len(), 1, "files that don't exist are left out");
+        assert!(rows[0].track.is_placeholder());
+        assert_eq!(rows[0].track.title, "two_seconds");
+        p.insert_rows(0, rows);
+        let t0 = Instant::now();
+        while p.playlist[0].track.duration == 0.0 && t0.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            p.drain_tags();
+            // tests run side by side and another test's playout may have taken the result: ask again
+            library::read_tags_later(&wav);
+        }
+        assert!((p.playlist[0].track.duration - 2.0).abs() < 0.1, "got {}", p.playlist[0].track.duration);
     }
 
     #[test]

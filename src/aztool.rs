@@ -882,7 +882,7 @@ impl App {
             match r {
                 Ok((_, _)) if !self.perm.edit_playlists => self.az.msg = tr("Your account isn't allowed to edit playlists").into(),
                 Ok((p, after_sel)) => {
-                    let e = core.entry_for(&p);
+                    let e = core.entry_quick(&p);
                     let title = e.title();
                     if after_sel {
                         self.insert_rows_here(core, vec![e]);

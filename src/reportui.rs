@@ -69,6 +69,8 @@ pub(super) struct RepUi {
     /// the whole history file (read on open / Refresh)
     all: Vec<Play>,
     loaded: bool,
+    /// being read in the background
+    loading: bool,
     /// plays in the report (indexes into `all`)
     sel: Vec<usize>,
     pub rows: Vec<Row>,
@@ -91,6 +93,7 @@ impl Default for RepUi {
             exclude: String::new(),
             all: vec![],
             loaded: false,
+            loading: false,
             sel: vec![],
             rows: vec![],
             key: String::new(),
@@ -102,6 +105,14 @@ impl Default for RepUi {
 }
 
 impl RepUi {
+    /// The history file, read in the background.
+    pub(super) fn set_history(&mut self, all: Vec<Play>) {
+        self.all = all;
+        self.loaded = true;
+        self.loading = false;
+        self.key.clear();
+    }
+
     fn filter(&self) -> Option<Filter> {
         let d = |s: &str| NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok();
         let (from, to) = (d(&self.from)?, d(&self.to)?);
@@ -193,10 +204,10 @@ impl App {
     }
 
     pub(super) fn tab_reports(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        if !self.rep.loaded {
-            self.rep.all = report::load();
-            self.rep.loaded = true;
-            self.rep.key.clear();
+        if !self.rep.loaded && !self.rep.loading {
+            // a station's history grows for years: read it off the UI thread
+            self.rep.loading = true;
+            self.dlg(|| Some(super::Dlg::History(report::load())));
         }
         // ---- what
         ui.horizontal_wrapped(|ui| {

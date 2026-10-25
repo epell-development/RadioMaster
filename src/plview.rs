@@ -113,6 +113,31 @@ impl App {
         self.scroll_to = Some(at);
     }
 
+    /// Insert rows into playlist `tab` at `at` (None: as `insert_rows_here` when that tab is viewed,
+    /// otherwise at the end). Rows landing in the playlist being viewed are selected.
+    pub(super) fn insert_rows_at(&mut self, core: &mut Playout, tab: usize, at: Option<usize>, rows: Vec<PlEntry>) {
+        if tab == self.view_pl && at.is_none() {
+            return self.insert_rows_here(core, rows);
+        }
+        if rows.is_empty() || tab >= core.tabs.len() {
+            return;
+        }
+        if !self.perm.edit_playlists {
+            *self.notify.lock() = tr("Your account isn't allowed to edit playlists").into();
+            return;
+        }
+        let n = rows.len();
+        let at = core.with_tab(tab, |c| {
+            let at = at.unwrap_or(c.playlist.len()).min(c.playlist.len());
+            c.insert_rows(at, rows);
+            at
+        });
+        if tab == self.view_pl {
+            self.sel = (at..at + n).collect();
+            self.anchor = Some(at);
+        }
+    }
+
     pub(super) fn playlist(&mut self, ctx: &egui::Context, core: &mut Playout) {
         if self.view_pl >= core.tabs.len() {
             self.view_pl = core.playing_tab; // first frame, or the viewed tab was closed
@@ -182,7 +207,7 @@ impl App {
                 }
                 TabOp::LoadM3u(i) => {
                     self.view_pl = i;
-                    self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::LoadM3u));
+                    self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
                 }
                 TabOp::Rows(i, rows) => core.append_to_tab(i, rows),
                 TabOp::CopyInto(from, rows, to, at) => {
@@ -255,8 +280,7 @@ impl App {
                     }
                 }
                 if let Some(f) = released::<DragFiles>(&r) {
-                    let rows: Vec<PlEntry> = f.0.iter().map(|p| PlEntry::file(crate::library::Track::from_path(p))).collect();
-                    self.tab_ops.push(TabOp::Rows(i, rows));
+                    self.add_files_later(i, Some(usize::MAX), f.0.clone());
                 }
                 if !self.perm.edit_playlists {
                     continue;
@@ -621,10 +645,8 @@ impl App {
                 }
             }
             if let Some((at, files)) = drop_files {
-                let rows: Vec<PlEntry> = files.iter().map(|p| core.entry_for(p)).collect();
-                let n = rows.len();
-                core.insert_rows(at, rows);
-                self.sel = (at..at + n).collect();
+                // folders from the file explorer are listed (and tags read) off the UI thread
+                self.add_files_later(view_tab, Some(at), files);
             }
 
             for a in acts {
