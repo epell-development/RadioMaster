@@ -434,7 +434,10 @@ fn plain_http(mut tcp: TcpStream, backend: SocketAddr) -> io::Result<()> {
     }
     let text = String::from_utf8_lossy(&head).into_owned();
     let path = text.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("/").to_string();
-    if behind_https_proxy(&text) || path.starts_with("/.well-known/acme-challenge/") {
+    // only a proxy on this machine or the local network is believed: from anywhere else the headers
+    // could be made up to get plain HTTP past the redirect
+    let local = tcp.peer_addr().is_ok_and(|a| local_network(a.ip()));
+    if (local && behind_https_proxy(&text)) || path.starts_with("/.well-known/acme-challenge/") {
         return pass_plain(tcp, backend, &head);
     }
     let host = request_header(&text, "host").filter(|h| h.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c)));
@@ -475,6 +478,19 @@ pub fn behind_https_proxy(head: &str) -> bool {
         || h("x-arr-ssl").is_some_and(|v| !v.is_empty())
         || h("cf-visitor").is_some_and(|v| v.contains("\"https\""))
         || h("forwarded").is_some_and(|v| v.split([';', ',']).any(|p| p.trim() == "proto=https"))
+}
+
+/// This machine, or an address on a private network (where a reverse proxy in front of the server is).
+pub fn local_network(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v) => v.is_loopback() || v.is_private() || v.is_link_local(),
+        IpAddr::V6(v) => match v.to_ipv4_mapped() {
+            Some(v4) => local_network(IpAddr::V4(v4)),
+            // fc00::/7 unique local, fe80::/10 link-local
+            None => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
+        },
+    }
 }
 
 /// Hand a plain connection to the HTTP server as it is (`head` was already read from it).
@@ -636,5 +652,15 @@ mod tests {
         assert!(behind_https_proxy(&req("Forwarded: for=1.2.3.4;proto=https")));
         assert!(!behind_https_proxy(&req("X-Forwarded-Proto: http")));
         assert!(!behind_https_proxy(&req("X-Other: X-Forwarded-Proto: https")));
+    }
+
+    #[test]
+    fn proxies_are_believed_only_nearby() {
+        for ip in ["127.0.0.1", "10.0.0.5", "192.168.1.20", "172.16.3.4", "::1", "fd12::1", "fe80::1", "::ffff:192.168.1.2"] {
+            assert!(local_network(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["8.8.8.8", "172.32.0.1", "2001:db8::1", "::ffff:1.2.3.4"] {
+            assert!(!local_network(ip.parse().unwrap()), "{ip}");
+        }
     }
 }

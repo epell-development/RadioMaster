@@ -824,7 +824,7 @@ impl App {
                 let env_y = |g: f32| lane_a.bottom() - 4.0 - g.clamp(0.0, 1.0) * (lane_a.height() - 24.0);
                 let pts = vec![
                     Pos2::new(to_x(c.cue_in), env_y(0.0)),
-                    Pos2::new(to_x(c.cue_in + c.fade_in), env_y(if c.fade_in > 0.0 { 1.0 } else { 1.0 })),
+                    Pos2::new(to_x(c.cue_in + c.fade_in), env_y(1.0)),
                     Pos2::new(to_x(c.fade_out), env_y(1.0)),
                     Pos2::new(to_x(c.cue_out), env_y(if c.cue_out > c.fade_out { 0.0 } else { 1.0 })),
                 ];

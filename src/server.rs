@@ -1039,7 +1039,7 @@ mod tests {
             });
             (stop, h)
         };
-        let delay = sound_after(&on_air, 10.0).expect("the mic should be on air");
+        sound_after(&on_air, 10.0).expect("the mic should be on air");
         sender.0.store(true, Ordering::Relaxed);
         sender.1.join().unwrap();
         post("mic/off", b"{}").unwrap();

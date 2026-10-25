@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="img/icon.png">
-<link rel="apple-touch-icon" href="img/icon.png">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
 <title>RadioMaster — Free, Open-Source Radio Automation Software for Windows, macOS &amp; Linux</title>
 <meta name="description" content="RadioMaster is free, open-source radio automation software for Windows, macOS and Linux. Run a 24/7 station with playlists, hour markers, crossfades, advert scheduling, Icecast/Shoutcast streaming and AzuraCast.">
 <meta name="robots" content="index, follow, max-image-preview:large">
@@ -49,7 +49,7 @@
       "releaseNotes": "https://radiomaster.dovafm.com/updates/",
       "image": "https://radiomaster.dovafm.com/img/social-card.png",
       "screenshot": "https://radiomaster.dovafm.com/img/main.png",
-      "featureList": ["Playlist tabs with live start times", "Hour markers (wait, soft, hard)", "Smart crossfades and silence trimming", "Advert and jingle scheduler", "Playlist generator", "Event scheduler", "Cart wall and microphone ducking", "Voice tracking", "Text to speech", "Icecast and Shoutcast streaming (MP3, AAC, Opus, Ogg Vorbis, FLAC)", "AzuraCast station management", "Users and permissions", "PDF and CSV play reports", "Plugins and remote control API", "Headless RadioMaster Server for Linux and Windows Server", "Connect to Server remote studio control"],
+      "featureList": ["Playlist tabs with live start times", "Hour markers (wait, soft, hard)", "Smart crossfades and silence trimming", "Advert and jingle scheduler", "Playlist generator", "Event scheduler", "Cart wall and microphone ducking", "Voice tracking", "Text to speech", "Icecast and Shoutcast streaming (MP3, AAC, Opus, Ogg Vorbis, FLAC)", "AzuraCast station management", "Users and permissions", "PDF and CSV play reports", "Plugins and remote control API", "Headless RadioMaster Server for Linux and Windows Server", "Broadcast from anywhere: Connect to Server remote studio control", "Web portal to run the station from a phone or browser", "HTTPS with Let's Encrypt or self-signed certificates"],
       "publisher": { "@id": "https://radiomaster.dovafm.com/#org" },
       "sameAs": ["https://github.com/epell-development/RadioMaster"]
     },
@@ -83,25 +83,27 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
+<!-- NAV -->
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="#top"><img src="img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
-    <nav class="links" aria-label="Sections">
-      <a class="hide-sm" href="#features">Features</a>
-      <a class="hide-sm" href="#playlist">Playlist</a>
-      <a class="hide-sm" href="#azuracast">AzuraCast</a>
-      <a class="hide-sm" href="server/">Server</a>
-      <a class="hide-sm" href="updates/">Updates</a>
-      <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
-      <a class="hide-sm" href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
-      <a class="btn primary small" href="#download">Download</a>
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
     </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
   </div>
 </header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
 
 <main id="top">
   <div class="wrap hero">
@@ -119,7 +121,7 @@
         <a class="os" href="#dl-linux"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 10l3 2.5L7 15M12 15.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Linux</b><small>x64</small></span></a>
       </div>
       <p class="fine">One app on all three systems · MIT licensed · no account or subscription</p>
-      <a class="news" href="updates/"><b>New in v0.2.8</b> HTTPS and a web portal for RadioMaster Server, no more stutter on slow PCs, keeps playing when Spotify takes the sound card <span>All updates →</span></a>
+      <a class="news" href="/updates/"><b>New in v0.2.8</b> HTTPS and a web portal for RadioMaster Server, no more stutter on slow PCs, keeps playing when Spotify takes the sound card <span>All updates →</span></a>
     </div>
 
     <div class="board" aria-label="Example of the RadioMaster on-air display">
@@ -156,6 +158,9 @@
         <div class="feature"><span class="tag">Adverts</span><h3>Every N songs</h3><p>"Every 5 songs, play 2 adverts" — random, taking turns, or all of them, from a folder or a hand-picked list. Jingles too.</p></div>
         <div class="feature"><span class="tag">Team</span><h3>Users and permissions</h3><p>Give every presenter their own login and decide who can play, edit playlists, stream, use AzuraCast or change settings.</p></div>
         <div class="feature"><span class="tag">Plugins</span><h3>Make it yours</h3><p>Run your own scripts when a song starts or the hour changes — post to Discord, update a website, light the ON AIR sign — and send commands back.</p></div>
+        <div class="feature"><span class="tag">Automation</span><h3>Runs itself 24/7</h3><p>The playlist generator builds hours of programming from your categories, and the event scheduler swaps shows and makes tomorrow's playlist on time.</p></div>
+        <div class="feature"><span class="tag">Reports</span><h3>Proof of play</h3><p>See every song, advert and jingle that played, and export PDF proof-of-play for advertisers or CSV for your music licence returns.</p></div>
+        <div class="feature anywhere-f"><span class="tag">Remote</span><h3>Broadcast from anywhere</h3><p>Run the station on a server and present from home with the desktop app, or check in from your phone's browser. <a href="#anywhere">How it works</a></p></div>
       </div>
     </div>
   </section>
@@ -202,14 +207,14 @@
         <p class="eyebrow">Screens</p>
         <h2>See it running</h2>
       </div>
-      <figure class="shot-main" style="margin:0"><img id="shot" src="img/main.png" loading="lazy" decoding="async" alt="RadioMaster radio automation software: main window with playlist, library and side panels" width="1280" height="780"></figure>
+      <figure class="shot-main" style="margin:0"><img id="shot" src="/img/main.png" loading="lazy" decoding="async" alt="RadioMaster radio automation software: main window with playlist, library and side panels" width="1280" height="780"></figure>
       <p class="caption" id="shot-cap">The main window: playlist tabs with start times and hour lines in the centre, panels left and right.</p>
       <div class="thumbs" role="group" aria-label="Choose a screenshot">
-        <button type="button" aria-pressed="true" data-src="img/main.png" data-cap="The main window: playlist tabs with start times and hour lines in the centre, panels left and right." data-alt="RadioMaster main window"><img src="img/main.png" alt="" loading="lazy" width="1280" height="780"><span>Main window</span></button>
-        <button type="button" aria-pressed="false" data-src="img/playlist-menu.png" data-cap="The Playlist menu: files, streams, commands, pauses, teasers, time announcements, containers, voice tracks and more." data-alt="The Playlist menu open"><img src="img/playlist-menu.png" alt="" loading="lazy" width="1280" height="780"><span>Playlist menu</span></button>
-        <button type="button" aria-pressed="false" data-src="img/hour-marker.png" data-cap="Waiting for the 2:00 hour marker. Rows that will be skipped are struck through and start times update live." data-alt="Playlist waiting for an hour marker"><img src="img/hour-marker.png" alt="" loading="lazy" width="1280" height="780"><span>Hour markers</span></button>
-        <button type="button" aria-pressed="false" data-src="img/additional-window.png" data-cap="An Additional window beside the main window. Open as many as you like and move them to other screens." data-alt="Main window with an Additional window beside it"><img src="img/additional-window.png" alt="" loading="lazy" width="1600" height="780"><span>Additional windows</span></button>
-        <button type="button" aria-pressed="false" data-src="img/track-info.png" data-cap="The playlist follows the on-air song, and the Track Info panel shows last, on air and next with your own notes about each song and artist." data-alt="Track Info panel next to the playlist"><img src="img/track-info.png" alt="" loading="lazy" width="1600" height="780"><span>Track Info</span></button>
+        <button type="button" aria-pressed="true" data-src="/img/main.png" data-cap="The main window: playlist tabs with start times and hour lines in the centre, panels left and right." data-alt="RadioMaster main window"><img src="/img/main.png" alt="" loading="lazy" width="1280" height="780"><span>Main window</span></button>
+        <button type="button" aria-pressed="false" data-src="/img/playlist-menu.png" data-cap="The Playlist menu: files, streams, commands, pauses, teasers, time announcements, containers, voice tracks and more." data-alt="The Playlist menu open"><img src="/img/playlist-menu.png" alt="" loading="lazy" width="1280" height="780"><span>Playlist menu</span></button>
+        <button type="button" aria-pressed="false" data-src="/img/hour-marker.png" data-cap="Waiting for the 2:00 hour marker. Rows that will be skipped are struck through and start times update live." data-alt="Playlist waiting for an hour marker"><img src="/img/hour-marker.png" alt="" loading="lazy" width="1280" height="780"><span>Hour markers</span></button>
+        <button type="button" aria-pressed="false" data-src="/img/additional-window.png" data-cap="An Additional window beside the main window. Open as many as you like and move them to other screens." data-alt="Main window with an Additional window beside it"><img src="/img/additional-window.png" alt="" loading="lazy" width="1600" height="780"><span>Additional windows</span></button>
+        <button type="button" aria-pressed="false" data-src="/img/track-info.png" data-cap="The playlist follows the on-air song, and the Track Info panel shows last, on air and next with your own notes about each song and artist." data-alt="Track Info panel next to the playlist"><img src="/img/track-info.png" alt="" loading="lazy" width="1600" height="780"><span>Track Info</span></button>
       </div>
     </div>
   </section>
@@ -230,20 +235,53 @@
         </ul>
         <p class="note">Optional. Without a server RadioMaster streams to any Icecast or Shoutcast host.</p>
       </div>
-      <figure><img src="img/azuracast.png" alt="The AzuraCast station manager window in RadioMaster" width="1280" height="780" loading="lazy"></figure>
+      <figure><img src="/img/azuracast.png" alt="The AzuraCast station manager window in RadioMaster" width="1280" height="780" loading="lazy"></figure>
     </div>
   </section>
 
-  <section class="block" id="server">
+  <section class="block" id="anywhere">
+    <div class="wrap anywhere">
+      <div>
+        <div class="head" style="margin-bottom:24px">
+          <p class="eyebrow">Broadcast from anywhere</p>
+          <h2>The studio goes where you go</h2>
+          <p class="lede">Put the station on <a href="/server/">RadioMaster Server</a>, a headless version for Linux and Windows Server, and it plays, schedules and streams around the clock with no window open. Then run it from wherever you are: your own computer at home, a laptop on the road, or your phone.</p>
+        </div>
+        <div class="related">
+          <a class="btn primary" href="/guides/broadcast-from-anywhere/">Guide: broadcast from anywhere</a>
+          <a class="btn ghost" href="/server/docs/">Server documentation</a>
+        </div>
+      </div>
+      <ol>
+        <li><b>Connect from the desktop app</b>File → Connect to Server and everything you do happens on the server: playlists, carts, adverts, the scheduler and the encoders. Several presenters can be connected at once.</li>
+        <li><b>Go live from home</b>The Mic button sends your microphone to the server and on air, and you hear the station's mix on your own speakers or headphones.</li>
+        <li><b>Run it from a phone</b>The web portal shows what's on air with play, stop, next, volume, playlists and streams in any browser, with nothing to install.</li>
+        <li><b>Keep it private</b>HTTPS with your own certificate (Let's Encrypt works) or one the server makes, Argon2-hashed passwords and sign-ins that expire.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="block" id="guides">
     <div class="wrap">
       <div class="head">
-        <p class="eyebrow">RadioMaster Server</p>
-        <h2>Run the station on a server</h2>
-        <p class="lede">RadioMaster Server is headless radio automation for Linux and Windows Server. It plays the playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast around the clock with no window open. Presenters run it from the desktop app with File → Connect to Server, and several can be connected at once.</p>
+        <p class="eyebrow">Guides</p>
+        <h2>Learn RadioMaster</h2>
+        <p class="lede">Step-by-step guides for setting up the station, automating it and taking it on the road.</p>
       </div>
-      <div class="related">
-        <a class="btn primary" href="server/">About RadioMaster Server</a>
-        <a class="btn ghost" href="guides/start-an-internet-radio-station/">Guide: start an internet radio station</a>
+<!-- GUIDES:home -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
+<a class="guide-card" href="/guides/playlist-generator/"><span class="tag">Run the station</span><b>Use the playlist generator</b><span>Categories, templates and patterns that build hours of programming in one click.</span></a>
+<a class="guide-card" href="/guides/advertisement-scheduler/"><span class="tag">Run the station</span><b>Schedule adverts and jingles</b><span>Rules for every N songs, every N minutes or set times, with run dates for each advert.</span></a>
+<a class="guide-card" href="/guides/event-scheduler/"><span class="tag">Run the station</span><b>Automate with the event scheduler</b><span>Generate tomorrow&#x27;s playlist, switch shows and run commands at set times.</span></a>
+<a class="guide-card" href="/guides/azuracast/"><span class="tag">On air</span><b>Manage an AzuraCast station</b><span>Connect your AzuraCast server, then run the queue, requests, media and DJs from the studio.</span></a>
+<a class="guide-card" href="/guides/broadcast-from-anywhere/"><span class="tag">Server and remote</span><b>Broadcast from anywhere</b><span>Put the station on a server and run it from the desktop app or a phone browser.</span></a>
+<a class="guide-card" href="/guides/plugins/"><span class="tag">Extend RadioMaster</span><b>Make a plugin</b><span>Run your own scripts when a song starts or the hour changes, and control RadioMaster from them.</span></a>
+</div>
+<!-- /GUIDES:home -->
+      <div class="related" style="margin-top:22px">
+        <a class="btn ghost" href="/guides/">All guides</a>
+        <a class="btn ghost" href="/server/docs/">Server documentation</a>
       </div>
     </div>
   </section>
@@ -325,15 +363,19 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
         </details>
         <details>
           <summary><h3>Can RadioMaster run on a headless Linux server?</h3></summary>
-          <p>Yes. <a href="server/">RadioMaster Server</a> runs the station without a window on Linux (with a systemd service) or Windows Server. It plays playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast, through the server's sound cards or stream only. Presenters control it from the desktop app with File → Connect to Server.</p>
+          <p>Yes. <a href="/server/">RadioMaster Server</a> runs the station without a window on Linux (with a systemd service) or Windows Server. It plays playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast, through the server's sound cards or stream only. Presenters control it from the desktop app with File → Connect to Server.</p>
+        </details>
+        <details>
+          <summary><h3>Can I run my station from home or from my phone?</h3></summary>
+          <p>Yes. Run the station on <a href="/server/">RadioMaster Server</a> and connect to it from the desktop app anywhere with File → Connect to Server: you can edit playlists, fire carts and go live with your own microphone. The server's web portal runs the station from any browser, including a phone. See the <a href="/guides/broadcast-from-anywhere/">broadcast from anywhere guide</a>.</p>
         </details>
         <details>
           <summary><h3>How do I start an internet radio station with RadioMaster?</h3></summary>
-          <p>Get a streaming server (Icecast, Shoutcast or AzuraCast), install RadioMaster, add your music to the library and build playlists, then add an encoder in Tools → Streams / encoders with your server's address and password and press play. The <a href="guides/start-an-internet-radio-station/">step-by-step guide</a> covers music licences, jingles, adverts and running 24/7.</p>
+          <p>Get a streaming server (Icecast, Shoutcast or AzuraCast), install RadioMaster, add your music to the library and build playlists, then add an encoder in Tools → Streams / encoders with your server's address and password and press play. The <a href="/guides/start-an-internet-radio-station/">step-by-step guide</a> covers music licences, jingles, adverts and running 24/7.</p>
         </details>
         <details>
           <summary><h3>Where do I get help?</h3></summary>
-          <p>Ask on the <a href="https://discord.gg/zVxeUXCjhc">RadioMaster Support Discord</a> or <a href="https://github.com/epell-development/RadioMaster/issues">open an issue on GitHub</a>. Every release and what changed is on the <a href="updates/">Updates page</a>, and installed copies update themselves in one click.</p>
+          <p>Ask on the <a href="https://discord.gg/zVxeUXCjhc">RadioMaster Support Discord</a> or <a href="https://github.com/epell-development/RadioMaster/issues">open an issue on GitHub</a>. Every release and what changed is on the <a href="/updates/">Updates page</a>, and installed copies update themselves in one click.</p>
         </details>
       </div>
     </div>
@@ -401,6 +443,14 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
     },
     {
       "@type": "Question",
+      "name": "Can I run my station from home or from my phone?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Run the station on RadioMaster Server and connect to it from the desktop app anywhere with File → Connect to Server: you can edit playlists, fire carts and go live with your own microphone. The server's web portal runs the station from any browser, including a phone. See the broadcast from anywhere guide."
+      }
+    },
+    {
+      "@type": "Question",
       "name": "How do I start an internet radio station with RadioMaster?",
       "acceptedAnswer": {
         "@type": "Answer",
@@ -420,24 +470,27 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
 </script>
 </main>
 
+<!-- FOOTER -->
 <footer>
   <div class="wrap">
     <div class="row">
-      <a class="brand" href="#top" style="font-size:1.2rem"><img src="img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
       <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
-      <a href="server/">RadioMaster Server</a>
-      <a href="guides/start-an-internet-radio-station/">Start a radio station</a>
-      <a href="updates/">Updates</a>
-      <a href="#faq">FAQ</a>
       <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
     </div>
-    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
     <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
   </div>
 </footer>
+<!-- /FOOTER -->
 
 <script>
 (function () {

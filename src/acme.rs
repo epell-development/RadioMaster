@@ -483,6 +483,7 @@ mod pebble {
         // a second time with the same account
         let again = r.as_ref().ok().map(|_| obtain(&order, &dir, agent, &challenges, &|_| {}));
         let _ = child.kill();
+        let _ = child.wait();
         let (chain, key) = r.unwrap();
         assert!(again.unwrap().is_ok());
         assert!(chain.contains("BEGIN CERTIFICATE") && key.contains("PRIVATE KEY"));

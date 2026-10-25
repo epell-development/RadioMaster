@@ -28,7 +28,7 @@ impl App {
     }
 
     fn pane_tabs(&mut self, ui: &mut egui::Ui, pane: Pane) -> Option<Tab> {
-        let Some(pt) = self.workzones.pane(pane).cloned() else { return None };
+        let pt = self.workzones.pane(pane).cloned()?;
         let mut change: Option<usize> = None;
         let mut close: Option<usize> = None;
         let mut move_to: Option<(usize, Pane)> = None;

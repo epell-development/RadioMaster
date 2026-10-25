@@ -114,14 +114,16 @@ program get the certificate (win-acme, certbot) and give the files to the server
 A proxy that serves HTTPS itself can talk to the server over plain HTTP. Either:
 
 - turn the server's HTTPS **off** and let the proxy do it (simplest), or
-- keep it on: plain requests that come from a proxy saying the browser used HTTPS (`X-Forwarded-Proto: https`,
-  IIS's `X-ARR-SSL`, Cloudflare's `CF-Visitor`) are served as they are instead of being sent to `https://`.
+- keep it on: plain requests from a proxy on the same machine or the local network that says the browser used
+  HTTPS (`X-Forwarded-Proto: https`, IIS's `X-ARR-SSL`, Cloudflare's `CF-Visitor`) are served as they are instead
+  of being sent to `https://`. (From other addresses those headers are ignored, so they can't be faked.)
   (Before 0.2.9 that redirect sent browsers round in a loop, `ERR_TOO_MANY_REDIRECTS`.)
 
 **IIS** (URL Rewrite + Application Request Routing): add a reverse-proxy rule to `http://localhost:9260` for
 the portal (or 9259 for the apps), keep *Reverse rewrite host in response headers* off, and set the ARR proxy's
 *Response buffer threshold* to 0 so the station's sound reaches the app straight away. **nginx:** set
-`proxy_buffering off;` and `proxy_set_header X-Forwarded-Proto $scheme;`.
+`proxy_buffering off;` and `proxy_set_header X-Forwarded-Proto $scheme;`. More examples (nginx, Caddy, IIS) are in
+the [online documentation](https://radiomaster.dovafm.com/server/docs/#proxy).
 
 ### Cloudflare Tunnel
 A Cloudflare Tunnel puts the web portal on the internet with no port forwarding and no certificate to look
