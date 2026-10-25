@@ -15,6 +15,9 @@
 //!   POST /api/v1/mic/off
 //!
 //! Every call but ping and login needs `Authorization: Bearer <token>`.
+//!
+//! With HTTPS on, the same API is served over TLS (see tls.rs). The optional web portal is a page on
+//! its own port that signs in and uses this same API from the browser.
 
 use crate::config::data_dir;
 use crate::playout::sync::{self, digest, Cmd, ServerInfo, ServerUpdate, Snapshot, TabsWire};
@@ -45,6 +48,14 @@ pub struct ServerCfg {
     pub autoplay: bool,
     /// play through the server's sound cards (off: a silent clock, streaming only)
     pub audio: bool,
+    /// serve the API (and the portal) over HTTPS
+    pub https: bool,
+    /// PEM certificate (chain) and private key; both empty: a self-signed certificate in the data folder
+    pub cert_file: String,
+    pub key_file: String,
+    /// the web portal: a browser page for running the station
+    pub portal: bool,
+    pub portal_port: u16,
 }
 
 impl Default for ServerCfg {
@@ -57,6 +68,11 @@ impl Default for ServerCfg {
             port: sync::DEFAULT_PORT,
             autoplay: true,
             audio: true,
+            https: false,
+            cert_file: String::new(),
+            key_file: String::new(),
+            portal: false,
+            portal_port: sync::DEFAULT_PORTAL_PORT,
         }
     }
 }
@@ -129,8 +145,45 @@ struct Api {
     /// token → (user, last used)
     tokens: Mutex<HashMap<String, (String, Instant)>>,
     failures: Mutex<(u32, Instant)>,
+    /// what is running now (server.json may have changed since): (https, portal, portal port)
+    running: (bool, bool, u16),
+    /// of the certificate in use (empty without HTTPS)
+    fingerprint: String,
+    /// HTTPS with a certificate browsers trust: the portal tells them to use only HTTPS. (Not with a
+    /// self-signed one, where HSTS would stop browsers from letting the user past their warning.)
+    hsts: bool,
     /// token → the mic audio of that app, while its mic is on
     mics: Mutex<HashMap<String, Sender<Vec<u8>>>>,
+}
+
+/// Where the server is listening.
+pub struct Listening {
+    pub addr: std::net::SocketAddr,
+    pub portal: Option<std::net::SocketAddr>,
+    /// the certificate's SHA-256 (None without HTTPS)
+    pub fingerprint: Option<String>,
+    /// the certificate is the server's own (apps ask once whether to trust it)
+    pub self_signed: bool,
+}
+
+/// A plain HTTP server for the API; with `tls`, it listens on loopback behind the TLS layer, which
+/// takes the public port.
+fn listen(bind: &str, port: u16, tls: Option<&crate::tls::ServerTls>) -> Result<(tiny_http::Server, std::net::SocketAddr), String> {
+    match tls {
+        None => {
+            let server = tiny_http::Server::http((bind, port)).map_err(|e| e.to_string())?;
+            let addr = server.server_addr().to_ip().ok_or("not an IP address")?;
+            Ok((server, addr))
+        }
+        Some(t) => {
+            let public = std::net::TcpListener::bind((bind, port)).map_err(|e| e.to_string())?;
+            let addr = public.local_addr().map_err(|e| e.to_string())?;
+            let server = tiny_http::Server::http(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
+            let inner = server.server_addr().to_ip().ok_or("not an IP address")?;
+            crate::tls::serve(public, inner, t.config.clone());
+            Ok((server, addr))
+        }
+    }
 }
 
 /// Sign-ins expire after this long without a call.
@@ -143,15 +196,23 @@ const MIC_IDLE: Duration = Duration::from_secs(3);
 /// Mic audio waits for this many decoded MP3 frames (about 26 ms each) before it plays.
 const MIC_PREBUFFER: usize = 6;
 
-/// Start listening. Returns the address actually bound (port 0 picks a free one).
-pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<std::net::SocketAddr, String> {
-    let server = tiny_http::Server::http((cfg.bind.as_str(), cfg.port)).map_err(|e| e.to_string())?;
-    let addr = server.server_addr().to_ip().ok_or("not an IP address")?;
+/// Start listening. Returns the addresses actually bound (port 0 picks a free one).
+pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Listening, String> {
+    let tls = if cfg.https { Some(crate::tls::server_tls(&cfg.cert_file, &cfg.key_file, &data_dir())?) } else { None };
+    let (server, addr) = listen(&cfg.bind, cfg.port, tls.as_ref())?;
+    let portal = if cfg.portal {
+        let (s, a) =
+            listen(&cfg.bind, cfg.portal_port, tls.as_ref()).map_err(|e| format!("web portal on port {}: {e}", cfg.portal_port))?;
+        Some((s, a))
+    } else {
+        None
+    };
     // revisions start from the clock, so an app that was connected before a restart always gets fresh lists
     let start = chrono::Local::now().timestamp_millis() as u64;
     let mut revs =
         Revs { rev: start, tabs_hash: 0, tabs: Default::default(), cfg_rev: start, cfg_hash: 0, cfg: Default::default(), hist_rev: 0 };
     revs.refresh(&core);
+    let running = (cfg.https, cfg.portal, cfg.portal_port);
     let api = Arc::new(Api {
         core,
         cfg: Mutex::new(cfg),
@@ -159,6 +220,9 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<st
         revs: Mutex::new(revs),
         tokens: Mutex::new(HashMap::new()),
         failures: Mutex::new((0, Instant::now())),
+        running,
+        fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()).unwrap_or_default(),
+        hsts: tls.as_ref().is_some_and(|t| !t.self_signed),
         mics: Mutex::new(HashMap::new()),
     });
     {
@@ -168,20 +232,36 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<st
             api.revs.lock().refresh(&api.core);
         });
     }
-    let server = Arc::new(server);
-    for _ in 0..4 {
-        let (server, api) = (server.clone(), api.clone());
-        thread::spawn(move || {
-            while let Ok(req) = server.recv() {
-                api.handle(req);
-            }
-        });
+    let portal_addr = portal.as_ref().map(|p| p.1);
+    let mut servers = vec![(Arc::new(server), false, 4)];
+    if let Some((s, _)) = portal {
+        servers.push((Arc::new(s), true, 2));
     }
-    Ok(addr)
+    for (server, portal, workers) in servers {
+        for _ in 0..workers {
+            let (server, api) = (server.clone(), api.clone());
+            thread::spawn(move || {
+                while let Ok(req) = server.recv() {
+                    api.handle(req, portal);
+                }
+            });
+        }
+    }
+    Ok(Listening {
+        addr,
+        portal: portal_addr,
+        fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()),
+        self_signed: tls.as_ref().is_some_and(|t| t.self_signed),
+    })
 }
 
 /// HTTP status and JSON body.
 struct Reply(u16, String);
+
+/// The web portal's files.
+const PORTAL_HTML: &str = include_str!("../assets/portal/index.html");
+const PORTAL_JS: &str = include_str!("../assets/portal/portal.js");
+const PORTAL_CSS: &str = include_str!("../assets/portal/portal.css");
 
 fn json(code: u16, v: impl Serialize) -> Reply {
     Reply(code, serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()))
@@ -210,9 +290,21 @@ struct CfgPush {
 }
 
 impl Api {
-    fn handle(self: &Arc<Self>, mut req: tiny_http::Request) {
+    /// `portal`: the request came to the web portal's port, which also serves the page itself.
+    fn handle(self: &Arc<Self>, mut req: tiny_http::Request, portal: bool) {
         let url = req.url().to_string();
         let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
+        if portal && *req.method() == tiny_http::Method::Get {
+            let file = match path {
+                "/" | "/index.html" => Some((PORTAL_HTML, "text/html; charset=utf-8")),
+                "/portal.js" => Some((PORTAL_JS, "text/javascript; charset=utf-8")),
+                "/portal.css" => Some((PORTAL_CSS, "text/css; charset=utf-8")),
+                _ => None,
+            };
+            if let Some((text, ct)) = file {
+                return respond_file(req, text, ct, self.hsts);
+            }
+        }
         let param = |k: &str| -> u64 {
             query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).and_then(|(_, b)| b.parse().ok())).unwrap_or(0)
         };
@@ -499,6 +591,11 @@ impl Api {
             port: c.port,
             autoplay: c.autoplay,
             audio: c.audio,
+            https: c.https,
+            fingerprint: self.fingerprint.clone(),
+            portal: c.portal,
+            portal_port: c.portal_port,
+            restart_needed: (c.https, c.portal, c.portal_port) != self.running,
             devices: crate::audio::list_outputs(),
             outputs: self.core.lock().cfg.audio_devices.outputs.clone(),
             report: self.host.audio_report.lock().clone(),
@@ -521,6 +618,12 @@ impl Api {
             c.name = u.name.trim().to_string();
         }
         c.autoplay = u.autoplay;
+        // these take effect when the server starts again
+        c.https = u.https;
+        c.portal = u.portal;
+        if u.portal_port != 0 {
+            c.portal_port = u.portal_port;
+        }
         let audio_changed = c.audio != u.audio || self.core.lock().cfg.audio_devices.outputs != u.outputs;
         c.audio = u.audio;
         if let Err(e) = c.save() {
@@ -540,6 +643,28 @@ impl Api {
         self.core.lock().say("Server: settings changed");
         json(200, self.info())
     }
+}
+
+fn header(name: &str, value: &str) -> tiny_http::Header {
+    tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()).unwrap()
+}
+
+/// One of the portal's own files, with headers that keep it from being framed or mixed with other sites.
+fn respond_file(req: tiny_http::Request, text: &'static str, content_type: &str, hsts: bool) {
+    let mut r = tiny_http::Response::from_string(text)
+        .with_header(header("Content-Type", content_type))
+        .with_header(header("Cache-Control", "no-cache"))
+        .with_header(header("X-Content-Type-Options", "nosniff"))
+        .with_header(header("X-Frame-Options", "DENY"))
+        .with_header(header("Referrer-Policy", "no-referrer"))
+        .with_header(header(
+            "Content-Security-Policy",
+            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+        ));
+    if hsts {
+        r.add_header(header("Strict-Transport-Security", "max-age=31536000"));
+    }
+    let _ = req.respond(r);
 }
 
 /// Reads the mic slices as one stream; ends when the mic goes off or nothing arrives for `MIC_IDLE`.
@@ -569,7 +694,7 @@ impl Read for ChanReader {
 
 fn respond(req: tiny_http::Request, reply: Reply, gzip_ok: bool) {
     let Reply(code, text) = reply;
-    let ct = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
+    let ct = header("Content-Type", "application/json");
     if gzip_ok && text.len() > 8 * 1024 {
         use std::io::Write;
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -644,8 +769,8 @@ mod tests {
             ..Default::default()
         };
         let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
-        let addr = spawn(station.clone(), cfg, host).unwrap();
-        let s = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "dj", "a long enough password").unwrap();
+        let addr = spawn(station.clone(), cfg, host).unwrap().addr;
+        let s = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "dj", "a long enough password", "").unwrap();
         let token = Arc::new(Mutex::new(s.token.clone()));
 
         // the app's own engine (the one its sound cards play) plays what the station plays
@@ -653,7 +778,7 @@ mod tests {
         let _cards = here.start_null_driver();
         let (tx, heard) = crossbeam_channel::bounded(512);
         here.add_tap(tx);
-        let listener = crate::link::Listener::start(here.clone(), s.base.clone(), token.clone(), Box::new(|_| {}));
+        let listener = crate::link::Listener::start(here.clone(), s.base.clone(), s.pin.clone(), token.clone(), Box::new(|_| {}));
         thread::sleep(Duration::from_secs(2));
         drain(&heard);
         station_engine.set_volume(1.0);
@@ -718,11 +843,11 @@ mod tests {
             ..Default::default()
         };
         let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
-        let addr = spawn(station.clone(), cfg, host).unwrap();
+        let addr = spawn(station.clone(), cfg, host).unwrap().addr;
         let address = format!("127.0.0.1:{}", addr.port());
 
-        assert!(crate::link::login(&address, "studio", "wrong password!!").is_err());
-        let session = crate::link::login(&address, "studio", "correct horse battery").unwrap();
+        assert!(crate::link::login(&address, "studio", "wrong password!!", "").is_err());
+        let session = crate::link::login(&address, "studio", "correct horse battery", "").unwrap();
         assert_eq!(session.name, "RadioMaster Server");
 
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
@@ -755,13 +880,125 @@ mod tests {
         assert_eq!(info.user, "studio");
         assert!(info.forced_silent);
         info.name = "Night Desk".into();
-        let mut u = ServerUpdate { name: info.name, autoplay: false, audio: true, outputs: vec![], password: None };
+        let mut u = ServerUpdate { name: info.name, autoplay: false, audio: true, outputs: vec![], password: None, ..Default::default() };
         assert_eq!(crate::link::Link::server_update(&s, &u).unwrap().name, "Night Desk");
         u.password = Some(("not the password".into(), "a brand new password".into()));
         assert!(crate::link::Link::server_update(&s, &u).is_err());
         u.password = Some(("correct horse battery".into(), "a brand new password".into()));
         assert!(!crate::link::Link::server_update(&s, &u).unwrap().autoplay);
-        assert!(crate::link::login(&address, "studio", "a brand new password").is_ok());
+        assert!(crate::link::login(&address, "studio", "a brand new password", "").is_ok());
         link.stop();
+    }
+
+    /// HTTPS with the server's own certificate: the app has to trust it once, finds the https://
+    /// address by itself, and refuses a different certificate later. The web portal is served too.
+    #[test]
+    fn https_and_portal() {
+        let dir = std::env::temp_dir().join(format!("rm-server-tls-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::config::set_data_dir(dir.clone());
+        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        station.lock().append_to_tab(0, vec![row("one")]);
+        let cfg = ServerCfg {
+            user: "studio".into(),
+            password_hash: crate::auth::hash("correct horse battery").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            https: true,
+            portal: true,
+            portal_port: 0,
+            ..Default::default()
+        };
+        let host = || Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let l = spawn(station.clone(), cfg.clone(), host()).unwrap();
+        assert!(l.self_signed);
+        let fp = l.fingerprint.clone().unwrap();
+        let address = format!("127.0.0.1:{}", l.addr.port());
+
+        // typed without https://: plain HTTP is answered with "uses HTTPS", then the certificate is unknown
+        let first = crate::link::login(&address, "studio", "correct horse battery", "").err().unwrap();
+        let crate::link::LoginError::Untrusted { base, fingerprint, changed } = first else { panic!("{first:?}") };
+        assert_eq!(base, format!("https://{address}"));
+        assert_eq!(fingerprint, fp);
+        assert!(!changed);
+        // trusted: signed in over HTTPS, and the sync runs over it
+        let session = crate::link::login(&address, "studio", "correct horse battery", &fp).unwrap();
+        assert!(session.base.starts_with("https://"));
+        assert_eq!(session.pin, fp);
+        let info = crate::link::Link::server_info(&session).unwrap();
+        assert!(info.https && info.portal && !info.restart_needed);
+        assert_eq!(info.fingerprint, fp);
+        let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
+        let link = crate::link::Link::start(mirror.clone(), session, rx, Box::new(|| {}));
+        wait_for("the playlist over HTTPS", || mirror.lock().playlist.len() == 1);
+        mirror.lock().append_to_tab(0, vec![row("two")]);
+        wait_for("the edit on the server over HTTPS", || station.lock().playlist.len() == 2);
+        link.stop();
+
+        // a different certificate for the same address is refused
+        let other = crate::link::login(&address, "studio", "correct horse battery", "00:11").err().unwrap();
+        assert!(matches!(other, crate::link::LoginError::Untrusted { changed: true, .. }), "{other:?}");
+
+        // the portal: its page, and the API beside it
+        let portal = format!("https://127.0.0.1:{}", l.portal.unwrap().port());
+        let agent = ureq::AgentBuilder::new().tls_config(crate::tls::client_config(&fp, Default::default())).build();
+        let page = agent.get(&format!("{portal}/")).call().unwrap();
+        assert!(page.header("Content-Security-Policy").is_some());
+        // no HSTS with a self-signed certificate: browsers would no longer let the user past their warning
+        assert!(page.header("Strict-Transport-Security").is_none());
+        assert!(page.into_string().unwrap().contains("RadioMaster Web Portal"));
+        assert!(agent.get(&format!("{portal}/portal.js")).call().unwrap().into_string().unwrap().contains("api/v1"));
+        let ping: serde_json::Value = agent.get(&format!("{portal}/api/v1/ping")).call().unwrap().into_json().unwrap();
+        assert_eq!(ping["app"], "RadioMaster Server");
+        // the API port doesn't serve the page
+        assert!(agent.get(&format!("https://{address}/")).call().is_err());
+        // a browser typing http:// is sent to https://
+        let plain = ureq::AgentBuilder::new().redirects(0).build();
+        let r = plain.get(&format!("http://127.0.0.1:{}/", l.portal.unwrap().port())).call().unwrap();
+        assert_eq!(r.status(), 301);
+        assert!(r.header("Location").unwrap().starts_with("https://127.0.0.1:"));
+
+        // the certificate is kept: the same one after a restart
+        let again = spawn(station, cfg, host()).unwrap();
+        assert_eq!(again.fingerprint.unwrap(), fp);
+    }
+
+    /// The station's sound reaches the app over HTTPS too, through the pinned certificate, and keeps
+    /// flowing while the app sends nothing.
+    #[test]
+    fn listen_over_https() {
+        let dir = std::env::temp_dir().join(format!("rm-server-tls-listen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::config::set_data_dir(dir);
+        let station_engine = Engine::new_detached();
+        let _clock = station_engine.start_null_driver();
+        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let cfg = ServerCfg {
+            user: "dj".into(),
+            password_hash: crate::auth::hash("a long enough password").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            https: true,
+            ..Default::default()
+        };
+        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let l = spawn(station, cfg, host).unwrap();
+        let s =
+            crate::link::login(&format!("127.0.0.1:{}", l.addr.port()), "dj", "a long enough password", &l.fingerprint.unwrap()).unwrap();
+        let here = Engine::new_detached();
+        let _cards = here.start_null_driver();
+        let (tx, heard) = crossbeam_channel::bounded(512);
+        here.add_tap(tx);
+        let listener = crate::link::Listener::start(here, s.base.clone(), s.pin.clone(), Arc::new(Mutex::new(s.token)), Box::new(|_| {}));
+        thread::sleep(Duration::from_secs(2));
+        drain(&heard);
+        station_engine.set_volume(1.0);
+        station_engine.play_source(sine(440.0), None, 0.0, crate::engine::CueSpec::default(), None, true);
+        assert!(sound_after(&heard, 10.0).is_some(), "the app should hear the station over HTTPS");
+        drop(listener);
     }
 }
