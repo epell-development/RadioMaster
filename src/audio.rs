@@ -55,6 +55,18 @@ impl AudioManager {
         self.running.iter().find(|r| r.name == name).map(|r| if r.primary { "primary" } else { "monitor" })
     }
 
+    /// Close every output and keep the mix running on a silent clock (streaming only).
+    #[allow(dead_code)] // RadioMaster-Server
+    pub fn silence(&mut self, engine: &Engine) {
+        self.running.clear();
+        self.report.clear();
+        if let Some(s) = self.null_stop.take() {
+            s.store(true, Ordering::Relaxed);
+        }
+        self.report.push(("(sound cards off)".into(), "running silently — streaming and automation still work".into()));
+        self.null_stop = Some(engine.start_null_driver());
+    }
+
     /// (Re)open every enabled output. Safe to call at any time.
     pub fn apply(&mut self, engine: &Engine, cfg: &AudioDevices) {
         self.running.clear(); // dropping the streams closes the devices

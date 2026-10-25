@@ -128,6 +128,40 @@ pub struct Snapshot {
     pub lib_ver: u64,
 }
 
+/// The server's own settings, as the app's Server settings window shows them.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct ServerInfo {
+    pub name: String,
+    pub user: String,
+    pub version: String,
+    pub port: u16,
+    /// start playing when the server starts
+    pub autoplay: bool,
+    /// play through the server's sound cards (off: streaming only)
+    pub audio: bool,
+    /// sound cards the server has
+    pub devices: Vec<String>,
+    /// the ones chosen (none enabled: the default card)
+    pub outputs: Vec<crate::config::OutputSel>,
+    /// (device, status) as last opened
+    pub report: Vec<(String, String)>,
+    /// the server was started with --no-audio, which wins over `audio`
+    pub forced_silent: bool,
+}
+
+/// Changes from the Server settings window.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct ServerUpdate {
+    pub name: String,
+    pub autoplay: bool,
+    pub audio: bool,
+    pub outputs: Vec<crate::config::OutputSel>,
+    /// to change the password: the current one and the new one
+    pub password: Option<(String, String)>,
+}
+
 /// How many log lines and history items a client is sent.
 pub const TAIL: usize = 300;
 

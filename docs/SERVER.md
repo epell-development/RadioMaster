@@ -47,9 +47,14 @@ The server keeps its own data folder, so it never mixes with a desktop RadioMast
 move an existing station to the server, copy `config.json`, `playlists.json`, `library.json`, `cues.json` and
 `plays.json` from the desktop's data folder into the server's (then fix any music folder paths).
 
-With no sound card the server runs on a silent clock, so automation and streaming carry on as normal. To pick
-sound cards, list them in `config.json` under `audio_devices.outputs` (names from `--list-devices`); the first
-one that opens drives the mix, as in the desktop app.
+**Sound output:** the server can play through its own sound cards (e.g. into a desk or an FM transmitter) as
+well as stream. By default it uses its default sound card. In the desktop app, **File → Server settings…**
+switches "Play through the server's sound cards" on or off and ticks which cards to use; the change takes
+effect at once and is shown with each card's status. With no sound card (or with it switched off, or with
+`--no-audio`) the server runs on a silent clock, so automation and streaming carry on as normal.
+
+**File → Server settings…** also changes the station name, whether the server starts playing when it starts,
+and the server password (you type the current one first).
 
 ### Run it as a service
 **Linux (systemd):** the package includes `radiomaster-server.service`; the steps are at the top of that file.

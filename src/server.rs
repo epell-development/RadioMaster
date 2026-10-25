@@ -8,11 +8,13 @@
 //!   POST /api/v1/cmd     [sync::Cmd]
 //!   POST /api/v1/tabs    {base, tabs}      → {rev}, or 409 when the server's playlists changed first
 //!   POST /api/v1/config  {base, cfg}       → {rev}, or 409
+//!   GET  /api/v1/server                    → sync::ServerInfo (name, sound cards, …)
+//!   POST /api/v1/server  sync::ServerUpdate → sync::ServerInfo
 //!
 //! Every call but ping and login needs `Authorization: Bearer <token>`.
 
 use crate::config::data_dir;
-use crate::playout::sync::{self, digest, Cmd, Snapshot, TabsWire};
+use crate::playout::sync::{self, digest, Cmd, ServerInfo, ServerUpdate, Snapshot, TabsWire};
 use crate::playout::Playout;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -37,6 +39,8 @@ pub struct ServerCfg {
     pub port: u16,
     /// start playing the on-air playlist when the server starts
     pub autoplay: bool,
+    /// play through the server's sound cards (off: a silent clock, streaming only)
+    pub audio: bool,
 }
 
 impl Default for ServerCfg {
@@ -48,6 +52,7 @@ impl Default for ServerCfg {
             bind: "0.0.0.0".into(),
             port: sync::DEFAULT_PORT,
             autoplay: true,
+            audio: true,
         }
     }
 }
@@ -102,9 +107,20 @@ impl Revs {
     }
 }
 
+/// What the server program does for the API: its sound cards live on its main thread.
+pub struct Host {
+    /// open the sound cards again from `audio_devices` and `ServerCfg::audio`
+    pub reapply_audio: Box<dyn Fn() + Send + Sync>,
+    /// (device, status) as last opened
+    pub audio_report: Arc<Mutex<Vec<(String, String)>>>,
+    /// started with --no-audio
+    pub forced_silent: bool,
+}
+
 struct Api {
     core: Arc<Mutex<Playout>>,
-    cfg: ServerCfg,
+    cfg: Mutex<ServerCfg>,
+    host: Host,
     revs: Mutex<Revs>,
     /// token → (user, last used)
     tokens: Mutex<HashMap<String, (String, Instant)>>,
@@ -115,7 +131,7 @@ struct Api {
 const TOKEN_IDLE: Duration = Duration::from_secs(24 * 3600);
 
 /// Start listening. Returns the address actually bound (port 0 picks a free one).
-pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg) -> Result<std::net::SocketAddr, String> {
+pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<std::net::SocketAddr, String> {
     let server = tiny_http::Server::http((cfg.bind.as_str(), cfg.port)).map_err(|e| e.to_string())?;
     let addr = server.server_addr().to_ip().ok_or("not an IP address")?;
     // revisions start from the clock, so an app that was connected before a restart always gets fresh lists
@@ -123,8 +139,14 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg) -> Result<std::net::Sock
     let mut revs =
         Revs { rev: start, tabs_hash: 0, tabs: Default::default(), cfg_rev: start, cfg_hash: 0, cfg: Default::default(), hist_rev: 0 };
     revs.refresh(&core);
-    let api =
-        Arc::new(Api { core, cfg, revs: Mutex::new(revs), tokens: Mutex::new(HashMap::new()), failures: Mutex::new((0, Instant::now())) });
+    let api = Arc::new(Api {
+        core,
+        cfg: Mutex::new(cfg),
+        host,
+        revs: Mutex::new(revs),
+        tokens: Mutex::new(HashMap::new()),
+        failures: Mutex::new((0, Instant::now())),
+    });
     {
         let api = api.clone();
         thread::spawn(move || loop {
@@ -193,7 +215,7 @@ impl Api {
         let reply = match (path, post) {
             ("/api/v1/ping", _) => json(
                 200,
-                serde_json::json!({ "app": "RadioMaster Server", "name": self.cfg.name, "version": env!("CARGO_PKG_VERSION"), "protocol": sync::PROTOCOL }),
+                serde_json::json!({ "app": "RadioMaster Server", "name": self.cfg.lock().name, "version": env!("CARGO_PKG_VERSION"), "protocol": sync::PROTOCOL }),
             ),
             ("/api/v1/login", true) => self.login(&body),
             _ => match token.as_deref().map(|t| self.check(t)) {
@@ -216,7 +238,11 @@ impl Api {
             }
         };
         thread::sleep(Duration::from_secs(wait as u64));
-        if l.user != self.cfg.user || !crate::auth::verify(&self.cfg.password_hash, &l.password) {
+        let (user, hash) = {
+            let c = self.cfg.lock();
+            (c.user.clone(), c.password_hash.clone())
+        };
+        if l.user != user || !crate::auth::verify(&hash, &l.password) {
             let mut f = self.failures.lock();
             f.0 = if f.1.elapsed() > Duration::from_secs(600) { 1 } else { f.0 + 1 };
             f.1 = Instant::now();
@@ -236,7 +262,7 @@ impl Api {
         self.core.lock().say(format!("Server: {} connected", l.user));
         json(
             200,
-            serde_json::json!({ "ok": true, "token": token, "name": self.cfg.name, "version": env!("CARGO_PKG_VERSION"), "protocol": sync::PROTOCOL }),
+            serde_json::json!({ "ok": true, "token": token, "name": self.cfg.lock().name.clone(), "version": env!("CARGO_PKG_VERSION"), "protocol": sync::PROTOCOL }),
         )
     }
 
@@ -324,8 +350,64 @@ impl Api {
                 r.refresh(&self.core);
                 json(200, serde_json::json!({ "ok": true, "rev": r.cfg_rev }))
             }
+            ("/api/v1/server", false) => json(200, self.info()),
+            ("/api/v1/server", true) => {
+                let Ok(u) = serde_json::from_str::<ServerUpdate>(body) else { return error(400, "bad server settings") };
+                self.update(u)
+            }
             _ => error(404, "unknown call"),
         }
+    }
+
+    fn info(&self) -> ServerInfo {
+        let c = self.cfg.lock().clone();
+        ServerInfo {
+            name: c.name,
+            user: c.user,
+            version: env!("CARGO_PKG_VERSION").into(),
+            port: c.port,
+            autoplay: c.autoplay,
+            audio: c.audio,
+            devices: crate::audio::list_outputs(),
+            outputs: self.core.lock().cfg.audio_devices.outputs.clone(),
+            report: self.host.audio_report.lock().clone(),
+            forced_silent: self.host.forced_silent,
+        }
+    }
+
+    fn update(&self, u: ServerUpdate) -> Reply {
+        let mut c = self.cfg.lock().clone();
+        if let Some((current, new)) = &u.password {
+            if !crate::auth::verify(&c.password_hash, current) {
+                return error(403, "the current password is wrong");
+            }
+            match crate::auth::hash(new) {
+                Ok(h) => c.password_hash = h,
+                Err(e) => return error(400, &e),
+            }
+        }
+        if !u.name.trim().is_empty() {
+            c.name = u.name.trim().to_string();
+        }
+        c.autoplay = u.autoplay;
+        let audio_changed = c.audio != u.audio || self.core.lock().cfg.audio_devices.outputs != u.outputs;
+        c.audio = u.audio;
+        if let Err(e) = c.save() {
+            return error(500, &format!("could not save server.json: {e}"));
+        }
+        *self.cfg.lock() = c;
+        if audio_changed {
+            {
+                let mut p = self.core.lock();
+                p.cfg.audio_devices.outputs = u.outputs;
+                p.save_all();
+            }
+            (self.host.reapply_audio)();
+            // the main thread opens the cards; give it a moment so the answer shows the result
+            thread::sleep(Duration::from_millis(700));
+        }
+        self.core.lock().say("Server: settings changed");
+        json(200, self.info())
     }
 }
 
@@ -379,7 +461,8 @@ mod tests {
             port: 0,
             ..Default::default()
         };
-        let addr = spawn(station.clone(), cfg).unwrap();
+        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let addr = spawn(station.clone(), cfg, host).unwrap();
         let address = format!("127.0.0.1:{}", addr.port());
 
         assert!(crate::link::login(&address, "studio", "wrong password!!").is_err());
@@ -410,6 +493,19 @@ mod tests {
         mirror.lock().cfg.language = "de".into();
         thread::sleep(Duration::from_millis(800));
         assert_eq!(station.lock().cfg.language, "");
+        // the server's own settings window: rename, wrong then right password change
+        let s = link.current();
+        let mut info = crate::link::Link::server_info(&s).unwrap();
+        assert_eq!(info.user, "studio");
+        assert!(info.forced_silent);
+        info.name = "Night Desk".into();
+        let mut u = ServerUpdate { name: info.name, autoplay: false, audio: true, outputs: vec![], password: None };
+        assert_eq!(crate::link::Link::server_update(&s, &u).unwrap().name, "Night Desk");
+        u.password = Some(("not the password".into(), "a brand new password".into()));
+        assert!(crate::link::Link::server_update(&s, &u).is_err());
+        u.password = Some(("correct horse battery".into(), "a brand new password".into()));
+        assert!(!crate::link::Link::server_update(&s, &u).unwrap().autoplay);
+        assert!(crate::link::login(&address, "studio", "a brand new password").is_ok());
         link.stop();
     }
 }

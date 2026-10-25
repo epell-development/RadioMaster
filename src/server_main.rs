@@ -51,6 +51,13 @@ Usage: RadioMaster-Server [options]
 
 Desktop apps connect with File → Connect to Server, using this machine's address and port.";
 
+/// Work for the main thread (which owns the sound cards).
+enum Ctl {
+    Quit,
+    /// the sound card settings changed
+    Audio,
+}
+
 struct Args {
     setup: bool,
     user: Option<String>,
@@ -230,20 +237,30 @@ fn main() {
     let cfg = config::Config::load();
     engine.set_volume(cfg.volume);
     let remote = cfg.remote.clone();
-    let devices = cfg.audio_devices.clone();
     let core = Arc::new(Mutex::new(playout::Playout::new(engine, cfg)));
-    // sound card (or a silent clock when there is none, so streaming still runs in real time)
+    // sound cards (or a silent clock, so streaming still runs in real time). They are opened on this
+    // thread; the API asks for it again when the settings change in the app.
     let mut audio = audio::AudioManager::default();
-    let _null = if args.no_audio {
-        println!("Audio: none (--no-audio), streaming only");
-        Some(core.lock().engine.start_null_driver())
-    } else {
-        audio.apply(&core.lock().engine, &devices);
+    let audio_report: Arc<Mutex<Vec<(String, String)>>> = Default::default();
+    let open_audio = |audio: &mut audio::AudioManager, want: bool| {
+        let (engine, devices) = {
+            let c = core.lock();
+            (c.engine.clone(), c.cfg.audio_devices.clone())
+        };
+        if want && !args.no_audio {
+            audio.apply(&engine, &devices);
+        } else {
+            audio.silence(&engine);
+        }
         for (dev, st) in &audio.report {
             println!("Audio: {dev}: {st}");
         }
-        None
+        *audio_report.lock() = audio.report.clone();
     };
+    if args.no_audio {
+        println!("Audio: off (--no-audio), streaming only");
+    }
+    open_audio(&mut audio, scfg.audio);
     if remote.enabled {
         remote::spawn(core.clone(), remote.port, remote.password);
     }
@@ -254,7 +271,18 @@ fn main() {
             c.lock().tick();
         });
     }
-    match server::spawn(core.clone(), scfg.clone()) {
+    let (ctl_tx, ctl_rx) = std::sync::mpsc::channel::<Ctl>();
+    let host = {
+        let tx = Mutex::new(ctl_tx.clone());
+        server::Host {
+            reapply_audio: Box::new(move || {
+                let _ = tx.lock().send(Ctl::Audio);
+            }),
+            audio_report: audio_report.clone(),
+            forced_silent: args.no_audio,
+        }
+    };
+    match server::spawn(core.clone(), scfg.clone(), host) {
         Ok(addr) => println!("Listening on {addr} — sign in as '{}' from File → Connect to Server", scfg.user),
         Err(e) => {
             eprintln!("Could not listen on {}:{}: {e}", scfg.bind, scfg.port);
@@ -269,16 +297,22 @@ fn main() {
         }
     }
 
-    let (quit_tx, quit_rx) = std::sync::mpsc::channel();
     if let Err(e) = ctrlc::set_handler(move || {
-        let _ = quit_tx.send(());
+        let _ = ctl_tx.send(Ctl::Quit);
     }) {
         eprintln!("Ctrl+C handler: {e}");
     }
     // the station log goes to the console (and to journald / the service log)
     let mut printed = core.lock().log_total;
     loop {
-        let quit = quit_rx.recv_timeout(Duration::from_millis(500)).is_ok();
+        let quit = match ctl_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(Ctl::Quit) => true,
+            Ok(Ctl::Audio) => {
+                open_audio(&mut audio, ServerCfg::load().is_none_or(|c| c.audio));
+                false
+            }
+            Err(_) => false,
+        };
         {
             let c = core.lock();
             let new = (c.log_total - printed) as usize;

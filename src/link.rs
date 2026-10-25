@@ -144,6 +144,8 @@ pub struct Link {
     pub session: Session,
     /// the current sign-in (renewed when the server restarts)
     token: Arc<Mutex<String>>,
+    /// set when the password is changed from this app, for signing in again later
+    new_password: Arc<Mutex<Option<String>>>,
 }
 
 impl Link {
@@ -152,11 +154,13 @@ impl Link {
     pub fn start(core: Arc<Mutex<Playout>>, session: Session, cmds: Receiver<Cmd>, repaint: Box<dyn Fn() + Send>) -> Link {
         let stop = Arc::new(AtomicBool::new(false));
         let token = Arc::new(Mutex::new(session.token.clone()));
+        let new_password = Arc::new(Mutex::new(None));
         let state = Arc::new(Mutex::new(LinkState { since: Some(Instant::now()), ..Default::default() }));
         let mut s = Syncer {
             core,
             session: session.clone(),
             token: token.clone(),
+            new_password: new_password.clone(),
             agent: agent(),
             cmds,
             state: state.clone(),
@@ -172,15 +176,36 @@ impl Link {
         };
         let st = stop.clone();
         thread::spawn(move || s.run(&st, repaint));
-        Link { stop, state, session, token }
+        Link { stop, state, session, token, new_password }
     }
 
     /// Stop syncing and sign out (in the background).
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        Self::sign_out(self.current());
+    }
+
+    /// The sign-in as it stands (the token changes when the server restarts).
+    pub fn current(&self) -> Session {
         let mut s = self.session.clone();
         s.token = self.token.lock().clone();
-        Self::sign_out(s);
+        s
+    }
+
+    /// The password was changed: sign in with the new one from now on.
+    pub fn password_changed(&mut self, password: String) {
+        self.session.password = password.clone();
+        *self.new_password.lock() = Some(password);
+    }
+
+    /// The server's own settings (blocks; run it off the UI thread).
+    pub fn server_info(s: &Session) -> Result<sync::ServerInfo, String> {
+        call(&agent(), &s.base, &s.token, "server", None).map_err(|e| e.text())
+    }
+
+    /// Change the server's own settings (blocks; run it off the UI thread).
+    pub fn server_update(s: &Session, u: &sync::ServerUpdate) -> Result<sync::ServerInfo, String> {
+        call(&agent(), &s.base, &s.token, "server", Some(serde_json::to_value(u).unwrap_or_default())).map_err(|e| e.text())
     }
 
     /// End a sign-in on the server (in the background).
@@ -206,6 +231,7 @@ struct Syncer {
     core: Arc<Mutex<Playout>>,
     session: Session,
     token: Arc<Mutex<String>>,
+    new_password: Arc<Mutex<Option<String>>>,
     agent: ureq::Agent,
     cmds: Receiver<Cmd>,
     state: Arc<Mutex<LinkState>>,
@@ -241,6 +267,9 @@ impl Syncer {
                 }
                 Err(Fail::Auth(_)) if !stop.load(Ordering::Relaxed) => {
                     // the server restarted or the sign-in expired: sign in again with the same details
+                    if let Some(p) = self.new_password.lock().take() {
+                        self.session.password = p;
+                    }
                     let s = &self.session;
                     match login(&s.base, &s.user, &s.password) {
                         Ok(n) => {

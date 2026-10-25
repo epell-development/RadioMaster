@@ -40,6 +40,15 @@ pub(super) struct ServerUi {
     ask: Option<Session>,
     profile: String,
     show_status: bool,
+    /// Server settings window: the server's settings being edited (None while they load)
+    show_settings: bool,
+    settings: Option<sync::ServerInfo>,
+    settings_busy: Option<mpsc::Receiver<Result<sync::ServerInfo, String>>>,
+    /// (saved, message)
+    settings_msg: (bool, String),
+    pw_current: String,
+    pw_new: String,
+    pw_again: String,
     /// "Add library folder" while connected: a folder on the server, typed in
     lib_folder: Option<String>,
     conn: Option<Connected>,
@@ -59,6 +68,13 @@ impl Default for ServerUi {
             ask: None,
             profile: String::new(),
             show_status: false,
+            show_settings: false,
+            settings: None,
+            settings_busy: None,
+            settings_msg: (false, String::new()),
+            pw_current: String::new(),
+            pw_new: String::new(),
+            pw_again: String::new(),
             lib_folder: None,
             conn: None,
         }
@@ -72,7 +88,7 @@ impl ServerUi {
 
     /// A window of this tool is open (web views must hide under it).
     pub(super) fn window_open(&self) -> bool {
-        self.show_connect || self.ask.is_some() || self.show_status || self.lib_folder.is_some()
+        self.show_connect || self.ask.is_some() || self.show_status || self.show_settings || self.lib_folder.is_some()
     }
 }
 
@@ -80,11 +96,15 @@ impl App {
     /// File menu entries.
     pub(super) fn server_menu(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         if self.srv.connected() {
-            if ui.button(tr("Server connection…")).clicked() {
+            if ui.button(tr("Server settings…")).clicked() {
+                self.open_server_settings();
+                ui.close_menu();
+            }
+            if ui.button(tr("Server info…")).clicked() {
                 self.srv.show_status = true;
                 ui.close_menu();
             }
-            if ui.button(tr("Disconnect from Server")).clicked() {
+            if ui.button(tr("Disconnect")).clicked() {
                 self.disconnect(core);
                 ui.close_menu();
             }
@@ -132,6 +152,7 @@ impl App {
         self.save_session_window(ctx, core);
         self.server_status_window(ctx, core);
         self.server_folder_window(ctx, core);
+        self.server_settings_window(ctx);
     }
 
     fn connect_window(&mut self, ctx: &egui::Context) {
@@ -397,6 +418,9 @@ impl App {
             });
             ui.separator();
             ui.horizontal(|ui| {
+                if ui.button(tr("Server settings…")).clicked() {
+                    self.open_server_settings();
+                }
                 if ui.button(RichText::new(tr("Disconnect")).strong()).clicked() {
                     off = true;
                 }
@@ -437,6 +461,193 @@ impl App {
         });
         if open && !done {
             self.srv.lib_folder = Some(folder);
+        }
+    }
+}
+
+impl App {
+    fn open_server_settings(&mut self) {
+        self.srv.show_settings = true;
+        self.srv.settings = None;
+        self.srv.settings_msg = (false, String::new());
+        self.server_request(None);
+    }
+
+    /// Load (`None`) or save the server's settings in the background.
+    fn server_request(&mut self, update: Option<sync::ServerUpdate>) {
+        let Some(c) = &self.srv.conn else { return };
+        let (s, ctx) = (c.link.current(), self.ctx.clone());
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let r = match &update {
+                Some(u) => Link::server_update(&s, u),
+                None => Link::server_info(&s),
+            };
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        self.srv.settings_busy = Some(rx);
+    }
+
+    fn server_settings_window(&mut self, ctx: &egui::Context) {
+        if !self.srv.show_settings {
+            return;
+        }
+        if self.srv.conn.is_none() {
+            self.srv.show_settings = false;
+            return;
+        }
+        if let Some(rx) = &self.srv.settings_busy {
+            match rx.try_recv() {
+                Ok(Ok(info)) => {
+                    let saving = self.srv.settings.is_some();
+                    if let Some(c) = self.srv.conn.as_mut() {
+                        c.link.session.name = info.name.clone();
+                        if saving && !self.srv.pw_new.is_empty() {
+                            c.link.password_changed(self.srv.pw_new.clone());
+                        }
+                    }
+                    self.srv.settings = Some(info);
+                    self.srv.settings_busy = None;
+                    if saving {
+                        self.srv.settings_msg = (true, "Saved on the server.".into());
+                        self.srv.pw_current.clear();
+                        self.srv.pw_new.clear();
+                        self.srv.pw_again.clear();
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.srv.settings_busy = None;
+                    self.srv.settings_msg = (false, e);
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.srv.settings_busy = None,
+            }
+        }
+        let busy = self.srv.settings_busy.is_some();
+        let mut open = true;
+        let mut save = false;
+        let mut reload = false;
+        Self::window_for(ctx, "Server settings", [500.0, 520.0]).collapsible(false).open(&mut open).show(ctx, |ui| {
+            let srv = &mut self.srv;
+            let Some(info) = srv.settings.as_mut() else {
+                ui.horizontal(|ui| {
+                    if busy {
+                        ui.spinner();
+                        ui.label(tr("Loading the server's settings…"));
+                    }
+                });
+                if !srv.settings_msg.1.is_empty() {
+                    ui.colored_label(RED, &srv.settings_msg.1);
+                }
+                return;
+            };
+            egui::ScrollArea::vertical().max_height(ui.available_height() - 40.0).show(ui, |ui| {
+                ui.label(
+                    RichText::new(tr("These belong to the server itself. Station settings (playlists, streams, adverts…) are in the usual places while you're connected."))
+                        .small()
+                        .color(GRAY),
+                );
+                ui.add_space(4.0);
+                egui::Grid::new("srv_settings").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label(tr("Station name"));
+                    ui.add(egui::TextEdit::singleline(&mut info.name).desired_width(260.0));
+                    ui.end_row();
+                    ui.label(tr("Server"));
+                    ui.label(format!("RadioMaster Server {} · port {} · user {}", info.version, info.port, info.user));
+                    ui.end_row();
+                });
+                ui.checkbox(&mut info.autoplay, tr("Start playing when the server starts"));
+                ui.separator();
+                ui.label(RichText::new(tr("Sound output")).strong());
+                if info.forced_silent {
+                    ui.colored_label(AMBER, tr("The server was started with --no-audio, so it streams only until it is started without it."));
+                }
+                ui.checkbox(&mut info.audio, tr("Play through the server's sound cards"))
+                    .on_hover_text(tr("Off: no sound card is used and the station only streams"));
+                ui.add_enabled_ui(info.audio, |ui| {
+                    if info.devices.is_empty() {
+                        ui.label(RichText::new(tr("The server has no sound cards.")).color(GRAY));
+                    }
+                    for d in info.devices.clone() {
+                        let k = info.outputs.iter().position(|o| o.name == d);
+                        let mut on = k.is_some_and(|k| info.outputs[k].enabled);
+                        if ui.checkbox(&mut on, &d).changed() {
+                            match k {
+                                Some(k) => info.outputs[k].enabled = on,
+                                None => info.outputs.push(crate::config::OutputSel { name: d.clone(), enabled: on, ..Default::default() }),
+                            }
+                        }
+                    }
+                    ui.label(
+                        RichText::new(tr("With none ticked, the server's default sound card plays. The first one that opens drives the mix."))
+                            .small()
+                            .color(GRAY),
+                    );
+                });
+                for (dev, st) in &info.report {
+                    ui.label(RichText::new(format!("{dev}: {st}")).small());
+                }
+                ui.separator();
+                ui.label(RichText::new(tr("Change the server password")).strong());
+                egui::Grid::new("srv_pw").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label(tr("Current password"));
+                    ui.add(egui::TextEdit::singleline(&mut srv.pw_current).password(true).desired_width(240.0));
+                    ui.end_row();
+                    ui.label(tr("New password"));
+                    ui.add(egui::TextEdit::singleline(&mut srv.pw_new).password(true).desired_width(240.0));
+                    ui.end_row();
+                    ui.label(tr("New password again"));
+                    ui.add(egui::TextEdit::singleline(&mut srv.pw_again).password(true).desired_width(240.0));
+                    ui.end_row();
+                });
+                ui.label(RichText::new(tr("Leave these empty to keep the password. At least 12 characters.")).small().color(GRAY));
+                if !srv.settings_msg.1.is_empty() {
+                    ui.colored_label(if srv.settings_msg.0 { GREEN } else { RED }, &srv.settings_msg.1);
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!busy, egui::Button::new(RichText::new(tr("Save")).strong())).clicked() {
+                    save = true;
+                }
+                if ui.add_enabled(!busy, egui::Button::new(tr("Reload"))).clicked() {
+                    reload = true;
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
+        });
+        if !open {
+            self.srv.show_settings = false;
+            self.srv.pw_current.clear();
+            self.srv.pw_new.clear();
+            self.srv.pw_again.clear();
+            return;
+        }
+        if reload {
+            self.open_server_settings();
+        }
+        if save {
+            let Some(info) = &self.srv.settings else { return };
+            let password = if self.srv.pw_new.is_empty() && self.srv.pw_current.is_empty() {
+                None
+            } else if self.srv.pw_new != self.srv.pw_again {
+                self.srv.settings_msg = (false, "The new passwords don't match".into());
+                return;
+            } else {
+                Some((self.srv.pw_current.clone(), self.srv.pw_new.clone()))
+            };
+            let u = sync::ServerUpdate {
+                name: info.name.clone(),
+                autoplay: info.autoplay,
+                audio: info.audio,
+                outputs: info.outputs.clone(),
+                password,
+            };
+            self.srv.settings_msg = (false, String::new());
+            self.server_request(Some(u));
         }
     }
 }
