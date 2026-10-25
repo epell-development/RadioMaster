@@ -369,17 +369,28 @@ enum StreamEncoder {
     Pipe(PipeEncoder),
 }
 
+/// A LAME MP3 encoder for 16-bit stereo `SR` Hz PCM.
+pub fn mp3_encoder(kbps: u32) -> Result<mp3lame_encoder::Encoder> {
+    let mut b = Builder::new().ok_or_else(|| anyhow!("LAME init failed"))?;
+    b.set_num_channels(2).map_err(|e| anyhow!("{e:?}"))?;
+    b.set_sample_rate(SR).map_err(|e| anyhow!("{e:?}"))?;
+    b.set_brate(bitrate(kbps)).map_err(|e| anyhow!("{e:?}"))?;
+    b.set_quality(Quality::Good).map_err(|e| anyhow!("{e:?}"))?;
+    b.build().map_err(|e| anyhow!("{e:?}"))
+}
+
+/// Encode interleaved stereo PCM, appending the MP3 bytes to `out`.
+pub fn mp3_encode(enc: &mut mp3lame_encoder::Encoder, pcm: &[i16], out: &mut Vec<u8>) -> Result<()> {
+    out.reserve(mp3lame_encoder::max_required_buffer_size(pcm.len()));
+    let n = enc.encode(InterleavedPcm(pcm), out.spare_capacity_mut()).map_err(|e| anyhow!("encode: {e:?}"))?;
+    unsafe { out.set_len(out.len() + n) };
+    Ok(())
+}
+
 impl StreamEncoder {
     fn new(cfg: &EncoderConfig, ffmpeg: &str) -> Result<Self> {
         match cfg.format {
-            StreamFormat::Mp3 => {
-                let mut b = Builder::new().ok_or_else(|| anyhow!("LAME init failed"))?;
-                b.set_num_channels(2).map_err(|e| anyhow!("{e:?}"))?;
-                b.set_sample_rate(SR).map_err(|e| anyhow!("{e:?}"))?;
-                b.set_brate(bitrate(cfg.bitrate_kbps)).map_err(|e| anyhow!("{e:?}"))?;
-                b.set_quality(Quality::Good).map_err(|e| anyhow!("{e:?}"))?;
-                Ok(StreamEncoder::Lame(Box::new(b.build().map_err(|e| anyhow!("{e:?}"))?)))
-            }
+            StreamFormat::Mp3 => Ok(StreamEncoder::Lame(Box::new(mp3_encoder(cfg.bitrate_kbps)?))),
             StreamFormat::Custom => {
                 let line = cfg.command.replace("{bitrate}", &cfg.bitrate_kbps.to_string());
                 let words = split_args(&line);
@@ -405,12 +416,7 @@ impl StreamEncoder {
 
     fn encode(&mut self, pcm: &[i16], out: &mut Vec<u8>) -> Result<()> {
         match self {
-            StreamEncoder::Lame(enc) => {
-                out.reserve(mp3lame_encoder::max_required_buffer_size(pcm.len()));
-                let n = enc.encode(InterleavedPcm(pcm), out.spare_capacity_mut()).map_err(|e| anyhow!("encode: {e:?}"))?;
-                unsafe { out.set_len(out.len() + n) };
-                Ok(())
-            }
+            StreamEncoder::Lame(enc) => mp3_encode(enc, pcm, out),
             StreamEncoder::Pipe(p) => p.encode(pcm, out),
         }
     }

@@ -181,6 +181,7 @@ pub fn keep_local(new: &mut Config, here: &Config) {
     new.check_updates = here.check_updates;
     new.plugins_off = here.plugins_off.clone();
     new.ffmpeg_path = here.ffmpeg_path.clone();
+    new.hear_server = here.hear_server;
 }
 
 /// The station part of the settings (what is shared with the server).

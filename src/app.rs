@@ -1872,7 +1872,10 @@ impl App {
                 core.pause_toggle(); // carry on where the music was
             }
         } else {
-            match crate::mic::start(core.engine.clone(), &core.cfg.audio_devices.input) {
+            // while connected the mic goes to the server, which puts it on air
+            let device = &core.cfg.audio_devices.input;
+            let started = self.server_mic(device).unwrap_or_else(|| crate::mic::start(core.engine.clone(), device));
+            match started {
                 Ok(s) => {
                     self.mic_stream = Some(s);
                     self.mic_on = true;
@@ -3453,12 +3456,12 @@ impl eframe::App for App {
         self.left_workspace(ctx, &mut core);
         self.playlist(ctx, &mut core);
         self.aux_windows(ctx, &mut core);
-        let duck = match core.cfg.mic_mode {
-            crate::config::MicMode::Duck => core.cfg.mic_duck,
-            crate::config::MicMode::Keep => 1.0,
-            crate::config::MicMode::Mute | crate::config::MicMode::Pause => 0.0,
-        };
+        let duck = core.cfg.mic_duck_level();
         core.engine.set_mic(self.mic_on, core.cfg.mic_gain, duck);
+        if self.srv.connected() {
+            // this machine's sound cards play the local engine: its studio monitors go quiet with the mic too
+            self.output_engine(&core).set_mic(self.mic_on, core.cfg.mic_gain, duck);
+        }
         self.tag_window(ctx, &mut core);
         self.profiles_window(ctx, &mut core);
         self.server_windows(ctx, &mut core);
