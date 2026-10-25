@@ -4,7 +4,7 @@
 
 use crate::dsp::{Dsp, DspConfig};
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use parking_lot::Mutex;
 use rodio::{source::UniformSourceIterator, Decoder, Source};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -24,9 +24,121 @@ const CART_SLOTS: usize = 8;
 /// Interleaved stereo f32 at `SR` Hz.
 pub type Pcm = Box<dyn Iterator<Item = f32> + Send>;
 
+/// Samples per decoded block (2048 stereo frames ≈ 46 ms).
+const AHEAD_BLOCK: usize = 4096;
+/// Blocks decoded ahead of the sound card (≈ 3 s): a slow disk or a busy CPU is ridden out.
+const AHEAD_BLOCKS: usize = 64;
+/// Blocks decoded before `Ahead::start` returns, so a track starts on the very next callback.
+const AHEAD_FIRST: usize = 2;
+
+/// A file decoded ahead on its own thread. The sound card callback only copies samples out of
+/// memory: it never reads the disk or runs a decoder, and never waits for either.
+pub struct Ahead {
+    rx: Receiver<Vec<f32>>,
+    /// used blocks go back to the decoder thread, so the audio thread never frees memory
+    back: Sender<Vec<f32>>,
+    cur: Vec<f32>,
+    pos: usize,
+}
+
+enum Pull {
+    Frame(f32, f32),
+    /// the decoder hasn't caught up (very slow disk): play silence for now, don't end the track
+    Wait,
+    End,
+}
+
+impl Ahead {
+    pub fn start(mut src: Pcm) -> Ahead {
+        let (tx, rx) = crossbeam_channel::bounded::<Vec<f32>>(AHEAD_BLOCKS);
+        let (back, back_rx) = crossbeam_channel::bounded::<Vec<f32>>(AHEAD_BLOCKS);
+        let fill = |src: &mut Pcm, mut b: Vec<f32>| {
+            b.clear();
+            // a plain loop: rodio's converters can panic in `size_hint`, which `extend` would call
+            while b.len() < AHEAD_BLOCK {
+                match src.next() {
+                    Some(x) => b.push(x),
+                    None => break,
+                }
+            }
+            if b.len() % 2 == 1 {
+                b.push(0.0); // keep L/R aligned
+            }
+            b
+        };
+        let mut ended = false;
+        for _ in 0..AHEAD_FIRST {
+            let b = fill(&mut src, Vec::with_capacity(AHEAD_BLOCK));
+            ended = b.len() < AHEAD_BLOCK;
+            if !b.is_empty() {
+                let _ = tx.try_send(b);
+            }
+            if ended {
+                break;
+            }
+        }
+        if !ended {
+            std::thread::Builder::new()
+                .name("decoder".into())
+                .spawn(move || loop {
+                    let b = fill(&mut src, back_rx.try_recv().unwrap_or_else(|_| Vec::with_capacity(AHEAD_BLOCK)));
+                    let last = b.len() < AHEAD_BLOCK;
+                    // blocks while the buffer is full; fails once the deck is gone
+                    if (!b.is_empty() && tx.send(b).is_err()) || last {
+                        return; // the decoder and the file are closed here, not on the audio thread
+                    }
+                })
+                .ok();
+        }
+        Ahead { rx, back, cur: Vec::new(), pos: 0 }
+    }
+
+    #[inline]
+    fn pull(&mut self) -> Pull {
+        if self.pos + 1 >= self.cur.len() {
+            match self.rx.try_recv() {
+                Ok(b) => {
+                    let old = std::mem::replace(&mut self.cur, b);
+                    let _ = self.back.try_send(old);
+                    self.pos = 0;
+                    if self.cur.len() < 2 {
+                        return Pull::End;
+                    }
+                }
+                Err(TryRecvError::Empty) => return Pull::Wait,
+                Err(TryRecvError::Disconnected) => return Pull::End,
+            }
+        }
+        let f = Pull::Frame(self.cur[self.pos], self.cur[self.pos + 1]);
+        self.pos += 2;
+        f
+    }
+}
+
+/// Where a deck's samples come from.
+enum Input {
+    /// files: decoded ahead on another thread
+    Ahead(Ahead),
+    /// live feeds (streams, line input, speech) already buffer on their own thread
+    Direct(Pcm),
+}
+
+impl Input {
+    #[inline]
+    fn pull(&mut self) -> Pull {
+        match self {
+            Input::Ahead(a) => a.pull(),
+            Input::Direct(src) => match (src.next(), src.next()) {
+                (Some(l), Some(r)) => Pull::Frame(l, r),
+                _ => Pull::End,
+            },
+        }
+    }
+}
+
 #[derive(Default)]
 struct Deck {
-    src: Option<Pcm>,
+    src: Option<Input>,
     gain: f32,
     target: f32,
     step: f32,
@@ -61,7 +173,7 @@ pub struct CueSpec {
 const SKIP_MAX: u32 = SR * 10;
 
 impl Deck {
-    fn new(src: Pcm, total_secs: f32, gain: f32) -> Self {
+    fn new(src: Input, total_secs: f32, gain: f32) -> Self {
         Deck {
             src: Some(src),
             gain,
@@ -120,10 +232,18 @@ impl Deck {
                 }
             }
             let src = self.src.as_mut().unwrap();
+            let mut waiting = false;
             let (l, r) = loop {
-                let (Some(l), Some(r)) = (src.next(), src.next()) else {
-                    ended = true;
-                    break (0.0, 0.0);
+                let (l, r) = match src.pull() {
+                    Pull::Frame(l, r) => (l, r),
+                    Pull::Wait => {
+                        waiting = true;
+                        break (0.0, 0.0);
+                    }
+                    Pull::End => {
+                        ended = true;
+                        break (0.0, 0.0);
+                    }
                 };
                 if let Some((thr, _)) = trim {
                     if !self.heard && l.abs().max(r.abs()) < thr && self.skipped < SKIP_MAX {
@@ -133,7 +253,7 @@ impl Deck {
                 }
                 break (l, r);
             };
-            if ended {
+            if ended || waiting {
                 break;
             }
             if let Some((thr, max_run)) = trim {
@@ -313,21 +433,27 @@ pub struct Engine {
     shared: Arc<Mutex<Shared>>,
     /// mirrors `Shared::mic_on` without the lock, for the studio monitor gates
     mic_live: Arc<AtomicBool>,
+    /// the last `set_mic` values (a lock of its own, so the audio thread is never waited on)
+    mic_set: Arc<Mutex<Option<(bool, f32, f32)>>>,
 }
 
 fn open(path: &Path) -> Result<(Pcm, f32)> {
-    let dec = Decoder::new(BufReader::new(File::open(path)?))?;
-    let dur = dec.total_duration().map(|d| d.as_secs_f32()).unwrap_or(0.0);
-    let src = UniformSourceIterator::<_, f32>::new(dec.convert_samples::<f32>(), 2, SR);
-    Ok((Box::new(src), dur))
+    open_seek(path, 0.0)
 }
 
 pub fn open_at(path: &Path, secs: f32) -> Result<Pcm> {
-    let mut dec = Decoder::new(BufReader::new(File::open(path)?))?;
+    Ok(open_seek(path, secs)?.0)
+}
+
+/// Opens a file at `secs` seconds; also gives its length (0 = unknown) without opening it twice.
+fn open_seek(path: &Path, secs: f32) -> Result<(Pcm, f32)> {
+    // a bigger read buffer means fewer, larger disk reads (kind to slow and network drives)
+    let mut dec = Decoder::new(BufReader::with_capacity(256 * 1024, File::open(path)?))?;
+    let dur = dec.total_duration().map(|d| d.as_secs_f32()).unwrap_or(0.0);
     if secs > 0.0 {
         let _ = dec.try_seek(Duration::from_secs_f32(secs));
     }
-    Ok(Box::new(UniformSourceIterator::<_, f32>::new(dec.convert_samples::<f32>(), 2, SR)))
+    Ok((Box::new(UniformSourceIterator::<_, f32>::new(dec.convert_samples::<f32>(), 2, SR)), dur))
 }
 
 /// Write interleaved f32 samples as a 16-bit PCM WAV file.
@@ -413,7 +539,7 @@ impl Engine {
             next_mic: 0,
             feed: None,
         }));
-        Engine { shared, mic_live: Arc::new(AtomicBool::new(false)) }
+        Engine { shared, mic_live: Arc::new(AtomicBool::new(false)), mic_set: Arc::new(Mutex::new(None)) }
     }
 
     /// The master bus as an audio source. Exactly one primary output (or the null driver) should pull it.
@@ -460,23 +586,21 @@ impl Engine {
     /// `old_fade`: `Some(secs)` fades the previous track out over `secs` (0 = cut it),
     /// `None` lets it finish on its own cue fade / cue out (smart fading).
     pub fn play_cued(&self, path: &Path, duration_hint: f32, spec: CueSpec, old_fade: Option<f32>) -> Result<()> {
-        let src = open_at(path, spec.cue_in)?;
-        let total = if duration_hint > 0.0 {
-            duration_hint
-        } else {
-            Decoder::new(BufReader::new(File::open(path)?))?.total_duration().map(|d| d.as_secs_f32()).unwrap_or(0.0)
-        };
-        self.start_deck(src, Some(path.to_path_buf()), total, spec, old_fade, false);
+        let (src, dur) = open_seek(path, spec.cue_in)?;
+        let total = if duration_hint > 0.0 { duration_hint } else { dur };
+        self.start_deck(Input::Ahead(Ahead::start(src)), Some(path.to_path_buf()), total, spec, old_fade, false);
         Ok(())
     }
 
     /// Start any source (internet stream, line input, teaser, time announcement…) on the idle deck.
     /// `total` = expected length in seconds (0 = unknown). With `spec.cue_out` set, it ends there.
+    /// Live sources play as they come; anything else (teasers, previews) is decoded ahead.
     pub fn play_source(&self, src: Pcm, label: Option<PathBuf>, total: f32, spec: CueSpec, old_fade: Option<f32>, live: bool) {
-        self.start_deck(src, label, total, spec, old_fade, live);
+        let input = if live { Input::Direct(src) } else { Input::Ahead(Ahead::start(src)) };
+        self.start_deck(input, label, total, spec, old_fade, live);
     }
 
-    fn start_deck(&self, src: Pcm, path: Option<PathBuf>, total: f32, spec: CueSpec, old_fade: Option<f32>, live: bool) {
+    fn start_deck(&self, src: Input, path: Option<PathBuf>, total: f32, spec: CueSpec, old_fade: Option<f32>, live: bool) {
         let mut s = self.shared.lock();
         let old = s.active;
         let new = 1 - old;
@@ -546,6 +670,7 @@ impl Engine {
 
     pub fn trigger_cart(&self, path: &Path) -> Result<()> {
         let (src, dur) = open(path)?;
+        let src = Input::Ahead(Ahead::start(src));
         let mut s = self.shared.lock();
         let slot = s.carts.iter().position(|c| c.src.is_none()).unwrap_or(0);
         s.carts[slot] = Deck::new(src, dur, 1.0);
@@ -585,7 +710,11 @@ impl Engine {
         };
     }
 
+    /// Called every UI frame: the mixer lock is only taken when something actually changed.
     pub fn set_mic(&self, on: bool, gain: f32, duck: f32) {
+        if std::mem::replace(&mut *self.mic_set.lock(), Some((on, gain, duck))) == Some((on, gain, duck)) {
+            return;
+        }
         self.mic_live.store(on, Ordering::Relaxed);
         let mut s = self.shared.lock();
         s.mic_on = on;
@@ -612,7 +741,7 @@ impl Engine {
         };
         let Some(path) = path else { return Ok(()) };
         let secs = secs.clamp(0.0, (total - 0.5).max(0.0));
-        let src = open_at(&path, secs)?;
+        let src = Input::Ahead(Ahead::start(open_at(&path, secs)?));
         let mut s = self.shared.lock();
         let a = s.active;
         if s.decks[a].path.as_ref() != Some(&path) {
@@ -908,7 +1037,12 @@ mod tests {
         let spec = CueSpec { cue_in: 0.25, cue_out: Some(0.75), fade_in: 0.0, fade_out_at: Some(0.5), gain_db: 0.0 };
         engine.play_cued(&p, 1.0, spec, Some(0.0)).unwrap();
         let frames = (SR as f32 * 0.6) as usize;
-        let out: Vec<f32> = (0..frames * 2).map(|_| bus.next().unwrap()).collect();
+        // pulled at a few times real time, like a sound card (files are decoded ahead on another thread)
+        let mut out: Vec<f32> = Vec::new();
+        while out.len() < frames * 2 {
+            out.extend((0..2048.min(frames * 2 - out.len())).map(|_| bus.next().unwrap()));
+            std::thread::sleep(std::time::Duration::from_millis(4));
+        }
         let peak = |a: f32, b: f32| {
             let (i, j) = ((a * SR as f32) as usize * 2, (b * SR as f32) as usize * 2);
             out[i..j].iter().fold(0f32, |m, x| m.max(x.abs()))
@@ -918,6 +1052,48 @@ mod tests {
         assert!(peak(0.40, 0.45) < peak(0.0, 0.2) * 0.5, "fading after fade-out point (track time 0.65-0.70 s)");
         assert!(peak(0.52, 0.6) < 1e-4, "silent after cue out");
         assert!(engine.take_ended(), "cue out reports the end of the track");
+    }
+
+    #[test]
+    fn a_slow_disk_never_holds_up_the_mix() {
+        // a "file" whose reads stall for 200 ms per block after the first two
+        struct Slow(usize);
+        impl Iterator for Slow {
+            type Item = f32;
+            fn next(&mut self) -> Option<f32> {
+                if self.0 >= AHEAD_BLOCK * 6 {
+                    return None;
+                }
+                if self.0 >= AHEAD_BLOCK * 2 && self.0 % AHEAD_BLOCK == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                self.0 += 1;
+                Some(0.5)
+            }
+        }
+        let engine = Engine::new_detached();
+        engine.set_volume(1.0);
+        let mut bus = engine.primary_source();
+        engine.play_source(Box::new(Slow(0)), None, 0.0, CueSpec::default(), Some(0.0), false);
+        let t = std::time::Instant::now();
+        let first: Vec<f32> = (0..AHEAD_BLOCK * 2).map(|_| bus.next().unwrap()).collect();
+        assert!(first.iter().all(|x| (x - 0.5).abs() < 1e-6), "the first blocks are ready as soon as the track starts");
+        // the decoder is stuck on the disk now: the mix carries on (silence) instead of waiting for it
+        let stalled: Vec<f32> = (0..BLOCK_FRAMES * 2).map(|_| bus.next().unwrap()).collect();
+        assert!(t.elapsed() < std::time::Duration::from_millis(100), "the mix waited for the disk");
+        assert!(stalled.iter().all(|&x| x == 0.0));
+        assert!(!engine.take_ended(), "a stall is not the end of the track");
+        // it catches up and the whole track is played, then reported as ended
+        let mut heard = first.len();
+        for _ in 0..2000 {
+            heard += (0..BLOCK_FRAMES * 2).map(|_| bus.next().unwrap()).filter(|x| (x - 0.5).abs() < 1e-6).count();
+            if engine.take_ended() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(heard, AHEAD_BLOCK * 6, "every sample is played once");
+        assert!(!engine.status().has_track);
     }
 
     #[test]

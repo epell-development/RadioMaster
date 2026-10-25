@@ -222,6 +222,8 @@ pub struct App {
     lib_filter: String,
     lib_filtered: Vec<usize>,
     lib_key: (String, u64),
+    /// Search tab: (search text, library version) and its hits, so the library isn't searched every frame
+    search_hits: ((String, u64), Vec<usize>),
     /// selected library tracks (library indexes)
     lib_sel: BTreeSet<usize>,
     lib_anchor: Option<usize>,
@@ -251,7 +253,7 @@ pub struct App {
     browsers: Browsers,
     web_state: HashMap<String, panes::WebState>,
     fx_dir: HashMap<String, PathBuf>,
-    fx_list: HashMap<String, (PathBuf, std::time::Instant, Vec<(bool, PathBuf)>)>,
+    fx_list: HashMap<String, (PathBuf, std::time::Instant, Arc<Vec<(bool, PathBuf)>>)>,
     /// explorer folders being listed in the background (panel key → folder)
     fx_loading: HashMap<String, PathBuf>,
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
@@ -551,6 +553,7 @@ impl App {
             lib_filter: String::new(),
             lib_filtered: vec![],
             lib_key: (String::new(), 0),
+            search_hits: ((String::new(), 0), vec![]),
             lib_sel: BTreeSet::new(),
             lib_anchor: None,
             lib_scroll: None,
@@ -755,7 +758,7 @@ impl App {
                 }
                 Dlg::FolderList(key, dir, list) => {
                     self.fx_loading.remove(&key);
-                    self.fx_list.insert(key, (dir, std::time::Instant::now(), list));
+                    self.fx_list.insert(key, (dir, std::time::Instant::now(), Arc::new(list)));
                 }
                 Dlg::Devices(outs, ins, default) => {
                     self.dev_outputs = outs;
@@ -1555,23 +1558,28 @@ impl App {
             ui.label(tr("Enter a search to find music in your library."));
             return;
         }
-        let needle = self.lib_filter.to_lowercase();
-        let hits: Vec<usize> = core
-            .library
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| {
-                t.artist.to_lowercase().contains(&needle)
-                    || t.title.to_lowercase().contains(&needle)
-                    || t.album.to_lowercase().contains(&needle)
-                    || t.genre.to_lowercase().contains(&needle)
-            })
-            .take(150)
-            .map(|(i, _)| i)
-            .collect();
+        let key = (self.lib_filter.to_lowercase(), core.library_ver);
+        if key != self.search_hits.0 {
+            let needle = &key.0;
+            let hits = core
+                .library
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    t.artist.to_lowercase().contains(needle)
+                        || t.title.to_lowercase().contains(needle)
+                        || t.album.to_lowercase().contains(needle)
+                        || t.genre.to_lowercase().contains(needle)
+                })
+                .take(150)
+                .map(|(i, _)| i)
+                .collect();
+            self.search_hits = (key, hits);
+        }
+        let hits = &self.search_hits.1;
         ui.label(format!("{} results (up to 150 shown)", hits.len()));
         let mut append = None;
-        for i in hits {
+        for &i in hits {
             let track = &core.library[i];
             ui.horizontal(|ui| {
                 if ui.add_enabled(self.perm.edit_playlists, egui::Button::new("➕").small()).on_hover_text(tr("Add to playlist")).clicked()
@@ -2498,6 +2506,28 @@ impl App {
             core.cfg.audio_devices.outputs.insert(0, o);
             changed = true;
         }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(tr("Sound card buffer"));
+            let ms = core.cfg.audio_devices.buffer_ms;
+            let label = |ms: u32| match ms {
+                0 => format!("{} ({} ms)", tr("Normal"), crate::audio::DEFAULT_BUFFER_MS),
+                40 => format!("{} (40 ms)", tr("Low delay")),
+                150 => format!("{} (150 ms)", tr("Slow computer")),
+                300 => format!("{} (300 ms)", tr("Very slow computer")),
+                n => format!("{n} ms"),
+            };
+            egui::ComboBox::from_id_salt("buffer_ms").width(220.0).selected_text(label(ms)).show_ui(ui, |ui| {
+                for v in [40, 0, 150, 300] {
+                    if ui.selectable_label(ms == v, label(v)).clicked() && ms != v {
+                        core.cfg.audio_devices.buffer_ms = v;
+                        changed = true;
+                    }
+                }
+            });
+        })
+        .response
+        .on_hover_text(tr("If the sound crackles or stutters on a slow or busy computer, pick a bigger buffer. A bigger buffer adds a little delay between pressing Play and hearing it."));
         if changed {
             let engine = self.output_engine(core);
             self.audio.apply(&engine, &core.cfg.audio_devices);
@@ -3388,8 +3418,17 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // redraw ~10×/s while audio is moving (VU meters, elapsed time), ~3×/s when idle (the clock)
+        // (once a second while minimized with no Additional windows: nothing is on screen, and playback
+        // runs on its own threads)
         let busy = self.mic_on || self.core.try_lock().is_none_or(|c| c.state == PlayState::Playing);
-        ctx.request_repaint_after(Duration::from_millis(if busy { 100 } else { 330 }));
+        let minimized = self.workzones.aux.is_empty() && ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        ctx.request_repaint_after(Duration::from_millis(if minimized {
+            1000
+        } else if busy {
+            100
+        } else {
+            330
+        }));
         self.browsers.set_main(frame);
         self.browsers.start_frame();
         // If an embedded web view kept keyboard focus, take it back as soon as the user clicks our UI.
