@@ -51,6 +51,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 sha2 = "0.10"
+# MIDI controllers (Help → Shortcuts and MIDI)
+midir = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wry = "=0.50.5"

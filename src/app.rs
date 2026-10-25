@@ -147,6 +147,8 @@ mod adsui;
 mod aztool;
 #[path = "cleanupui.rs"]
 mod cleanupui;
+#[path = "controlsui.rs"]
+mod controlsui;
 #[path = "equi.rs"]
 mod equi;
 #[path = "panes.rs"]
@@ -275,6 +277,11 @@ pub struct App {
     show_repeat: bool,
     show_find: bool,
     show_keys: bool,
+    /// keyboard shortcuts and MIDI bindings (this computer's)
+    controls: crate::controls::Controls,
+    keymap: HashMap<crate::controls::KeyCombo, String>,
+    cui: controlsui::ControlsUi,
+    midi: crate::midi::Midi,
     about_tab: usize,
     find_text: String,
     find_focus: bool,
@@ -518,6 +525,7 @@ fn vu(ui: &mut egui::Ui, level: f32, w: f32) {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, core: Arc<Mutex<Playout>>) -> Self {
         let workzones = WorkzoneSet::load();
+        let controls = crate::controls::Controls::load();
         crate::theme::apply(&cc.egui_ctx, workzones.dark, workzones.scale);
         crate::theme::install_fallback_fonts(&cc.egui_ctx);
         let mut audio = crate::audio::AudioManager::default();
@@ -606,6 +614,10 @@ impl App {
             show_repeat: false,
             show_find: false,
             show_keys: false,
+            keymap: controls.keymap(),
+            midi: crate::midi::Midi::start(controls.midi_enabled, cc.egui_ctx.clone()),
+            controls,
+            cui: Default::default(),
             about_tab: 0,
             find_text: String::new(),
             find_focus: false,
@@ -919,14 +931,19 @@ impl App {
                 ui.menu_button(tr("View"), |ui| {
                     ui.menu_button(tr("Work zones"), |ui| {
                         for (n, text) in [(1u8, "1   (playlist only)"), (2, "2   (playlist + panel)"), (3, "3   (playlist + two panels)")] {
-                            let b = egui::Button::new(text).shortcut_text(format!("Ctrl+{n}")).selected(self.workzones.panels == n);
+                            let b = egui::Button::new(text)
+                                .shortcut_text(self.controls.key_label(&format!("panels{n}")))
+                                .selected(self.workzones.panels == n);
                             if ui.add(b).clicked() {
                                 self.workzones.panels = n;
                                 ui.close_menu();
                             }
                         }
                         ui.separator();
-                        if ui.add(egui::Button::new(tr("Additional (new window)")).shortcut_text("Ctrl+4")).clicked() {
+                        if ui
+                            .add(egui::Button::new(tr("Additional (new window)")).shortcut_text(self.controls.key_label("new_window")))
+                            .clicked()
+                        {
                             self.workzones.new_aux(Tab::AuxPlaylist);
                             ui.close_menu();
                         }
@@ -941,10 +958,11 @@ impl App {
                             }
                         }
                     });
-                    ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel")).on_hover_text(tr("Ctrl+L"));
+                    ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel"))
+                        .on_hover_text(self.controls.key_label("left_panel"));
                     ui.separator();
-                    for (tab, key) in [(Tab::FileExplorer, "F1"), (Tab::Search, "F2")] {
-                        if ui.add(egui::Button::new(self.tab_name(tab)).shortcut_text(key)).clicked() {
+                    for (tab, key) in [(Tab::FileExplorer, "file_explorer"), (Tab::Search, "search")] {
+                        if ui.add(egui::Button::new(self.tab_name(tab)).shortcut_text(self.controls.key_label(key))).clicked() {
                             self.workzones.show_left = true;
                             self.workzones.left.add(tab);
                             ui.close_menu();
@@ -956,7 +974,14 @@ impl App {
                         self.workzones.dark = dark;
                         crate::theme::apply(ctx, dark, self.workzones.scale);
                     }
-                    if ui.add(egui::Button::new(tr("Full screen")).shortcut_text("F11").selected(self.fullscreen)).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(tr("Full screen"))
+                                .shortcut_text(self.controls.key_label("fullscreen"))
+                                .selected(self.fullscreen),
+                        )
+                        .clicked()
+                    {
                         self.fullscreen = !self.fullscreen;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
                         ui.close_menu();
@@ -979,11 +1004,11 @@ impl App {
                         ToolWin::Plugins,
                     ] {
                         let sc = match w {
-                            ToolWin::Generator => "Ctrl+G",
-                            ToolWin::Scheduler => "F3",
-                            ToolWin::AudioFx => "F4",
-                            ToolWin::Notepad => "T",
-                            _ => "",
+                            ToolWin::Generator => self.controls.key_label("generator"),
+                            ToolWin::Scheduler => self.controls.key_label("scheduler"),
+                            ToolWin::AudioFx => self.controls.key_label("audio_fx"),
+                            ToolWin::Notepad => self.controls.key_label("notepad"),
+                            _ => String::new(),
                         };
                         if ui
                             .add_enabled(
@@ -1026,7 +1051,8 @@ impl App {
                         core.trigger_cart(i);
                     }
                     ui.separator();
-                    if ui.add(egui::Button::new(tr("■ Stop all jingles")).shortcut_text("Ctrl+J")).clicked() {
+                    if ui.add(egui::Button::new(tr("■ Stop all jingles")).shortcut_text(self.controls.key_label("stop_jingles"))).clicked()
+                    {
                         core.stop_carts();
                         ui.close_menu();
                     }
@@ -1040,7 +1066,7 @@ impl App {
                     if !self.perm.settings {
                         ui.disable();
                     }
-                    if ui.add(egui::Button::new(tr("⚙ Settings…")).shortcut_text("Ctrl+,")).clicked() {
+                    if ui.add(egui::Button::new(tr("⚙ Settings…")).shortcut_text(self.controls.key_label("settings"))).clicked() {
                         self.show_settings = true;
                         ui.close_menu();
                     }
@@ -1054,11 +1080,19 @@ impl App {
                     }
                 });
                 ui.menu_button(tr("Help"), |ui| {
-                    if ui.add(egui::Button::new(tr("Performance")).shortcut_text("Ctrl+Shift+P").selected(self.perf.is_some())).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(tr("Performance"))
+                                .shortcut_text(self.controls.key_label("performance"))
+                                .selected(self.perf.is_some()),
+                        )
+                        .clicked()
+                    {
                         self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
                         ui.close_menu();
                     }
-                    if ui.add(egui::Button::new(tr("Keyboard shortcuts")).shortcut_text("Ctrl+/")).clicked() {
+                    if ui.add(egui::Button::new(tr("Shortcuts and MIDI…")).shortcut_text(self.controls.key_label("shortcuts"))).clicked()
+                    {
                         self.show_keys = true;
                         ui.close_menu();
                     }
@@ -3416,14 +3450,12 @@ impl eframe::App for App {
         if let Some(msg) = self.audio.watchdog() {
             core.say(msg);
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
-            self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
-        }
         self.handle_dialogs(&mut core);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && self.perm.edit_playlists {
             self.add_files_later(self.view_pl, None, dropped);
         }
+        self.midi_input(ctx, &mut core);
         if !self.show_settings {
             self.shortcuts(ctx, &mut core);
         }
