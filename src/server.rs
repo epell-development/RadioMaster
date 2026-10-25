@@ -640,10 +640,28 @@ impl Api {
                 }
                 let Ok(a) = serde_json::from_slice::<Ask>(body) else { return error(400, "bad request") };
                 let folders = self.core.lock().cfg.library_folders.clone();
-                json(200, sync::list_folder(a.path, a.all, &folders))
+                if p.settings {
+                    return json(200, sync::list_folder(a.path, a.all, &folders));
+                }
+                // everyone else stays in the library folders
+                let roots = self.library_roots();
+                if roots.is_empty() {
+                    return error(403, "the server has no library folders to browse yet: ask one of its administrators");
+                }
+                if !a.path.as_os_str().is_empty() && !within(&roots, &a.path) {
+                    return denied("browse outside the library folders");
+                }
+                let mut list = sync::list_folder(a.path, a.all, &folders);
+                list.places.retain(|f| within(&roots, f));
+                list.parent = list.parent.filter(|f| within(&roots, f));
+                json(200, list)
             }
             ("/api/v1/fs/expand", true) => {
-                let Ok(paths) = serde_json::from_slice::<Vec<std::path::PathBuf>>(body) else { return error(400, "bad request") };
+                let Ok(mut paths) = serde_json::from_slice::<Vec<std::path::PathBuf>>(body) else { return error(400, "bad request") };
+                if !p.settings {
+                    let roots = self.library_roots();
+                    paths.retain(|f| within(&roots, f));
+                }
                 json(200, crate::library::expand_paths(paths))
             }
             ("/api/v1/fs/m3u", true) => {
@@ -652,6 +670,9 @@ impl Api {
                     path: std::path::PathBuf,
                 }
                 let Ok(a) = serde_json::from_slice::<Ask>(body) else { return error(400, "bad request") };
+                if !p.settings && !within(&self.library_roots(), &a.path) {
+                    return denied("open playlists outside the library folders");
+                }
                 json(200, crate::playout::parse_m3u(&a.path))
             }
             ("/api/v1/fs/upload", true) => {
@@ -760,6 +781,9 @@ impl Api {
         if !dir.is_dir() {
             return error(400, &format!("{} is not a folder on the server", dir.display()));
         }
+        if !me.admin && !within(&self.library_roots(), dir) {
+            return error(403, &format!("your account ({}) may only upload into the library folders", me.name));
+        }
         let mut target = dir.join(&name);
         let (stem, ext) = (
             target.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
@@ -784,10 +808,10 @@ impl Api {
     /// the station uses: in a library folder, the library, a playlist or the cart wall.
     fn send_file(&self, req: tiny_http::Request, me: &Operator, path: &str) {
         let path = std::path::PathBuf::from(path);
-        let ok = me.admin || {
+        let ok = me.admin || within(&self.library_roots(), &path) || {
+            // (exactly a path the station has: what it names is the station's anyway)
             let c = self.core.lock();
-            c.cfg.library_folders.iter().any(|f| path.starts_with(f))
-                || c.library.iter().any(|t| t.path == path)
+            c.library.iter().any(|t| t.path == path)
                 || c.playlist.iter().chain(c.tabs.iter().flat_map(|t| t.entries.iter())).any(|e| e.track.path == path)
                 || c.cfg.carts.iter().any(|k| std::path::Path::new(&k.path) == path)
         };
@@ -801,6 +825,13 @@ impl Api {
             }
             _ => respond(req, error(404, "no such file on the server"), false),
         }
+    }
+
+    /// The library folders as the disk has them (links and `..` resolved), for keeping accounts
+    /// other than administrators inside them.
+    fn library_roots(&self) -> Vec<std::path::PathBuf> {
+        let folders = self.core.lock().cfg.library_folders.clone();
+        folders.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect()
     }
 
     fn user_of(&self, token: &str) -> String {
@@ -979,6 +1010,12 @@ impl Api {
         self.core.lock().say("Server: settings changed");
         json(200, self.info(me))
     }
+}
+
+/// `path` is in one of `roots` (canonical folders) once links and `..` are resolved; a path that
+/// isn't there is in none.
+fn within(roots: &[std::path::PathBuf], path: &std::path::Path) -> bool {
+    std::fs::canonicalize(path).is_ok_and(|p| roots.iter().any(|r| p.starts_with(r)))
 }
 
 /// A value from a query string, URL-decoded.
@@ -1297,6 +1334,8 @@ mod tests {
         wait_for("the server's value again", || mirror.lock().cfg.crossfade_secs != 11.0);
         assert_ne!(station.lock().cfg.crossfade_secs, 11.0);
         link.stop();
+        // (stopping the link signs that session out, in the background)
+        let dj = crate::link::login(&address, "night dj", "a presenter password", "").unwrap();
         // starting an encoder is refused; Next goes through
         let r: serde_json::Value = ureq::post(&format!("{}/api/v1/cmd", dj.base))
             .set("Authorization", &format!("Bearer {}", dj.token))
@@ -1358,6 +1397,35 @@ mod tests {
         assert_eq!(r.into_string().unwrap(), "not really audio");
         assert!(ureq::get(&url).call().is_err(), "only when signed in");
         assert!(crate::link::Link::plays(&s).is_ok());
+
+        // a presenter stays inside the library folders: no `..`, no other folders
+        let presenter = crate::auth::Perms::presenter();
+        let op = crate::playout::sync::UserOp::Add {
+            name: "files dj".into(),
+            password: "a files dj password".into(),
+            admin: false,
+            perms: presenter,
+        };
+        crate::link::Link::user_op(&s, &op).unwrap();
+        let dj = crate::link::login(&address, "files dj", "a files dj password", "").unwrap();
+        let dfs = crate::link::Fs::Server(dj.clone());
+        assert_eq!(dfs.list(&music, false, &[]).entries.len(), 2);
+        assert!(dfs.list(&music, false, &[]).places.iter().all(|p| p.starts_with(&music)));
+        assert!(!dfs.list(&std::env::temp_dir(), true, &[]).error.is_empty(), "outside the library");
+        let fetch = |p: &std::path::Path| {
+            let url = format!("{}/api/v1/fs/file?path={}", dj.base, urlencoding::encode(&p.to_string_lossy()));
+            ureq::get(&url).set("Authorization", &format!("Bearer {}", dj.token)).call().map(|r| r.into_string().unwrap())
+        };
+        assert_eq!(fetch(&music.join("Jingles").join("id.mp3")).unwrap(), "jingle");
+        let outside = std::env::temp_dir().join(format!("rm-outside-{}.mp3", std::process::id()));
+        std::fs::write(&outside, b"private").unwrap();
+        let sneaky = music.join("..").join(outside.file_name().unwrap());
+        assert!(fetch(&sneaky).is_err(), "`..` doesn't leave the library");
+        assert!(fetch(&outside).is_err());
+        assert!(dfs.upload(&local, &music.join("Jingles")).is_ok());
+        assert!(dfs.upload(&local, &music.join("..")).is_err(), "uploads stay in the library");
+        assert!(dfs.upload(&local, &std::env::temp_dir()).is_err());
+        let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(&music);
         let _ = std::fs::remove_file(&local);
     }

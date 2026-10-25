@@ -174,7 +174,8 @@ your computer into the folder shown; files dragged onto the playlist from your c
 tracks, are uploaded the same way (you choose the folder). The **File explorer** (a panel, or its own window
 from **Tools → File explorer**) browses the server's folders too, and **All files** shows every file, not only
 audio. **Reports** use the server's play history. **Library cleanup** works on the files of the computer it
-runs on, so it is only available when you're not connected.
+runs on, so it is only available when you're not connected. Accounts that aren't administrators (or allowed
+to change settings) only see, open and upload into the server's library folders.
 
 **Station profiles onto the server:** with **File → Station profiles…** while connected, **Load** puts a
 profile's settings on the server (and, if you tick it, the playlists saved with it). The profile's folders are
