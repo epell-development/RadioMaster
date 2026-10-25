@@ -113,8 +113,8 @@
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Event scheduler</nav>
     <p class="eyebrow">Guide · Run the station</p>
     <h1 class="page-h">How to automate with the event scheduler</h1>
-    <p class="lede" style="margin-top:16px">The event scheduler does things at set times so you don't have to be there: make a fresh playlist every morning, put Friday night's show on air at 19:00, start the second stream for a sports match, or run any station command.</p>
-    <nav class="toc" aria-label="On this page"><a href="#add">Add an event</a><a href="#actions">Actions</a><a href="#commands">Station commands</a><a href="#recipes">Recipes</a><a href="#rows">Events in the playlist</a></nav>
+    <p class="lede" style="margin-top:16px">The event scheduler does things at set times so you don't have to be there: make a fresh playlist every morning, put Friday night's show on air at 19:00, read the time every hour, start the second stream for a sports match, or run any station command.</p>
+    <nav class="toc" aria-label="On this page"><a href="#add">Add an event</a><a href="#repeat">Repeat</a><a href="#actions">Actions</a><a href="#items">Insert a playlist item</a><a href="#commands">Station commands</a><a href="#recipes">Recipes</a><a href="#rows">Events in the playlist</a></nav>
   </section>
 
   <section class="block">
@@ -128,10 +128,24 @@
         <li>Choose what to <b>Do</b> (the actions are below) and fill in what it needs, such as a template, a playlist tab or a rule.</li>
         <li>Press <b>▶ Run now</b> to try it straight away.</li>
       </ol>
-      <p>Each event has its own on/off tick, so you can park one without deleting it.</p>
+      <p>Each event has its own on/off tick, so you can park one without deleting it, and <b>Duplicate</b> makes a copy to change.</p>
+
+      <h2 id="repeat">Repeat an event</h2>
+      <p>Tick <b>Repeat every</b> to run an event again and again: choose minutes or hours and the time it stops. The event's time becomes the first run. For example, from 06:00, repeat every 30 minutes until 22:00 runs at 06:00, 06:30, 07:00 … 22:00. A stop time earlier than the start runs over midnight (22:00 until 02:00).</p>
+      <p><b>➕ Hourly time announcement</b> adds a ready-made event that reads the time at the top of every hour, every day.</p>
 
       <h2 id="actions">Actions</h2>
-      <div class="rundown-table"><table><thead><tr><th>Action</th><th>What it does</th></tr></thead><tbody><tr><td class="it">Generate a new playlist from a template</td><td>Replaces the playlist with a fresh one from a <a href="/guides/playlist-generator/">generator template</a></td></tr><tr><td class="it">Add tracks from a template after the playlist</td><td>Appends a template's tracks to the end</td></tr><tr><td class="it">Play adverts / jingles from a rule</td><td>Queues an <a href="/guides/advertisement-scheduler/">advert or jingle rule</a> after the song on air</td></tr><tr><td class="it">Put a playlist tab on air</td><td>Switches to another playlist tab, for example a show you prepared earlier</td></tr><tr><td class="it">Play the on-air playlist again from the top</td><td>Restarts the on-air playlist, which keeps a playlist looping</td></tr><tr><td class="it">Load playlist (M3U) and play</td><td>Opens an M3U file and plays it</td></tr><tr><td class="it">Play file now</td><td>Plays one file straight away</td></tr><tr><td class="it">Insert file as next</td><td>Puts a file after the song on air</td></tr><tr><td class="it">Stop playback</td><td>Stops the station</td></tr><tr><td class="it">Start encoder # / Stop encoder #</td><td>Starts or stops one of your <a href="/guides/stream-to-icecast-shoutcast/">streams</a>. Here the first encoder is #0</td></tr><tr><td class="it">Set volume (0-1)</td><td>Sets the master volume, 1 being full</td></tr><tr><td class="it">Run a station command</td><td>Any command below</td></tr></tbody></table></div>
+      <div class="rundown-table"><table><thead><tr><th>Action</th><th>What it does</th></tr></thead><tbody><tr><td class="it">Insert a playlist item</td><td>Puts a time announcement, text to speech or another item from the Playlist menu after the song on air, or plays it now. <a href="#items">More below</a></td></tr><tr><td class="it">Generate a new playlist from a template</td><td>Replaces the playlist with a fresh one from a <a href="/guides/playlist-generator/">generator template</a></td></tr><tr><td class="it">Add tracks from a template after the playlist</td><td>Appends a template's tracks to the end</td></tr><tr><td class="it">Play adverts / jingles from a rule</td><td>Queues an <a href="/guides/advertisement-scheduler/">advert or jingle rule</a> after the song on air</td></tr><tr><td class="it">Put a playlist tab on air</td><td>Switches to another playlist tab, for example a show you prepared earlier</td></tr><tr><td class="it">Play the on-air playlist again from the top</td><td>Restarts the on-air playlist, which keeps a playlist looping</td></tr><tr><td class="it">Load playlist (M3U) and play</td><td>Opens an M3U file and plays it</td></tr><tr><td class="it">Play file now</td><td>Plays one file straight away</td></tr><tr><td class="it">Insert file as next</td><td>Puts a file after the song on air</td></tr><tr><td class="it">Stop playback</td><td>Stops the station</td></tr><tr><td class="it">Start encoder # / Stop encoder #</td><td>Starts or stops one of your <a href="/guides/stream-to-icecast-shoutcast/">streams</a>, counting from 1 like the Streams tab</td></tr><tr><td class="it">Set volume (0-1)</td><td>Sets the master volume, 1 being full</td></tr><tr><td class="it">Run a station command</td><td>Any command below</td></tr></tbody></table></div>
+
+      <h2 id="items">Insert a playlist item</h2>
+      <p>Pick <b>Insert a playlist item</b>, then choose the item from the list next to it. These are the same items as in the Playlist menu, set up in the same dialogs:</p>
+      <ul>
+        <li><b>Time announcement</b>: reads the current time</li>
+        <li><b>Text to speech</b>: any text in a computer voice, with <code>{time}</code>, <code>{next}</code> and the other fill-ins, for example "You're listening to Radio X, it's {time}"</li>
+        <li><b>Track List</b>: one random track from a folder, with repeat protection, which suits station IDs</li>
+        <li><b>Container</b>, <b>URL</b> (an internet stream), <b>Line Input</b>, <b>Teaser</b>, <b>Timed pause</b> and <b>Command</b></li>
+      </ul>
+      <p>Use <b>✏ Edit…</b> to change it later. Choose whether it plays <b>after the track on air</b> (the song isn't cut) or <b>now</b>. If the last one is still waiting to play, for example while playback is stopped, another copy isn't added.</p>
 
       <h2 id="commands">Station commands</h2>
       <p>The same commands work in an event, in a playlist <b>Command</b> row (<kbd>Alt+C</kbd>) and from a <a href="/guides/plugins/">plugin</a>.</p>
@@ -144,8 +158,10 @@
         <li><b>A sponsored news intro</b>: 07:59, weekdays, Play adverts / jingles from a rule → <i>News sponsor</i>.</li>
         <li><b>A second stream for a match</b>: Saturday 14:45, Run a station command → <code>ENCODER START 2</code>, and 17:15, <code>ENCODER STOP 2</code>.</li>
         <li><b>Quieter overnight</b>: 00:00, Set volume 0.8; 06:00, Set volume 1.</li>
+        <li><b>The time every hour</b>: ➕ Hourly time announcement, or from 00:00 repeat every 1 hour, Insert a playlist item → Time announcement.</li>
+        <li><b>A spoken station ID every half hour in the daytime</b>: from 06:30, repeat every 30 minutes until 22:00, Insert a playlist item → Text to speech.</li>
       </ul>
-      <p class="tip"><b>Something every hour?</b> An event runs at one time of day. For a station ID or a top-of-the-hour jingle every hour, make a jingle rule that plays <b>every 1 hour on the clock</b> in the <a href="/guides/advertisement-scheduler/">advertisement scheduler</a>, or an insert in your <a href="/guides/playlist-generator/">generator template</a>.</p>
+      <p class="tip"><b>Jingles on the clock?</b> For jingles and adverts with play counts and reports, use a rule that plays <b>every 1 hour on the clock</b> in the <a href="/guides/advertisement-scheduler/">advertisement scheduler</a>, or an insert in your <a href="/guides/playlist-generator/">generator template</a>.</p>
 
       <h2 id="rows">Events in the playlist</h2>
       <p><b>Playlist → Add event</b> puts an Event row in the running order. When playback reaches it, it runs a scheduler action, for example ending a show's playlist with "Put a playlist tab on air → Main" so Main carries on where it left off instead of dead air.</p>

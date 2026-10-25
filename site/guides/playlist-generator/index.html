@@ -113,8 +113,8 @@
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Playlist generator</nav>
     <p class="eyebrow">Guide · Run the station</p>
     <h1 class="page-h">How to use the playlist generator</h1>
-    <p class="lede" style="margin-top:16px">The playlist generator builds hours of programming from your music library in one click. You tell it what pools of songs you have (categories) and how an hour should sound (a template), and it fills the playlist, keeps artists apart and drops in jingles and hour markers for you.</p>
-    <nav class="toc" aria-label="On this page"><a href="#before">Before you start</a><a href="#categories">Categories</a><a href="#templates">Templates</a><a href="#generate">Generate</a><a href="#auto">Auto-playlist</a><a href="#schedule">On a schedule</a><a href="#tips">Tips</a></nav>
+    <p class="lede" style="margin-top:16px">The playlist generator builds hours of programming from your music library in one click. You tell it what pools of songs you have (categories) and how an hour should sound (a template), and it fills the playlist, keeps artists and songs apart, changes the sound for different times of day and drops in jingles, talk and time announcements on the clock.</p>
+    <nav class="toc" aria-label="On this page"><a href="#before">Before you start</a><a href="#categories">Categories</a><a href="#templates">Templates</a><a href="#dayparts">Times of day</a><a href="#inserts">Inserts</a><a href="#generate">Preview and generate</a><a href="#auto">Auto-playlist</a><a href="#schedule">On a schedule</a><a href="#tips">Tips</a></nav>
   </section>
 
   <section class="block">
@@ -124,8 +124,8 @@
       <p class="tip"><b>Can't open it?</b> The playlist generator is a tool an administrator can allow or block per user. See <a href="/guides/users-and-permissions/">users and permissions</a>.</p>
 
       <h2 id="categories">1. Make your categories</h2>
-      <p>A category is a pool of tracks the generator can pick from. Each one has a name and up to three filters; leave a filter empty to mean "any".</p>
-      <div class="rundown-table"><table><thead><tr><th>Filter</th><th>What it matches</th></tr></thead><tbody><tr><td class="k">folder</td><td>Tracks whose file is inside this folder (or any folder in it). Use <b>…</b> to pick it.</td></tr><tr><td class="k">genre</td><td>Tracks whose genre tag contains this text, ignoring capitals. <code>rock</code> matches Rock, Soft Rock and Rock &amp; Roll.</td></tr><tr><td class="k">length</td><td>Shortest and longest track in seconds. A maximum of 0 means no limit. Handy for keeping long album versions or short IDs out.</td></tr></tbody></table></div>
+      <p>A category is a pool of tracks the generator can pick from. Each one has a name and some filters; leave a filter empty to mean "any".</p>
+      <div class="rundown-table"><table><thead><tr><th>Filter</th><th>What it matches</th></tr></thead><tbody><tr><td class="k">folder</td><td>Tracks whose file is inside this folder (or any folder in it). Use <b>…</b> to pick it.</td></tr><tr><td class="k">genre</td><td>Tracks whose genre tag contains this text, ignoring capitals. <code>rock</code> matches Rock, Soft Rock and Rock &amp; Roll. Separate several with commas: <code>rock, pop</code> takes either.</td></tr><tr><td class="k">length</td><td>Shortest and longest track in seconds. A maximum of 0 means no limit. Handy for keeping long album versions or short IDs out.</td></tr><tr><td class="k">years</td><td>The year tag, from and to (<b>any</b> = no limit). <code>1980 – 1989</code> makes an 80s category.</td></tr><tr><td class="k">leave out</td><td>Words, separated by commas, that keep a track out when its artist, title, genre or file name has one of them, for example <code>live, remix, instrumental</code>.</td></tr></tbody></table></div>
       <p>A typical music station might have:</p>
       <div class="rundown-table"><table><thead><tr><th>Category</th><th>Filters</th></tr></thead><tbody><tr><td class="it">Current</td><td>folder <code>D:\Music\Current</code></td></tr><tr><td class="it">Recurrent</td><td>folder <code>D:\Music\Recurrent</code></td></tr><tr><td class="it">Gold</td><td>folder <code>D:\Music\Gold</code>, length 120–420 s</td></tr><tr><td class="it">Station IDs</td><td>folder <code>D:\Jingles\IDs</code>, length 0–30 s</td></tr></tbody></table></div>
       <p>Press <b>➕ Add category</b> for each one. The delete button asks <b>Delete! / Keep</b> first, so a stray click won't lose anything.</p>
@@ -134,20 +134,29 @@
       <p>A template describes how the programming should sound. Press <b>➕ New</b> under Templates, then set:</p>
       <ul>
         <li><b>Name</b>: what you'll pick it by, for example <i>Daytime</i> or <i>Overnight</i>.</li>
-        <li><b>Length</b>: how much to make, from 5 minutes to 24 hours (1440 minutes).</li>
+        <li><b>Length</b>: how much to make, from 5 minutes to 24 hours (1440 minutes), or <b>until</b> a time of day, such as until 22:00, the next time the clock gets there.</li>
         <li><b>Artist separation</b>: how many tracks must pass before the same artist can play again. 8 to 12 suits most music stations.</li>
+        <li><b>Song separation</b>: how many minutes before the same song can come back. Off means a song can return once its category has been played through.</li>
       </ul>
       <h3>The pattern</h3>
       <p>The pattern is the running order the generator repeats until the length is reached. Each step is a count and a source: a category, or the files of one of your <a href="/guides/advertisement-scheduler/">advert or jingle rules</a>. Press <b>➕ Add pattern step</b> for each step. For example:</p>
       <div class="rundown-table"><table><thead><tr><th>Step</th><th>Count</th><th>From</th></tr></thead><tbody><tr><td class="it">1.</td><td>2 ×</td><td>Current</td></tr><tr><td class="it">2.</td><td>1 ×</td><td>Gold</td></tr><tr><td class="it">3.</td><td>1 ×</td><td>Recurrent</td></tr><tr><td class="it">4.</td><td>1 ×</td><td>Station IDs</td></tr></tbody></table></div>
       <p>That gives Current, Current, Gold, Recurrent, ID, then round again.</p>
-      <h3>Inserts by time</h3>
-      <p>Below the pattern you can add things that go in by time instead of by position, such as "every 15 min insert 1 × Station IDs". Press <b>➕ Add insert</b>, then set the minutes, the count and the source. <b>➕ Add jingles</b> is a shortcut that adds your first jingle rule every 15 minutes.</p>
-      <p>Times are counted along the generated running order using each track's length, so an insert every 30 minutes lands roughly every half hour of airtime wherever the playlist starts.</p>
+      <h2 id="dayparts">3. Times of day</h2>
+      <p>A station rarely sounds the same all day. Under <b>Times of day</b>, press <b>➕ Add time of day</b> to give some hours their own pattern: pick the hours (from 06:00 to 10:00, for example), the days, and the steps. The first time of day that covers the clock is used, and outside them the main pattern is. 22:00 to 06:00 runs over midnight.</p>
+      <div class="rundown-table"><table><thead><tr><th>Time of day</th><th>Hours and days</th><th>Pattern</th></tr></thead><tbody><tr><td class="it">Breakfast</td><td>06:00–10:00, Mon–Fri</td><td>1 × Talk, 2 × Current</td></tr><tr><td class="it">Overnight</td><td>00:00–06:00, every day</td><td>3 × Gold, 1 × Station IDs</td></tr></tbody></table></div>
+      <p>The clock follows the new tracks from where they will start on air, so a template that runs from 05:00 switches to the breakfast pattern at about 06:00.</p>
+
+      <h2 id="inserts">4. Inserts</h2>
+      <p>Inserts are things that go in on their own schedule instead of by position in the pattern, set up like <a href="/guides/advertisement-scheduler/">advert and jingle rules</a>. Press <b>➕ Add insert</b>, pick what to insert and how many, then when:</p>
+      <div class="rundown-table"><table><thead><tr><th>When</th><th>Example</th></tr></thead><tbody><tr><td class="k">after every N songs</td><td>1 × Station IDs after every 4 songs</td></tr><tr><td class="k">every N minutes</td><td>A jingle every 15 minutes. Tick <b>on the clock</b> to count from the top of the hour, so every 60 minutes means at :00.</td></tr><tr><td class="k">at set times</td><td>1 × Talk at 18:00 and 20:30</td></tr></tbody></table></div>
+      <p>Each insert can be limited to some hours (untick <b>all day</b>). An insert can come from a category, from the files of an advert or jingle rule, or be a <b>⏰ Time announcement</b>: <b>➕ Add time announcement</b> adds one at the top of every hour. <b>➕ Add jingles</b> is a shortcut that adds your first jingle rule every 15 minutes.</p>
+      <p>Timed inserts go in after the song that's playing when the time comes, so songs are never cut.</p>
       <h3>Hour markers</h3>
       <p>Tick <b>Hour marker at the top of every hour</b> and the generator places an <a href="/#playlist">hour marker</a> where each new hour starts, so the station stays on the clock even if the songs run long or short.</p>
 
-      <h2 id="generate">3. Generate</h2>
+      <h2 id="generate">5. Preview and generate</h2>
+      <p><b>👁 Preview</b> shows the running order with the time each row starts, the number of tracks and the total length, without touching the playlist. Press <b>⟳ Again</b> for another mix, tick <b>after the playlist</b> to see it as an addition, and <b>✔ Put it in the playlist</b> when you like it. Or go straight to:</p>
       <ul>
         <li><b>▶ Generate (replace playlist)</b> clears the playlist and fills it with the template.</li>
         <li><b>Append to playlist</b> adds the new tracks after the last row, keeping what's already there.</li>
@@ -167,7 +176,7 @@ APPEND Daytime</pre></div>
         <li>Within one generated playlist, every track in a category plays once before any of them repeats, so big categories stay fresh.</li>
         <li>If artist separation can't be met (a small category with few artists), the generator still picks a track rather than leaving a gap.</li>
         <li>Timed inserts (jingles, IDs, adverts) don't count towards artist separation.</li>
-        <li>Make a template per daypart (Breakfast, Daytime, Evening, Overnight) and switch between them with the event scheduler.</li>
+        <li>Times of day let one template cover a whole day. For very different shows you can still make a template each and switch between them with the event scheduler.</li>
         <li>While connected to <a href="/server/">RadioMaster Server</a>, the library and folders are the server's, so a category folder is typed the way the server sees it, for example <code>/srv/music/current</code>.</li>
       </ul>
     </article>
