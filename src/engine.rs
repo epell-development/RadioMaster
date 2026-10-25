@@ -1129,6 +1129,8 @@ mod tests {
             for _ in 0..(SR as f32 * secs) as usize / 256 {
                 a.extend((0..512).map(|_| primary.next().unwrap()));
                 b.extend((0..512).map(|_| studio.next().unwrap()));
+                // at a few times real time, like a sound card (files are decoded ahead on another thread)
+                std::thread::sleep(std::time::Duration::from_millis(2));
             }
             (a, b)
         };
