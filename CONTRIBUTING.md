@@ -18,6 +18,9 @@ the one to require in branch protection. It runs:
 - every icon character can be drawn (`tools/check_glyphs.py`), and every website link and image resolves (`tools/check_site.py`)
 - the workflow files themselves (actionlint)
 
+CI uses the fixed Rust version in `RUST_VERSION` at the top of `ci.yml`, so a new Rust release can't turn
+every pull request red overnight. Bump it on purpose and fix what the newer clippy finds in the same pull request.
+
 `cargo audit` (`.github/workflows/audit.yml`) runs when the dependencies change and every Monday.
 A tag push checks the tag against the version before the release builds anything.
 

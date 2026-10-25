@@ -218,7 +218,7 @@ impl Deck {
         // a pause in a live stream or on a microphone is not the end of the item
         let trim = if self.live { None } else { trim };
         let mut ended = false;
-        for frame in out.chunks_exact_mut(2) {
+        for frame in out.as_chunks_mut::<2>().0 {
             if self.end_frame.is_some_and(|e| self.frames >= e) {
                 ended = true; // reached cue out
                 break;
@@ -352,7 +352,7 @@ impl Bus {
         if s.duck_now != target || target != 1.0 {
             let step = 1.0 / (0.12 * SR as f32);
             let mut g = s.duck_now;
-            for f in self.buf.chunks_exact_mut(2) {
+            for f in self.buf.as_chunks_mut::<2>().0 {
                 g = if g < target { (g + step).min(target) } else { (g - step).max(target) };
                 f[0] *= g;
                 f[1] *= g;
@@ -368,7 +368,7 @@ impl Bus {
         let s = &mut *s;
         if s.mic_on {
             let g = s.mic_gain;
-            for f in self.buf.chunks_exact_mut(2) {
+            for f in self.buf.as_chunks_mut::<2>().0 {
                 let (mut l, mut r) = (s.mic_buf.pop_front().unwrap_or(0.0), s.mic_buf.pop_front().unwrap_or(0.0));
                 for (_, m) in s.net_mics.iter_mut() {
                     let (a, b) = m.frame();
@@ -382,7 +382,7 @@ impl Bus {
         s.dsp.process(&mut self.buf);
         let vol = s.master;
         let (mut pl, mut pr) = (0f32, 0f32);
-        for f in self.buf.chunks_exact_mut(2) {
+        for f in self.buf.as_chunks_mut::<2>().0 {
             let (a, b) = s.feed.as_mut().map_or((0.0, 0.0), NetSource::frame);
             f[0] = (f[0] * vol + a).clamp(-1.0, 1.0);
             f[1] = (f[1] * vol + b).clamp(-1.0, 1.0);
