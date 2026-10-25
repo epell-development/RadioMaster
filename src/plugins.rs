@@ -233,22 +233,22 @@ impl Plugins {
                     c.env(format!("RM_{}", k.to_uppercase()), v.to_string());
                 }
             }
-            match c.spawn() {
-                Ok(mut child) => {
-                    if let Some(mut w) = child.stdin.take() {
-                        let l = line.clone();
-                        thread::spawn(move || {
-                            let _ = writeln!(w, "{l}");
-                        });
-                    }
-                    if let Some(o) = child.stdout.take() {
-                        pump(d.name.clone(), o, self.cmd_tx.clone(), self.log.clone());
-                    }
-                    if let Some(e) = child.stderr.take() {
-                        pump(d.name.clone(), e, self.cmd_tx.clone(), self.log.clone());
-                    }
-                    let (name, log) = (d.name.clone(), self.log.clone());
-                    thread::spawn(move || {
+            // started on a worker thread: launching a process can take tens of milliseconds on Windows,
+            // and this runs while a track starts
+            let (name, command, cmd_tx, log, line) =
+                (d.name.clone(), d.command.clone(), self.cmd_tx.clone(), self.log.clone(), line.clone());
+            thread::spawn(move || {
+                match c.spawn() {
+                    Ok(mut child) => {
+                        if let Some(mut w) = child.stdin.take() {
+                            let _ = writeln!(w, "{line}"); // one short line: fits the pipe, never blocks
+                        }
+                        if let Some(o) = child.stdout.take() {
+                            pump(name.clone(), o, cmd_tx.clone(), log.clone());
+                        }
+                        if let Some(e) = child.stderr.take() {
+                            pump(name.clone(), e, cmd_tx.clone(), log.clone());
+                        }
                         // don't leave zombies; give up on a plugin that hangs
                         for _ in 0..600 {
                             match child.try_wait() {
@@ -264,10 +264,10 @@ impl Plugins {
                         }
                         let _ = child.kill();
                         log.lock().push(format!("[{name}] stopped after 60 s"));
-                    });
+                    }
+                    Err(e) => log.lock().push(format!("[{name}] couldn't run \"{command}\": {e}")),
                 }
-                Err(e) => self.log.lock().push(format!("[{}] couldn't run \"{}\": {e}", d.name, d.command)),
-            }
+            });
         }
         for id in dead {
             if let Some(mut s) = self.services.remove(&id) {
