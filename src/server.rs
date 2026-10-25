@@ -1008,10 +1008,11 @@ mod tests {
     /// waveforms from it, and keeps its clock.
     #[test]
     fn app_sees_the_servers_files_and_clock() {
+        // (the data folder is shared by every test in this process: the files go in a folder of their own)
+        crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
         let dir = std::env::temp_dir().join(format!("rm-server-files-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        crate::config::set_data_dir(dir.clone());
         let tone = dir.join("tone.wav");
         write_wav(&tone, 3.0);
         let gone = dir.join("gone.mp3");
