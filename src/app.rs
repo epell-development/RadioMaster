@@ -92,6 +92,8 @@ enum Dlg {
     LibFolder(PathBuf),
     Cart(usize, PathBuf),
     SchedPath(usize, PathBuf),
+    /// file for the event row being added / edited
+    EventPath(PathBuf),
     RotFolder(usize, PathBuf),
     RenderWav(PathBuf),
     AdPath(usize, PathBuf),
@@ -355,6 +357,86 @@ fn name_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, opt
             ui.selectable_value(cur, o.clone(), o);
         }
     });
+}
+
+/// What an event action can point at: generator templates, advert / jingle rules, playlist tabs and encoders.
+pub(super) struct ActionOpts {
+    pub templates: Vec<String>,
+    pub rules: Vec<(u64, String)>,
+    pub tabs: Vec<String>,
+    pub n_enc: usize,
+}
+
+impl ActionOpts {
+    pub(super) fn of(core: &Playout) -> Self {
+        ActionOpts {
+            templates: core.cfg.templates.iter().map(|t| t.name.clone()).collect(),
+            rules: core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone())).collect(),
+            tabs: core.tabs.iter().map(|t| t.name.clone()).collect(),
+            n_enc: core.cfg.encoders.len(),
+        }
+    }
+}
+
+/// The "Do …" part of a scheduler event or a playlist event row: the action and what it works on.
+/// Returns true when "…" (browse) was clicked; the caller opens the file dialog.
+pub(super) fn action_edit(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + Copy,
+    action: &mut ActionKind,
+    path: &mut String,
+    arg: &mut f32,
+    o: &ActionOpts,
+) -> bool {
+    let mut browse = false;
+    egui::ComboBox::from_id_salt(("act", id)).selected_text(tr(action.label())).width(290.0).height(400.0).show_ui(ui, |ui| {
+        for a in ActionKind::ALL {
+            ui.selectable_value(action, a, tr(a.label()));
+        }
+    });
+    if action.needs_template() {
+        if o.templates.iter().all(|t| t != path) {
+            *path = o.templates.first().cloned().unwrap_or_default();
+        }
+        name_combo(ui, ("ev_tpl", id), path, &o.templates);
+    } else if *action == ActionKind::RunRule {
+        let shown = o.rules.iter().find(|r| r.0 == *arg as u64).map(|r| r.1.clone()).unwrap_or_else(|| tr("pick a rule").to_string());
+        egui::ComboBox::from_id_salt(("ev_rule", id)).selected_text(shown).width(180.0).show_ui(ui, |ui| {
+            for (rid, name) in &o.rules {
+                if ui.selectable_label(*arg as u64 == *rid, name).clicked() {
+                    *arg = *rid as f32;
+                }
+            }
+        });
+    } else if *action == ActionKind::SwitchPlaylist {
+        name_combo(ui, ("ev_tab", id), path, &o.tabs);
+    } else if *action == ActionKind::Command {
+        ui.add(egui::TextEdit::singleline(path).desired_width(260.0).hint_text("VOLUME 80 · ENCODER START 1 · RULE Jingles"));
+    } else if action.needs_path() {
+        ui.add(egui::TextEdit::singleline(path).desired_width(300.0));
+        browse = ui.button("…").on_hover_text(tr("Browse")).clicked();
+    }
+    if action.needs_arg() {
+        if *action == ActionKind::SetVolume {
+            ui.add(egui::Slider::new(arg, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
+        } else {
+            let mut k = *arg as usize + 1;
+            ui.label(tr("encoder"));
+            ui.add(egui::DragValue::new(&mut k).range(1..=o.n_enc.max(1)));
+            *arg = (k - 1) as f32;
+        }
+    }
+    browse
+}
+
+/// File dialog for an action that takes a file: a playlist for "Load playlist", audio otherwise.
+pub(super) fn action_file_dialog(action: ActionKind) -> rfd::FileDialog {
+    let d = rfd::FileDialog::new();
+    if action == ActionKind::LoadPlaylistAndPlay {
+        d.add_filter("Playlist", &["m3u", "m3u8"])
+    } else {
+        d.add_filter("Audio", &crate::library::EXTS)
+    }
 }
 
 /// Where generator tracks come from: a category, or the files of an advert / jingle rule
@@ -651,6 +733,11 @@ impl App {
                 Dlg::SchedPath(i, p) => {
                     if let Some(e) = core.cfg.events.get_mut(i) {
                         e.path = p.to_string_lossy().to_string();
+                    }
+                }
+                Dlg::EventPath(p) => {
+                    if let Some(d) = self.item_dlg.as_mut().filter(|d| d.kind == pltools::DlgKind::Event) {
+                        d.text = p.to_string_lossy().to_string();
                     }
                 }
                 Dlg::RotFolder(i, p) => {
@@ -2183,10 +2270,7 @@ impl App {
         ui.add_space(4.0);
         let mut del = None;
         let mut run_now = None;
-        let n_enc = core.cfg.encoders.len();
-        let templates: Vec<String> = core.cfg.templates.iter().map(|t| t.name.clone()).collect();
-        let rules: Vec<(u64, String)> = core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone())).collect();
-        let tabs: Vec<String> = core.tabs.iter().map(|t| t.name.clone()).collect();
+        let opts = ActionOpts::of(core);
         let now = Local::now();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if core.cfg.events.is_empty() {
@@ -2225,64 +2309,9 @@ impl App {
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(tr("Do")).strong());
-                        egui::ComboBox::from_id_salt(("act", i)).selected_text(tr(e.action.label())).width(290.0).height(400.0).show_ui(
-                            ui,
-                            |ui| {
-                                for a in ActionKind::ALL {
-                                    ui.selectable_value(&mut e.action, a, tr(a.label()));
-                                }
-                            },
-                        );
-                        if e.action.needs_template() {
-                            if templates.iter().all(|t| *t != e.path) {
-                                e.path = templates.first().cloned().unwrap_or_default();
-                            }
-                            name_combo(ui, ("ev_tpl", i), &mut e.path, &templates);
-                        } else if e.action == ActionKind::RunRule {
-                            let shown = rules
-                                .iter()
-                                .find(|r| r.0 == e.arg as u64)
-                                .map(|r| r.1.clone())
-                                .unwrap_or_else(|| tr("pick a rule").to_string());
-                            egui::ComboBox::from_id_salt(("ev_rule", i)).selected_text(shown).width(180.0).show_ui(ui, |ui| {
-                                for (id, name) in &rules {
-                                    if ui.selectable_label(e.arg as u64 == *id, name).clicked() {
-                                        e.arg = *id as f32;
-                                    }
-                                }
-                            });
-                        } else if e.action == ActionKind::SwitchPlaylist {
-                            name_combo(ui, ("ev_tab", i), &mut e.path, &tabs);
-                        } else if e.action == ActionKind::Command {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut e.path)
-                                    .desired_width(260.0)
-                                    .hint_text("VOLUME 80 · ENCODER START 1 · RULE Jingles"),
-                            );
-                        } else if e.action.needs_path() {
-                            ui.add(egui::TextEdit::singleline(&mut e.path).desired_width(300.0));
-                            if ui.button("…").on_hover_text(tr("Browse")).clicked() {
-                                let pl = e.action == ActionKind::LoadPlaylistAndPlay;
-                                self.dlg(move || {
-                                    let d = rfd::FileDialog::new();
-                                    let d = if pl {
-                                        d.add_filter("Playlist", &["m3u", "m3u8"])
-                                    } else {
-                                        d.add_filter("Audio", &crate::library::EXTS)
-                                    };
-                                    d.pick_file().map(|p| Dlg::SchedPath(i, p))
-                                });
-                            }
-                        }
-                        if e.action.needs_arg() {
-                            if e.action == ActionKind::SetVolume {
-                                ui.add(egui::Slider::new(&mut e.arg, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
-                            } else {
-                                let mut k = e.arg as usize + 1;
-                                ui.label(tr("encoder"));
-                                ui.add(egui::DragValue::new(&mut k).range(1..=n_enc.max(1)));
-                                e.arg = (k - 1) as f32;
-                            }
+                        if action_edit(ui, ("sched", i), &mut e.action, &mut e.path, &mut e.arg, &opts) {
+                            let a = e.action;
+                            self.dlg(move || action_file_dialog(a).pick_file().map(|p| Dlg::SchedPath(i, p)));
                         }
                     });
                 });

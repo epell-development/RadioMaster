@@ -82,6 +82,7 @@ pub(super) fn kind_icon(e: &PlEntry) -> &'static str {
         ItemKind::HourMarker { .. } => "⏰",
         ItemKind::HourInfo { .. } => "🕒",
         ItemKind::Tts { .. } => "🔊",
+        ItemKind::Event { .. } => "📅",
     }
 }
 

@@ -71,3 +71,13 @@ new = render(pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8"))
 text = re.sub(r"(<!-- RELEASES -->).*?(<!-- /RELEASES -->)", lambda m: m.group(1) + "\n" + new + "\n" + m.group(2), text, flags=re.S)
 page.write_text(text, encoding="utf-8")
 print("site/updates/index.html updated")
+
+# keep the search-engine data in step with the latest release
+latest = re.search(r"^## v([\d.]+)\s*[—-]\s*(\d{4}-\d{2}-\d{2})", pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8"), flags=re.M)
+if latest:
+    ver, date = latest.groups()
+    home = pathlib.Path("site/index.html")
+    home.write_text(re.sub(r'("softwareVersion": ")[^"]*(")', lambda m: m.group(1) + ver + m.group(2), home.read_text(encoding="utf-8")), encoding="utf-8")
+    sitemap = pathlib.Path("site/sitemap.xml")
+    sitemap.write_text(re.sub(r"<lastmod>[^<]*</lastmod>", f"<lastmod>{date}</lastmod>", sitemap.read_text(encoding="utf-8")), encoding="utf-8")
+    print(f"site/index.html and site/sitemap.xml set to v{ver} ({date})")

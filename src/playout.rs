@@ -850,6 +850,7 @@ impl Playout {
                 true
             }
             ItemKind::Comment(_) | ItemKind::HourInfo { .. } => false,
+            ItemKind::Event { action, path, arg } => self.row_event(i, action, &path, arg, &e.title()),
             ItemKind::Tts { text, voice, rate, opts } => {
                 let (said, v) = self.speech_for(&text, &voice, rate, &opts, i);
                 let src = live::speech_source(said.clone(), v, opts, self.log_sink.clone());
@@ -2293,6 +2294,55 @@ impl Playout {
         self.log_sink.lock().push(format!("Started: {text}"));
     }
 
+    /// Playback reached an Event row (`i`). Returns true when playback must not carry on to the
+    /// next row: the event put another playlist on air, or stopped.
+    fn row_event(&mut self, i: usize, action: ActionKind, path: &str, arg: f32, title: &str) -> bool {
+        let path = path.trim();
+        self.say(format!("Playlist {}", title.replacen("Event:", "event:", 1)));
+        match action {
+            ActionKind::LoadPlaylistAndPlay => {
+                if Path::new(path).exists() {
+                    self.load_m3u(Path::new(path)); // carries on from the new list's first row
+                } else {
+                    self.say(format!("Event: file not found: {path}"));
+                }
+            }
+            ActionKind::PlayFile | ActionKind::InsertNext => {
+                if Path::new(path).exists() {
+                    let rows: Vec<PlEntry> = Self::expand(vec![PathBuf::from(path)]).iter().map(|p| self.entry_for(p)).collect();
+                    self.insert_rows(i + 1, rows);
+                } else {
+                    self.say(format!("Event: file not found: {path}"));
+                }
+            }
+            ActionKind::Stop => {
+                self.stop();
+                return true;
+            }
+            ActionKind::StartEncoder => self.start_encoder(arg as usize),
+            ActionKind::StopEncoder => self.stop_encoder(arg as usize),
+            ActionKind::SetVolume => self.set_volume(arg.clamp(0.0, 1.0)),
+            ActionKind::GenerateReplace | ActionKind::GenerateAppend => {
+                // a new playlist carries on from its first row; added tracks follow on after the list
+                let n = self.generate_playlist(path, action == ActionKind::GenerateAppend);
+                if n > 0 {
+                    self.say(format!("Event: {n} tracks from template '{path}'"));
+                }
+            }
+            ActionKind::RunRule => {
+                self.fire_rule(arg as u64, Some(i));
+            }
+            ActionKind::SwitchPlaylist => self.run_command(&format!("PLAYLIST {path}")),
+            ActionKind::Command => self.run_command(path),
+            ActionKind::RestartPlaylist => {
+                self.playlist.iter_mut().for_each(|e| e.played = false);
+                self.pending_jump = Some(0);
+            }
+        }
+        // another playlist goes on air next tick: don't start this list's next row in between
+        self.pending_tab.is_some() || self.state == PlayState::Stopped
+    }
+
     pub fn run_event(&mut self, e: &Event) {
         let xf = self.cfg.crossfade_secs;
         self.say(format!("Scheduler: {}", e.name));
@@ -2326,6 +2376,10 @@ impl Playout {
             }
             ActionKind::SwitchPlaylist => self.run_command(&format!("PLAYLIST {}", e.path.trim())),
             ActionKind::Command => self.run_command(e.path.trim()),
+            ActionKind::RestartPlaylist => {
+                self.playlist.iter_mut().for_each(|r| r.played = false);
+                self.play_index(0, xf);
+            }
         }
     }
 }
@@ -2526,6 +2580,57 @@ mod tests {
         assert_eq!(p.playing_tab, t, "playing a row of the tab puts that tab on air");
         assert_eq!(p.on_air.as_ref().map(|x| x.path.clone()), Some(wav));
         assert_eq!(p.tab_rows(0).len(), 1, "the old list is kept in its own tab");
+    }
+
+    #[test]
+    fn playlist_events_return_to_main_and_loop() {
+        let mut p = playout();
+        let dir = std::env::temp_dir().join("rm_test_events");
+        let _ = std::fs::create_dir_all(&dir);
+        let wav = |name: &str| {
+            let f = dir.join(format!("{name}.wav"));
+            crate::engine::write_wav(&f, &vec![0.1; crate::engine::SR as usize * 2], 2, crate::engine::SR).unwrap();
+            p.entry_for(&f)
+        };
+        let ev = |action, path: &str| PlEntry::special(ItemKind::Event { action, path: path.into(), arg: 0.0 }, "", 0.0);
+        let (m1, m2, e1) = (wav("main1"), wav("main2"), wav("evening1"));
+        p.playlist = vec![m1.clone(), m2.clone(), ev(ActionKind::RestartPlaylist, "")];
+        let evening = p.new_tab(Some("Evening".into()));
+        p.with_tab(evening, |c| c.playlist = vec![e1.clone(), ev(ActionKind::SwitchPlaylist, "Main")]);
+        let on_air = |p: &Playout| p.on_air.as_ref().map(|t| t.path.clone());
+
+        // main is playing its first track when the scheduler puts the evening show on air
+        assert!(p.play_index(0, 0.0));
+        p.put_tab_on_air(evening);
+        assert_eq!(p.playing_tab, evening);
+        assert_eq!(on_air(&p), Some(e1.track.path.clone()));
+
+        // the evening show ends on its event row: main comes back instead of dead air
+        assert!(p.advance(0.0), "the event row holds playback for the switch");
+        assert_eq!(p.pending_tab, Some(0));
+        p.tick();
+        assert_eq!(p.playing_tab, 0);
+        assert!(p.state == PlayState::Playing);
+        assert_eq!(on_air(&p), Some(m2.track.path.clone()), "main carries on where it left off");
+
+        // main's last row plays it again from the top
+        assert!(p.advance(0.0));
+        assert_eq!(p.current, Some(0));
+        assert_eq!(on_air(&p), Some(m1.track.path.clone()));
+        assert!(!p.playlist[1].played, "a fresh loop");
+
+        // a file event queues its file right after the row
+        p.playlist = vec![m1.clone(), ev(ActionKind::InsertNext, &e1.track.path.to_string_lossy()), m2.clone()];
+        assert!(p.play_index(0, 0.0));
+        assert!(p.advance(0.0));
+        assert_eq!(on_air(&p), Some(e1.track.path.clone()));
+        assert_eq!(p.playlist.len(), 4);
+
+        // a stop event ends playback
+        p.playlist = vec![m1.clone(), ev(ActionKind::Stop, "")];
+        assert!(p.play_index(0, 0.0));
+        p.advance(0.0);
+        assert!(p.state == PlayState::Stopped);
     }
 
     #[test]
