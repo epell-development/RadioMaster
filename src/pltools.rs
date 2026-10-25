@@ -384,13 +384,16 @@ impl App {
                         });
                         ui.end_row();
                         ui.label("");
-                        ui.label(
-                            RichText::new(tr(
-                                "Runs when playback reaches this row, like a scheduler event. Example: put this row at the end of an evening playlist and pick \"Put a playlist tab on air → Main\", so Main comes back on air instead of dead air. At the end of Main, \"Play the on-air playlist again from the top\" keeps it looping.",
-                            ))
-                            .small()
-                            .color(GRAY),
-                        );
+                        ui.vertical(|ui| {
+                            ui.set_max_width(300.0); // wraps instead of widening the dialog
+                            ui.label(
+                                RichText::new(tr(
+                                    "Runs when playback reaches this row, like a scheduler event. Example: put this row at the end of an evening playlist and pick \"Put a playlist tab on air → Main\", so Main comes back on air instead of dead air. At the end of Main, \"Play the on-air playlist again from the top\" keeps it looping.",
+                                ))
+                                .small()
+                                .color(GRAY),
+                            );
+                        });
                         ui.end_row();
                         name_row(ui, &mut d, "shown in the playlist (optional)");
                     }
