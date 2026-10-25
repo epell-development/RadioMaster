@@ -4,7 +4,7 @@ name: Website
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'docs/screenshots/**', 'docs/social-card.png', 'assets/icon.png', 'CHANGELOG.md', 'tools/build_updates.py', '.github/workflows/pages.yml']
+    paths: ['site/**', 'docs/screenshots/**', 'docs/social-card.png', 'assets/icon.png', 'CHANGELOG.md', 'tools/build_updates.py', 'tools/build_site.py', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,7 @@ jobs:
       - name: Assemble site
         run: |
           python3 tools/build_updates.py
+          python3 tools/build_site.py
           mkdir -p site/img
           cp docs/screenshots/*.png site/img/
           cp assets/icon.png site/img/
