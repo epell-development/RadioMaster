@@ -313,6 +313,10 @@ fn main() {
             }
             Err(_) => false,
         };
+        if let Some(msg) = audio.watchdog() {
+            println!("Audio: {msg}");
+            *audio_report.lock() = audio.report.clone();
+        }
         {
             let c = core.lock();
             let new = (c.log_total - printed) as usize;

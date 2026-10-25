@@ -3421,6 +3421,9 @@ impl eframe::App for App {
         let arc = self.core.clone();
         let mut core = arc.lock();
         let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        if let Some(msg) = self.audio.watchdog() {
+            core.say(msg);
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
             self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
         }

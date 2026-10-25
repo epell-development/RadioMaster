@@ -1,6 +1,8 @@
 //! Output/input device selection. Several output devices can play at once: the first one that
 //! opens becomes the primary (it drives the mix), the others receive a copy of the master mix.
 //! With no usable device a silent real-time clock drives the mix so streaming still works.
+//! A watchdog notices a device that stopped asking for audio (another app took it over, Windows
+//! reset it, it was unplugged) and reopens it, so playback doesn't stay dead until a restart.
 
 use crate::config::AudioDevices;
 use crate::engine::{Engine, GainSource};
@@ -8,11 +10,12 @@ use rodio::cpal::{
     self,
     traits::{DeviceTrait, HostTrait},
 };
-use rodio::OutputStream;
+use rodio::{OutputStream, Source};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     Arc,
 };
+use std::time::{Duration, Instant};
 
 pub fn list_outputs() -> Vec<String> {
     let host = cpal::default_host();
@@ -32,7 +35,55 @@ pub struct Running {
     pub name: String,
     pub primary: bool,
     pub gain: Arc<AtomicU32>,
+    beat: Arc<AtomicU64>,
+    seen: u64,
+    since: Instant,
     _stream: OutputStream, // must stay alive; not Send, so the manager lives on the UI thread
+}
+
+/// Counts the samples a sound card pulls, so the watchdog can tell when it stops pulling.
+struct Beat<S> {
+    inner: S,
+    beat: Arc<AtomicU64>,
+    n: u32,
+}
+
+impl<S: Source<Item = f32>> Iterator for Beat<S> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        self.n += 1;
+        if self.n >= 1024 {
+            self.n = 0;
+            self.beat.fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.next()
+    }
+}
+
+impl<S: Source<Item = f32>> Source for Beat<S> {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+}
+
+fn beat_of<S: Source<Item = f32>>(inner: S, beat: &Arc<AtomicU64>) -> Beat<S> {
+    Beat { inner, beat: beat.clone(), n: 0 }
+}
+
+/// An output stopped while playing: the mix runs on the silent clock and the devices are tried again.
+struct Lost {
+    next_try: Instant,
+    wait: Duration,
+    need: usize, // outputs that were playing before
 }
 
 #[derive(Default)]
@@ -40,6 +91,9 @@ pub struct AudioManager {
     pub running: Vec<Running>,
     pub report: Vec<(String, String)>, // (device, status)
     null_stop: Option<Arc<AtomicBool>>,
+    last: Option<(Engine, AudioDevices)>, // what the watchdog reopens
+    lost: Option<Lost>,
+    checked: Option<Instant>,
 }
 
 impl AudioManager {
@@ -60,6 +114,8 @@ impl AudioManager {
     pub fn silence(&mut self, engine: &Engine) {
         self.running.clear();
         self.report.clear();
+        self.last = None;
+        self.lost = None;
         if let Some(s) = self.null_stop.take() {
             s.store(true, Ordering::Relaxed);
         }
@@ -69,6 +125,62 @@ impl AudioManager {
 
     /// (Re)open every enabled output. Safe to call at any time.
     pub fn apply(&mut self, engine: &Engine, cfg: &AudioDevices) {
+        self.lost = None;
+        self.open(engine, cfg);
+    }
+
+    /// Call often (every frame is fine: it only reads counters, twice a second). When an output has
+    /// stopped pulling audio it reopens the outputs, and while one is still gone it tries again with
+    /// a growing wait. The mix keeps running meanwhile, so the stream never stops. Returns a line
+    /// for the log when something changed.
+    pub fn watchdog(&mut self) -> Option<String> {
+        let now = Instant::now();
+        if self.checked.is_some_and(|t| now - t < Duration::from_millis(500)) {
+            return None;
+        }
+        self.checked = Some(now);
+        let (engine, cfg) = self.last.clone()?;
+        let mut dead = None;
+        for r in &mut self.running {
+            let b = r.beat.load(Ordering::Relaxed);
+            // a device gets longer to start (Bluetooth) than to keep going
+            let limit = Duration::from_secs(if r.seen == 0 { 6 } else { 2 });
+            if b != r.seen {
+                r.seen = b;
+                r.since = now;
+            } else if now - r.since > limit {
+                dead = Some(r.name.clone());
+            }
+        }
+        if let Some(name) = dead {
+            let need = self.running.len();
+            self.open(&engine, &cfg);
+            if self.running.len() >= need {
+                self.lost = None;
+                return Some(format!("Audio output \"{name}\" stopped (another app may have taken it over); reopened it"));
+            }
+            let wait = Duration::from_secs(2);
+            self.lost = Some(Lost { next_try: now + wait, wait, need });
+            return Some(format!(
+                "Audio output \"{name}\" stopped (another app may have taken it over); trying to reopen it, the stream keeps playing"
+            ));
+        }
+        let l = self.lost.as_mut()?;
+        if now < l.next_try {
+            return None;
+        }
+        let (wait, need) = ((l.wait * 2).min(Duration::from_secs(10)), l.need);
+        self.open(&engine, &cfg);
+        if self.running.len() >= need {
+            self.lost = None;
+            return Some("Audio output is back".into());
+        }
+        self.lost = Some(Lost { next_try: now + wait, wait, need });
+        None
+    }
+
+    fn open(&mut self, engine: &Engine, cfg: &AudioDevices) {
+        self.last = Some((engine.clone(), cfg.clone()));
         self.running.clear(); // dropping the streams closes the devices
         self.report.clear();
         if let Some(s) = self.null_stop.take() {
@@ -95,18 +207,31 @@ impl AudioManager {
             match OutputStream::try_from_device(&device) {
                 Ok((stream, handle)) => {
                     let g = Arc::new(AtomicU32::new(gain.max(0.0).to_bits()));
+                    let beat = Arc::new(AtomicU64::new(0));
                     // a studio monitor is gated after the mix, so muting it never touches the stream
                     let ok = match (have_primary, studio) {
-                        (false, false) => handle.play_raw(GainSource::new(engine.primary_source(), g.clone())).is_ok(),
-                        (false, true) => handle.play_raw(GainSource::new(engine.studio_gate(engine.primary_source()), g.clone())).is_ok(),
-                        (true, false) => handle.play_raw(GainSource::new(engine.monitor_source(), g.clone())).is_ok(),
-                        (true, true) => handle.play_raw(GainSource::new(engine.studio_gate(engine.monitor_source()), g.clone())).is_ok(),
+                        (false, false) => handle.play_raw(beat_of(GainSource::new(engine.primary_source(), g.clone()), &beat)).is_ok(),
+                        (false, true) => {
+                            handle.play_raw(beat_of(GainSource::new(engine.studio_gate(engine.primary_source()), g.clone()), &beat)).is_ok()
+                        }
+                        (true, false) => handle.play_raw(beat_of(GainSource::new(engine.monitor_source(), g.clone()), &beat)).is_ok(),
+                        (true, true) => {
+                            handle.play_raw(beat_of(GainSource::new(engine.studio_gate(engine.monitor_source()), g.clone()), &beat)).is_ok()
+                        }
                     };
                     if ok {
                         let role = if have_primary { "monitor" } else { "primary" };
                         let extra = if studio { ", muted while the mic is on" } else { "" };
                         self.report.push((name.clone(), format!("playing ({role}{extra})")));
-                        self.running.push(Running { name, primary: !have_primary, gain: g, _stream: stream });
+                        self.running.push(Running {
+                            name,
+                            primary: !have_primary,
+                            gain: g,
+                            beat,
+                            seen: 0,
+                            since: Instant::now(),
+                            _stream: stream,
+                        });
                         have_primary = true;
                     } else {
                         self.report.push((name, "could not start playback".into()));
