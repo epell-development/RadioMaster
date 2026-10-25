@@ -253,6 +253,8 @@ impl Deck {
                 }
                 break (l, r);
             };
+            // waiting is not an error and not the end: this block stops here (the rest is silence),
+            // `src` is kept, and the next block carries on where the decoder has got to
             if ended || waiting {
                 break;
             }
