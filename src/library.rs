@@ -97,26 +97,34 @@ pub fn audio_files_in(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// Write the track's tags into the file itself: the main tag (created if the file has none) and every
+/// other tag already in it (e.g. an old ID3v1 next to ID3v2), so other players see the same thing.
 pub fn write_tags(t: &Track) -> anyhow::Result<()> {
     let mut tf = Probe::open(&t.path)?.read()?;
     if tf.primary_tag().is_none() {
         let ty = tf.primary_tag_type();
         tf.insert_tag(Tag::new(ty));
     }
-    let tag = tf.primary_tag_mut().ok_or_else(|| anyhow::anyhow!("format has no writable tag"))?;
-    tag.set_artist(t.artist.clone());
-    tag.set_title(t.title.clone());
-    tag.set_album(t.album.clone());
-    tag.set_genre(t.genre.clone());
-    match t.year.trim().parse::<u32>() {
-        Ok(y) => tag.set_year(y),
-        Err(_) if t.year.trim().is_empty() => tag.remove_year(),
-        Err(_) => {}
+    let types: Vec<lofty::tag::TagType> = tf.tags().iter().map(|x| x.tag_type()).collect();
+    if types.is_empty() {
+        anyhow::bail!("format has no writable tag");
     }
-    if t.comment.is_empty() {
-        tag.remove_comment();
-    } else {
-        tag.set_comment(t.comment.clone());
+    for ty in types {
+        let Some(tag) = tf.tag_mut(ty) else { continue };
+        tag.set_artist(t.artist.clone());
+        tag.set_title(t.title.clone());
+        tag.set_album(t.album.clone());
+        tag.set_genre(t.genre.clone());
+        match t.year.trim().parse::<u32>() {
+            Ok(y) => tag.set_year(y),
+            Err(_) if t.year.trim().is_empty() => tag.remove_year(),
+            Err(_) => {}
+        }
+        if t.comment.is_empty() {
+            tag.remove_comment();
+        } else {
+            tag.set_comment(t.comment.clone());
+        }
     }
     tf.save_to_path(&t.path, WriteOptions::default())?;
     forget_track(&t.path);

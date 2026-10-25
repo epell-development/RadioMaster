@@ -297,6 +297,8 @@ impl Source for Bus {
 #[derive(Clone)]
 pub struct Engine {
     shared: Arc<Mutex<Shared>>,
+    /// mirrors `Shared::mic_on` without the lock, for the studio monitor gates
+    mic_live: Arc<AtomicBool>,
 }
 
 fn open(path: &Path) -> Result<(Pcm, f32)> {
@@ -394,7 +396,7 @@ impl Engine {
             mic_buf: VecDeque::new(),
             monitors: vec![],
         }));
-        Engine { shared }
+        Engine { shared, mic_live: Arc::new(AtomicBool::new(false)) }
     }
 
     /// The master bus as an audio source. Exactly one primary output (or the null driver) should pull it.
@@ -407,6 +409,12 @@ impl Engine {
         let (tx, rx) = crossbeam_channel::bounded::<Arc<Vec<f32>>>(24);
         self.shared.lock().monitors.push(tx);
         MonitorSource { rx, cur: Arc::new(Vec::new()), pos: 0 }
+    }
+
+    /// Wraps an output's source so it goes quiet while the mic is on (studio monitor speakers),
+    /// which stops the mic picking the speakers up. The stream and other outputs are not affected.
+    pub fn studio_gate<S: Source<Item = f32>>(&self, inner: S) -> StudioGate<S> {
+        StudioGate { inner, mic: self.mic_live.clone(), g: 1.0, n: 0 }
     }
 
     /// Real-time clock that drives the bus when no sound device is available (streaming still works).
@@ -561,6 +569,7 @@ impl Engine {
     }
 
     pub fn set_mic(&self, on: bool, gain: f32, duck: f32) {
+        self.mic_live.store(on, Ordering::Relaxed);
         let mut s = self.shared.lock();
         s.mic_on = on;
         s.mic_gain = gain;
@@ -660,6 +669,46 @@ impl Source for MonitorSource {
     }
     fn total_duration(&self) -> Option<Duration> {
         None
+    }
+}
+
+/// See `Engine::studio_gate`. Fades in about 50 ms (down) / 300 ms (back up) so there is no click.
+pub struct StudioGate<S> {
+    inner: S,
+    mic: Arc<AtomicBool>,
+    g: f32,
+    n: u32,
+}
+
+impl<S: Source<Item = f32>> Iterator for StudioGate<S> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let x = self.inner.next()?;
+        // the gain changes once per stereo frame so both channels get the same level
+        if self.n % 2 == 0 {
+            if self.mic.load(Ordering::Relaxed) {
+                self.g = (self.g - 1.0 / (0.05 * SR as f32)).max(0.0);
+            } else if self.g < 1.0 {
+                self.g = (self.g + 1.0 / (0.3 * SR as f32)).min(1.0);
+            }
+        }
+        self.n = self.n.wrapping_add(1);
+        Some(x * self.g)
+    }
+}
+
+impl<S: Source<Item = f32>> Source for StudioGate<S> {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
     }
 }
 
@@ -789,5 +838,38 @@ mod tests {
         let b: Vec<f32> = (0..4096).map(|_| monitor.next().unwrap()).collect();
         assert!(a.iter().any(|x| x.abs() > 0.1), "primary should carry audio");
         assert_eq!(a, b, "monitor output must be an exact copy of the primary mix");
+    }
+
+    #[test]
+    fn studio_monitor_goes_quiet_with_the_mic_but_the_stream_does_not() {
+        let p = std::env::temp_dir().join("openboss_test_studio.wav");
+        write_sine(&p);
+        let engine = Engine::new_detached();
+        engine.set_volume(1.0);
+        let mut primary = engine.primary_source();
+        let mut studio = engine.studio_gate(engine.monitor_source());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        engine.add_tap(tx);
+        engine.play_cued(&p, 1.0, CueSpec::default(), Some(0.0)).unwrap();
+        engine.set_mic(true, 1.0, 1.0); // mic on, music not ducked
+                                        // pull the primary and the studio monitor side by side, like two sound cards
+        let mut run = |secs: f32| {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            for _ in 0..(SR as f32 * secs) as usize / 256 {
+                a.extend((0..512).map(|_| primary.next().unwrap()));
+                b.extend((0..512).map(|_| studio.next().unwrap()));
+            }
+            (a, b)
+        };
+        let peak = |v: &[f32]| v.iter().fold(0f32, |m, x| m.max(x.abs()));
+        let (a, b) = run(0.2);
+        let h = a.len() / 2;
+        assert!(peak(&a[h..]) > 0.3, "the on-air mix keeps playing");
+        assert!(peak(&b[h..]) < 1e-6, "the studio monitor is silent while the mic is on");
+        let streamed: Vec<i16> = rx.try_iter().flat_map(|b| b.as_ref().clone()).collect();
+        assert!(streamed.iter().any(|x| x.unsigned_abs() > 8000), "the stream still gets the music");
+        engine.set_mic(false, 1.0, 1.0);
+        let (_, c) = run(0.5);
+        assert!(peak(&c[c.len() * 3 / 4..]) > 0.3, "the studio monitor comes back when the mic goes off");
     }
 }
