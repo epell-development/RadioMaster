@@ -58,8 +58,9 @@ Usage: RadioMaster-Server [options]
   --acme-http-port N    port for Let's Encrypt's checks (default 80; 0: a proxy in front passes them on)
   --no-acme             stop using Let's Encrypt
   --tunnel / --no-tunnel  put the web portal on the internet through a Cloudflare Tunnel (saved with --setup)
-  --tunnel-token TOKEN  the tunnel's token from the Cloudflare dashboard (or set CLOUDFLARE_TUNNEL_TOKEN;
-                        without one: a quick tunnel with a random trycloudflare.com address)
+  --tunnel-token TOKEN  the tunnel's token from the Cloudflare dashboard (better: set CLOUDFLARE_TUNNEL_TOKEN,
+                        which other users can't see; without one: a quick trycloudflare.com tunnel). Saved
+                        with --setup in tunnel-token in the data folder, readable by its owner only
   --cloudflared FILE    the cloudflared program (default: next to the server, or on the PATH)
   --portal / --no-portal  the web portal: run the station from a browser (saved with --setup)
   --portal-port N       port for the web portal (default 9260)

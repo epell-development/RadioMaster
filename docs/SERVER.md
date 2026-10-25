@@ -131,8 +131,9 @@ after. Install Cloudflare's `cloudflared` on the server (or put it next to `Radi
 
 - **Your own domain:** in the Cloudflare dashboard, *Zero Trust → Networks → Tunnels → Create a tunnel*, add a
   public hostname (e.g. `radio.example.com`) with the service `http://localhost:9260`, and copy the tunnel's
-  token. Start the server with `--tunnel-token <token>` (or set `CLOUDFLARE_TUNNEL_TOKEN`), or paste it in
-  **Server settings → Cloudflare Tunnel**.
+  token. Set `CLOUDFLARE_TUNNEL_TOKEN` (or use `--tunnel-token <token>`), or paste it in **Server settings →
+  Cloudflare Tunnel**. It is kept in `tunnel-token` in the data folder, readable by its owner only, not in
+  `server.json`.
 - **Just try it:** `--tunnel` with no token gives a random `https://….trycloudflare.com` address (it changes
   each time the tunnel starts); it is printed in the log and shown in Server settings.
 

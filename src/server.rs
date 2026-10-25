@@ -72,7 +72,9 @@ pub struct ServerCfg {
     pub acme_http_port: u16,
     /// put the web portal on the internet through a Cloudflare Tunnel
     pub tunnel: bool,
-    /// the tunnel's token from the Cloudflare dashboard (empty: a quick *.trycloudflare.com tunnel)
+    /// the tunnel's token from the Cloudflare dashboard (empty: a quick *.trycloudflare.com tunnel).
+    /// Kept in its own owner-only file, tunnel-token, not in server.json.
+    #[serde(skip)]
     pub tunnel_token: String,
     /// the cloudflared program (empty: next to the server, or on the PATH)
     pub cloudflared: String,
@@ -110,10 +112,20 @@ impl ServerCfg {
     pub fn path() -> std::path::PathBuf {
         data_dir().join("server.json")
     }
+    fn token_path() -> std::path::PathBuf {
+        data_dir().join("tunnel-token")
+    }
     pub fn load() -> Option<Self> {
-        std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok())
+        let mut c: Self = std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+        c.tunnel_token = std::fs::read_to_string(Self::token_path()).map(|t| t.trim().to_string()).unwrap_or_default();
+        Some(c)
     }
     pub fn save(&self) -> std::io::Result<()> {
+        if self.tunnel_token.is_empty() {
+            let _ = std::fs::remove_file(Self::token_path());
+        } else {
+            crate::tls::write_private(&Self::token_path(), &self.tunnel_token)?;
+        }
         std::fs::write(Self::path(), serde_json::to_string_pretty(self).unwrap_or_default())
     }
     pub fn ready(&self) -> bool {
@@ -1212,6 +1224,25 @@ mod tests {
         // the certificate is kept: the same one after a restart
         let again = spawn(station, cfg, host()).unwrap();
         assert_eq!(again.fingerprint.unwrap(), fp);
+    }
+
+    /// The tunnel token is a secret: it stays out of server.json, in a file of its own.
+    #[test]
+    fn tunnel_token_is_kept_apart() {
+        let dir = std::env::temp_dir().join(format!("rm-server-token-test-{}", std::process::id()));
+        crate::config::set_data_dir(dir);
+        let cfg = ServerCfg {
+            user: "a".into(),
+            password_hash: "x".into(),
+            tunnel: true,
+            tunnel_token: "secret-token".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        assert!(!std::fs::read_to_string(ServerCfg::path()).unwrap().contains("secret-token"));
+        assert_eq!(ServerCfg::load().unwrap().tunnel_token, "secret-token");
+        ServerCfg { tunnel_token: String::new(), ..cfg }.save().unwrap();
+        assert!(!ServerCfg::token_path().exists());
     }
 
     /// Let's Encrypt's checks are answered on every port, over plain HTTP, before signing in; a
