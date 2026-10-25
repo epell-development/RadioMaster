@@ -56,6 +56,7 @@ OpenBoss install are copied across on first start). If the program ever crashes,
 | Add file / folder / URL (Alt+F / Alt+D / Alt+U) | URL = relay an internet stream for a set time or until Next |
 | Add Line Input… | play the input device live (for a set time or until Next) |
 | Add command… (Alt+C) | `STOP`, `PAUSE`, `VOLUME 80`, `ENCODER START 1`, `ENCODER STOP 1`, `LOAD file.m3u`, `PLAYLIST name`, `RUN program args` |
+| Add event… | runs a scheduler action when playback reaches the row: put another playlist on air, play this one again from the top, generate tracks, adverts/jingles, a file, encoders, volume, a command |
 | Add timed pause… (Ctrl+P) | silence for a set time |
 | Add teaser… | faded snippets of the next N tracks |
 | Add time announcement… | recordings H00…H23 / M00…M59 from a folder, otherwise the computer's speech voice reads your text (`{h12}:{mm} {ampm}`) |
@@ -67,6 +68,8 @@ OpenBoss install are copied across on first start). If the program ever crashes,
 | Insert playlist / Insert tracks from playlist… | insert an M3U after the selection, or pick tracks from it |
 | Extra ▸ | hour marker, shuffle, sort, reverse, remove duplicates / played / missing, render WAV, export CSV, clear |
 | Notepad… (T), Find… (Ctrl+F) | |
+
+Playlist events: to stop a scheduled show ending in dead air, finish its playlist with an event row "Put a playlist tab on air → Main"; Main carries on where it left off. End Main with "Play the on-air playlist again from the top" to keep it looping.
 
 Hour markers: *wait* (silence until the time if early), *soft* (finish the current track, then jump) or *hard* (cut in on time).
 The clock shows the countdown to the next marker.

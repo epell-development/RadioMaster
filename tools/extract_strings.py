@@ -6,7 +6,7 @@ import json, re, pathlib
 texts = set()
 for f in pathlib.Path("src").glob("*.rs"):
     s = f.read_text(encoding="utf-8")
-    for m in re.finditer(r'tr\(\s*"((?:[^"\\]|\\.)*)"\s*\)', s):
+    for m in re.finditer(r'tr\(\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)', s):
         texts.add(m.group(1))
     # column headings: `for t in ["#", "Title", …]` and `let mut heads = vec![…]`, plus heads.push("…")
     for arr in re.findall(r'for (?:t|h) in \[([^\]]*)\]', s) + re.findall(r'heads = vec!\[([^\]]*)\]', s):
