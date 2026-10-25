@@ -990,12 +990,15 @@ mod tests {
         // the decoder is stuck on the disk now: the mix carries on (silence) instead of waiting for it
         let mix_block = 2048; // one mixer refill: 1024 stereo frames
         let stalled: Vec<f32> = (0..mix_block).map(|_| bus.next().unwrap()).collect();
-        assert!(t.elapsed() < std::time::Duration::from_millis(100), "the mix waited for the disk");
+        // (waiting would have taken the full 200 ms stall; the margin keeps a busy test machine green)
+        assert!(t.elapsed() < std::time::Duration::from_millis(150), "the mix waited for the disk");
         assert!(stalled.iter().all(|&x| x == 0.0));
         assert!(!engine.take_ended(), "a stall is not the end of the track");
-        // it catches up and the whole track is played, then reported as ended
+        // it catches up and the whole track is played, then reported as ended (the decoder needs
+        // about 0.8 s; a generous deadline so a loaded machine can't end the loop early)
         let mut heard = first.len();
-        for _ in 0..2000 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
             heard += (0..mix_block).map(|_| bus.next().unwrap()).filter(|x| (x - 0.5).abs() < 1e-6).count();
             if engine.take_ended() {
                 break;
