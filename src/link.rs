@@ -159,16 +159,19 @@ impl std::fmt::Display for LoginError {
 }
 
 /// Sign in (blocks; run it off the UI thread). `pin` is the certificate fingerprint trusted for this
-/// server, if any. Without http:// or https:// in the address, http is tried first, then https when
-/// the server says it uses HTTPS.
+/// server, if any. Without http:// or https:// in the address, the server is asked (without the
+/// password) whether it uses HTTPS.
 pub fn login(addr: &str, user: &str, password: &str, pin: &str) -> Result<Session, LoginError> {
-    match login_at(&normalize(addr), user, password, pin) {
-        Err(LoginError::Failed(m)) if no_scheme(addr) && m.starts_with(crate::tls::HTTPS_ONLY) => {
-            let base = normalize(addr).replacen("http://", "https://", 1);
-            login_at(&base, user, password, pin)
+    let mut base = normalize(addr);
+    // ask first, without the password, so it never goes out unencrypted to a server that uses HTTPS
+    if no_scheme(addr) {
+        if let Err(Fail::Other(m)) = call::<serde_json::Value>(&agent(pin), &base, "", "ping", None) {
+            if m.starts_with(crate::tls::HTTPS_ONLY) {
+                base = base.replacen("http://", "https://", 1);
+            }
         }
-        r => r,
     }
+    login_at(&base, user, password, pin)
 }
 
 fn login_at(base: &str, user: &str, password: &str, pin: &str) -> Result<Session, LoginError> {
