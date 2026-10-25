@@ -782,6 +782,11 @@ impl Api {
         if !me.admin && !within(&self.library_roots(), dir) {
             return error(403, &format!("your account ({}) may only upload into the library folders", me.name));
         }
+        let playlist = Path::new(&name).extension().is_some_and(|e| ["m3u", "m3u8"].contains(&e.to_string_lossy().to_lowercase().as_str()));
+        if !me.admin && !(crate::library::is_audio(Path::new(&name)) || playlist) {
+            return error(403, &format!("your account ({}) may only upload audio files and playlists", me.name));
+        }
+        let max = if me.admin { UPLOAD_MAX } else { UPLOAD_MAX_STAFF };
         let mut target = dir.join(&name);
         let (stem, ext) = (
             target.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
@@ -793,8 +798,8 @@ impl Api {
             n += 1;
         }
         let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).and_then(|mut f| {
-            let r = std::io::copy(&mut body.take(UPLOAD_MAX + 1), &mut f)
-                .and_then(|n| (n <= UPLOAD_MAX).then_some(()).ok_or_else(|| std::io::Error::other("the file is over 4 GB")));
+            let r = std::io::copy(&mut body.take(max + 1), &mut f)
+                .and_then(|n| (n <= max).then_some(()).ok_or_else(|| std::io::Error::other(format!("the file is over {} GB", max >> 30))));
             if r.is_err() {
                 drop(f);
                 let _ = std::fs::remove_file(&target);
@@ -1018,8 +1023,10 @@ impl Api {
     }
 }
 
-/// The biggest file an app may upload.
+/// The biggest file an administrator may upload…
 const UPLOAD_MAX: u64 = 4 * 1024 * 1024 * 1024;
+/// …and anyone else.
+const UPLOAD_MAX_STAFF: u64 = 1024 * 1024 * 1024;
 
 /// `path` is in one of `roots` (canonical folders) once links and `..` are resolved; a path that
 /// isn't there is in none.
@@ -1434,6 +1441,7 @@ mod tests {
         assert!(dfs.upload(&local, &music.join("Jingles")).is_ok());
         assert!(dfs.upload(&local, &music.join("..")).is_err(), "uploads stay in the library");
         assert!(dfs.upload(&local, &std::env::temp_dir()).is_err());
+        assert!(dfs.upload(&music.join("notes.txt"), &music).unwrap_err().contains("audio files"));
         let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(&music);
         let _ = std::fs::remove_file(&local);

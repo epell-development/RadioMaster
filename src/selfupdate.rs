@@ -129,18 +129,19 @@ pub fn install(asset: &Asset, progress: &dyn Fn(String)) -> Result<(), String> {
     replace_program(&program)
 }
 
-/// The download is the release file whole and unchanged: its size, and its SHA-256 where the
-/// release lists one.
+/// The download is the release file whole and unchanged: its size and the SHA-256 the release
+/// lists (GitHub gives every file one; without it, nothing is installed).
 fn check_download(asset: &Asset, data: &[u8]) -> Result<(), String> {
     use sha2::Digest;
     if asset.size > 0 && data.len() as u64 != asset.size {
         return Err(format!("the download of {} was cut short ({} of {} bytes)", asset.name, data.len(), asset.size));
     }
-    if let Some(want) = asset.digest.strip_prefix("sha256:") {
-        let got: String = sha2::Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect();
-        if !got.eq_ignore_ascii_case(want) {
-            return Err(format!("{} isn't the file the release lists (its SHA-256 differs)", asset.name));
-        }
+    let Some(want) = asset.digest.strip_prefix("sha256:") else {
+        return Err(format!("the release lists no SHA-256 for {}, so it can't be checked: update by hand", asset.name));
+    };
+    let got: String = sha2::Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect();
+    if !got.eq_ignore_ascii_case(want) {
+        return Err(format!("{} isn't the file the release lists (its SHA-256 differs)", asset.name));
     }
     Ok(())
 }
@@ -270,7 +271,7 @@ mod tests {
         assert!(check_download(&asset, b"abc").is_ok());
         assert!(check_download(&asset, b"abd").unwrap_err().contains("SHA-256"));
         assert!(check_download(&asset, b"ab").unwrap_err().contains("cut short"));
-        assert!(check_download(&Asset::default(), b"anything").is_ok(), "older releases list no digest");
+        assert!(check_download(&Asset::default(), b"anything").unwrap_err().contains("no SHA-256"));
     }
 
     #[test]
