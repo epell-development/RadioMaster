@@ -1404,6 +1404,7 @@ impl App {
                                 ui.radio_value(&mut core.cfg.mic_mode, MicMode::Duck, tr("Lower the music (slider)"));
                                 ui.radio_value(&mut core.cfg.mic_mode, MicMode::Mute, tr("Mute the music"));
                                 ui.radio_value(&mut core.cfg.mic_mode, MicMode::Pause, tr("Pause the music, carry on after"));
+                                ui.radio_value(&mut core.cfg.mic_mode, MicMode::Keep, tr("Keep the music at full level"));
                             });
                             ui.spacing_mut().slider_width = ((meters_w - 90.0) / 2.0).max(36.0);
                             ui.add(egui::Slider::new(&mut core.cfg.mic_gain, 0.0..=2.0).show_value(false))
@@ -1415,7 +1416,7 @@ impl App {
                             )
                             .on_hover_text(tr("Music level while the mic is on (left = silent, right = no ducking)"))
                             .on_disabled_hover_text(tr(
-                                "The music is muted or paused while the mic is on (right-click the Mic button to change)",
+                                "The music is muted, paused or kept at full level while the mic is on (right-click the Mic button to change)",
                             ));
                         });
                     });
@@ -2332,7 +2333,7 @@ impl App {
         let outs = &mut core.cfg.audio_devices.outputs;
         for n in &self.dev_outputs {
             if !outs.iter().any(|o| &o.name == n) {
-                outs.push(crate::config::OutputSel { name: n.clone(), enabled: false, gain: 1.0 });
+                outs.push(crate::config::OutputSel { name: n.clone(), enabled: false, gain: 1.0, studio: false });
             }
         }
         if !outs.iter().any(|o| o.enabled) {
@@ -2360,6 +2361,7 @@ impl App {
         ui.add_space(4.0);
         ui.heading(tr("Outputs"));
         ui.label(tr("Tick every device that should play the on-air mix. The first working device is the primary; the others get a copy (monitor / headphones / second sound card). Each has its own volume."));
+        ui.label(tr("Mark the speakers in the studio as Studio monitor: they go quiet while the mic is on, so the mic doesn't pick them up. The stream and the other outputs keep playing."));
         let mut changed = false;
         let mut to_top = None;
         let n = core.cfg.audio_devices.outputs.len();
@@ -2394,6 +2396,13 @@ impl App {
                     self.audio.set_gain(&name, o.gain);
                 }
                 ui.label(format!("{}%", (o.gain * 100.0).round() as i32));
+                if ui
+                    .checkbox(&mut o.studio, tr("Studio monitor"))
+                    .on_hover_text(tr("Muted while the mic is on (the stream keeps playing)"))
+                    .changed()
+                {
+                    changed = true;
+                }
                 if i > 0 && ui.small_button(tr("⬆ primary")).on_hover_text(tr("Make this the primary output")).clicked() {
                     to_top = Some(i);
                 }
@@ -2438,6 +2447,8 @@ impl App {
             }
             ui.radio_value(&mut core.cfg.mic_mode, MicMode::Mute, tr("is muted (it keeps playing silently)"));
             ui.radio_value(&mut core.cfg.mic_mode, MicMode::Pause, tr("is paused, and carries on when the mic goes off"));
+            ui.radio_value(&mut core.cfg.mic_mode, MicMode::Keep, tr("keeps playing at full level"));
+            ui.small(tr("This is what the stream hears. Outputs marked Studio monitor are always muted while the mic is on."));
         }
         ui.add_space(8.0);
         ui.separator();
@@ -3364,7 +3375,11 @@ impl eframe::App for App {
         self.left_workspace(ctx, &mut core);
         self.playlist(ctx, &mut core);
         self.aux_windows(ctx, &mut core);
-        let duck = if core.cfg.mic_mode == crate::config::MicMode::Duck { core.cfg.mic_duck } else { 0.0 };
+        let duck = match core.cfg.mic_mode {
+            crate::config::MicMode::Duck => core.cfg.mic_duck,
+            crate::config::MicMode::Keep => 1.0,
+            crate::config::MicMode::Mute | crate::config::MicMode::Pause => 0.0,
+        };
         core.engine.set_mic(self.mic_on, core.cfg.mic_gain, duck);
         self.tag_window(ctx, &mut core);
         self.profiles_window(ctx, &mut core);
