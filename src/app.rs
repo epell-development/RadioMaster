@@ -109,6 +109,7 @@ enum Dlg {
     ExportCsv(PathBuf),
     AzUpload(Vec<PathBuf>),
     RotFiles(usize, Vec<PathBuf>),
+    CleanupFolder(PathBuf),
 }
 
 enum PlAct {
@@ -130,6 +131,8 @@ use tools::ToolWin;
 mod adsui;
 #[path = "aztool.rs"]
 mod aztool;
+#[path = "cleanupui.rs"]
+mod cleanupui;
 #[path = "panes.rs"]
 mod panes;
 #[path = "pltools.rs"]
@@ -208,6 +211,7 @@ pub struct App {
     /// where ffmpeg was found (None = look again)
     ffmpeg_found: Option<Option<String>>,
     ads: adsui::AdsUi,
+    clean: cleanupui::CleanUi,
     workzones: WorkzoneSet,
     saved_layout: String,
     browsers: Browsers,
@@ -452,6 +456,7 @@ impl App {
             rep: Default::default(),
             ffmpeg_found: None,
             ads: Default::default(),
+            clean: Default::default(),
             workzones,
             saved_layout: String::new(),
             browsers: Browsers::new(),
@@ -631,6 +636,7 @@ impl App {
                     core.cfg.ffmpeg_path = p.to_string_lossy().to_string();
                     self.ffmpeg_found = None;
                 }
+                Dlg::CleanupFolder(p) => self.clean.extra = Some(p),
                 Dlg::LibFolder(p) => {
                     core.cfg.library_folders.push(p.to_string_lossy().to_string());
                     core.start_scan();
@@ -803,6 +809,7 @@ impl App {
                         ToolWin::AzuraCast,
                         ToolWin::Reports,
                         ToolWin::History,
+                        ToolWin::Cleanup,
                         ToolWin::Notepad,
                         ToolWin::Plugins,
                     ] {

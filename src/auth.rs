@@ -43,7 +43,7 @@ impl Default for Perms {
             azuracast: true,
             settings: true,
             denied: 0,
-            v: 1,
+            v: 2,
         }
     }
 }
@@ -65,9 +65,10 @@ pub mod tool {
     pub const FILE_EXPLORER: usize = 12;
     pub const SONG_REQUESTS: usize = 13;
     pub const WEB: usize = 14;
+    pub const LIBRARY_CLEANUP: usize = 15;
 }
 
-pub const TOOLS: [(&str, &str); 15] = [
+pub const TOOLS: [(&str, &str); 16] = [
     ("Track editor", "Tags, cue points and fades"),
     ("Playlist generator", "Make playlists from categories and rules"),
     ("Advertisement scheduler", "Adverts, ad breaks and the every-N-songs rules"),
@@ -83,6 +84,7 @@ pub const TOOLS: [(&str, &str); 15] = [
     ("File explorer", "Browse the computer's folders"),
     ("Song requests", "The song requests tab"),
     ("Web panels", "Web pages inside RadioMaster"),
+    ("Library cleanup", "Remove duplicates, fix lost tracks, tidy genre and artist tags"),
 ];
 
 impl Perms {
@@ -90,7 +92,7 @@ impl Perms {
     pub fn presenter() -> Self {
         use tool::*;
         let mut p = Perms { streaming: false, settings: false, ..Default::default() };
-        for t in [GENERATOR, ADS, AUDIO_FX, AZURACAST, PLUGINS, SCHEDULER] {
+        for t in [GENERATOR, ADS, AUDIO_FX, AZURACAST, PLUGINS, SCHEDULER, LIBRARY_CLEANUP] {
             p.set_tool(t, false);
         }
         p
@@ -127,10 +129,16 @@ impl Perms {
     }
     /// Accounts from before per-tool access: carry the old group switches over.
     fn migrate(&mut self) {
+        use tool::*;
         if self.v >= 1 {
+            // v2 added Library cleanup (it deletes files and rewrites tags): accounts that can't
+            // change settings don't get it until an administrator allows it
+            if self.v < 2 && !self.settings {
+                self.set_tool(LIBRARY_CLEANUP, false);
+            }
+            self.v = self.v.max(2);
             return;
         }
-        use tool::*;
         if !self.tools {
             for t in [TRACK_EDITOR, GENERATOR, ADS, SCHEDULER] {
                 self.set_tool(t, false);
@@ -144,9 +152,12 @@ impl Perms {
                 self.set_tool(t, false);
             }
         }
+        if !self.settings {
+            self.set_tool(LIBRARY_CLEANUP, false);
+        }
         self.tools = true;
         self.azuracast = true;
-        self.v = 1;
+        self.v = 2;
     }
 }
 
@@ -274,5 +285,20 @@ mod tests {
         assert_eq!(f.denied, 0);
         let pr = Perms::presenter();
         assert!(pr.tool(tool::TRACK_EDITOR) && !pr.tool(tool::AUDIO_FX) && pr.edit_playlists && !pr.settings);
+        assert!(!pr.tool(tool::LIBRARY_CLEANUP));
+    }
+
+    #[test]
+    fn library_cleanup_needs_settings_access() {
+        let mut presenter: Perms = serde_json::from_str(r#"{"settings":false,"denied":0,"v":1}"#).unwrap();
+        presenter.migrate();
+        assert!(!presenter.tool(tool::LIBRARY_CLEANUP) && presenter.tool(tool::TRACK_EDITOR));
+        let mut manager: Perms = serde_json::from_str(r#"{"settings":true,"denied":0,"v":1}"#).unwrap();
+        manager.migrate();
+        assert!(manager.tool(tool::LIBRARY_CLEANUP));
+        // an administrator's later choice sticks
+        let mut allowed: Perms = serde_json::from_str(r#"{"settings":false,"denied":0,"v":2}"#).unwrap();
+        allowed.migrate();
+        assert!(allowed.tool(tool::LIBRARY_CLEANUP));
     }
 }
