@@ -556,7 +556,21 @@ impl App {
         }
         let entries = self.fx_list.get(&key).filter(|(d, _, _)| *d == dir).map(|(_, _, l)| l.clone()).unwrap_or_default();
         let mut add: Vec<PathBuf> = vec![];
+        // only the rows in view are drawn; the others just take their space (big folders stay smooth)
+        let row_h = (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
+            .max(ui.spacing().interact_size.y)
+            + ui.spacing().item_spacing.y;
+        let mut skipped = 0.0;
         for (is_dir, p) in entries.iter().take(2000) {
+            let row = egui::Rect::from_min_size(ui.cursor().min + egui::vec2(0.0, skipped), egui::vec2(1.0, row_h));
+            if !ui.is_rect_visible(row) {
+                skipped += row_h;
+                continue;
+            }
+            if skipped > 0.0 {
+                ui.add_space(skipped);
+                skipped = 0.0;
+            }
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let r =
                 ui.selectable_label(false, if *is_dir { format!("📁 {name}") } else { format!("🎵 {name}") }).interact(egui::Sense::drag());
@@ -587,6 +601,9 @@ impl App {
                     ui.close_menu();
                 }
             });
+        }
+        if skipped > 0.0 {
+            ui.add_space(skipped);
         }
         if entries.is_empty() && !listing {
             ui.label(RichText::new(tr("No folders or audio files here.")).color(GRAY));
