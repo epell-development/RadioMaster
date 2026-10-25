@@ -253,6 +253,8 @@ impl Deck {
                 }
                 break (l, r);
             };
+            // waiting is not an error and not the end: this block stops here (the rest is silence),
+            // `src` is kept, and the next block carries on where the decoder has got to
             if ended || waiting {
                 break;
             }
@@ -434,7 +436,8 @@ pub struct Engine {
     /// mirrors `Shared::mic_on` without the lock, for the studio monitor gates
     mic_live: Arc<AtomicBool>,
     /// the last `set_mic` values (a lock of its own, so the audio thread is never waited on)
-    mic_set: Arc<Mutex<Option<(bool, f32, f32)>>>,
+    /// (gain and duck as bits: any change at all, however small, counts as a change)
+    mic_set: Arc<Mutex<Option<(bool, u32, u32)>>>,
 }
 
 fn open(path: &Path) -> Result<(Pcm, f32)> {
@@ -712,7 +715,8 @@ impl Engine {
 
     /// Called every UI frame: the mixer lock is only taken when something actually changed.
     pub fn set_mic(&self, on: bool, gain: f32, duck: f32) {
-        if std::mem::replace(&mut *self.mic_set.lock(), Some((on, gain, duck))) == Some((on, gain, duck)) {
+        let key = Some((on, gain.to_bits(), duck.to_bits()));
+        if std::mem::replace(&mut *self.mic_set.lock(), key) == key {
             return;
         }
         self.mic_live.store(on, Ordering::Relaxed);
@@ -1079,14 +1083,18 @@ mod tests {
         let first: Vec<f32> = (0..AHEAD_BLOCK * 2).map(|_| bus.next().unwrap()).collect();
         assert!(first.iter().all(|x| (x - 0.5).abs() < 1e-6), "the first blocks are ready as soon as the track starts");
         // the decoder is stuck on the disk now: the mix carries on (silence) instead of waiting for it
-        let stalled: Vec<f32> = (0..BLOCK_FRAMES * 2).map(|_| bus.next().unwrap()).collect();
-        assert!(t.elapsed() < std::time::Duration::from_millis(100), "the mix waited for the disk");
+        let mix_block = 2048; // one mixer refill: 1024 stereo frames
+        let stalled: Vec<f32> = (0..mix_block).map(|_| bus.next().unwrap()).collect();
+        // (waiting would have taken the full 200 ms stall; the margin keeps a busy test machine green)
+        assert!(t.elapsed() < std::time::Duration::from_millis(150), "the mix waited for the disk");
         assert!(stalled.iter().all(|&x| x == 0.0));
         assert!(!engine.take_ended(), "a stall is not the end of the track");
-        // it catches up and the whole track is played, then reported as ended
+        // it catches up and the whole track is played, then reported as ended (the decoder needs
+        // about 0.8 s; a generous deadline so a loaded machine can't end the loop early)
         let mut heard = first.len();
-        for _ in 0..2000 {
-            heard += (0..BLOCK_FRAMES * 2).map(|_| bus.next().unwrap()).filter(|x| (x - 0.5).abs() < 1e-6).count();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            heard += (0..mix_block).map(|_| bus.next().unwrap()).filter(|x| (x - 0.5).abs() < 1e-6).count();
             if engine.take_ended() {
                 break;
             }
