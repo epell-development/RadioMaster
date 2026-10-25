@@ -35,13 +35,24 @@ p { margin: 0; }
 /* ---------- header */
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
 header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
-header.top .wrap { display: flex; align-items: center; gap: 24px; padding-block: 12px; }
+header.top .wrap { display: flex; align-items: center; gap: 18px; padding-block: 12px; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--fg); font: 700 1.5rem/1 var(--display); letter-spacing: .01em; }
 .brand img { width: 34px; height: 34px; border-radius: 8px; }
 .brand b { color: var(--accent); font-weight: 700; }
 nav.links { display: flex; gap: 22px; margin-left: auto; align-items: center; }
 nav.links a { color: var(--muted); text-decoration: none; font-weight: 500; font-size: .95rem; }
-nav.links a:hover { color: var(--fg); }
+nav.links a:hover, nav.links a.active { color: var(--fg); }
+nav.links a.active { box-shadow: inset 0 -2px 0 var(--accent); }
+/* the ☰ button: only on phones, and only once site.js has run */
+.menu-btn { display: none; flex: none; width: 42px; height: 40px; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); cursor: pointer; }
+.menu-btn span, .menu-btn span::before, .menu-btn span::after { display: block; width: 18px; height: 2px; border-radius: 1px; background: currentColor; transition: transform .2s ease, background .2s ease; }
+.menu-btn span { position: relative; }
+.menu-btn span::before, .menu-btn span::after { content: ""; position: absolute; left: 0; }
+.menu-btn span::before { top: -6px; }
+.menu-btn span::after { top: 6px; }
+header.top.open .menu-btn span { background: transparent; }
+header.top.open .menu-btn span::before { transform: translateY(6px) rotate(45deg); }
+header.top.open .menu-btn span::after { transform: translateY(-6px) rotate(-45deg); }
 .btn { display: inline-flex; align-items: center; gap: 10px; padding: 12px 20px; border-radius: 6px; font: 600 1rem/1 var(--body); text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: transform .15s ease, background .15s ease; }
 .btn:hover { transform: translateY(-1px); }
 .btn.primary { background: var(--accent); color: #fff; }
@@ -49,7 +60,18 @@ nav.links a:hover { color: var(--fg); }
 .btn.ghost { border-color: var(--line); color: var(--fg); background: var(--panel); }
 .btn.small { padding: 8px 14px; font-size: .9rem; }
 .btn small { font: 400 .8rem/1 var(--mono); opacity: .8; }
-@media (max-width: 760px) { nav.links a.hide-sm { display: none; } }
+@media (max-width: 760px) {
+  header.top .wrap { flex-wrap: wrap; gap: 10px 12px; }
+  .nav-dl { margin-left: auto; }
+  /* without the script the links wrap onto their own row under the logo */
+  nav.links { order: 3; flex: 1 0 100%; flex-wrap: wrap; gap: 6px 18px; margin-left: 0; }
+  header.top.has-menu nav.links { display: none; }
+  header.top.has-menu .menu-btn { display: inline-flex; }
+  header.top.has-menu.open nav.links { display: grid; gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+  header.top.has-menu.open nav.links a { padding: 13px 2px; font-size: 1.05rem; border-bottom: 1px solid var(--line); }
+  header.top.has-menu.open nav.links a:last-child { border-bottom: 0; }
+  header.top.has-menu.open nav.links a.active { box-shadow: inset 3px 0 0 var(--accent); padding-left: 12px; }
+}
 
 /* ---------- hero */
 .hero { padding-block: 56px 40px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 48px; align-items: center; }
@@ -200,7 +222,7 @@ footer .wrap { display: grid; gap: 10px; }
 footer .row { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; }
 footer a { color: var(--muted); }
 
-@media (prefers-reduced-motion: reduce) { .lamp { animation: none; } .btn { transition: none; } html { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { .lamp { animation: none; } .btn, .menu-btn span, .menu-btn span::before, .menu-btn span::after { transition: none; } html { scroll-behavior: auto; } }
 
 /* ---------- updates page */
 .release { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 32px; padding-block: 36px; border-top: 1px solid var(--line); }
@@ -237,3 +259,31 @@ nav.links a.active { color: var(--fg); }
 .prose .code pre { padding-top: 14px; }
 .prose table { margin: 4px 0; }
 .related { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.page-top { padding-block: 56px 24px; }
+.prose .tip { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--panel); padding: 14px 16px; color: var(--muted); }
+.prose .tip b { color: var(--fg); }
+.prose .warn { border-left-color: var(--last); }
+.prose kbd { font: 600 .82em/1 var(--mono); color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; }
+.prose .rundown-table { margin: 4px 0; }
+.prose h2[id], .prose h3[id] { scroll-margin-top: 90px; }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.toc a { font: 500 .85rem/1 var(--body); color: var(--muted); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; background: var(--panel); }
+.toc a:hover { color: var(--fg); border-color: var(--accent); }
+/* guide lists (home page, /guides/ and the end of each guide) */
+.guide-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.guide-card { display: grid; gap: 8px; align-content: start; padding: 20px 20px 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); text-decoration: none; font-size: .95rem; transition: border-color .15s ease, transform .15s ease; }
+.guide-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.guide-card .tag { font: 600 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent-2); }
+.guide-card b { font: 600 1.35rem/1.1 var(--display); color: var(--fg); }
+.guide-group { font-size: clamp(1.5rem, 3vw, 2rem); margin: 40px 0 16px; }
+.guide-group:first-child { margin-top: 0; }
+@media (max-width: 900px) { .guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .guide-grid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .guide-card { transition: none; } }
+/* broadcast from anywhere */
+.anywhere { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; align-items: start; }
+.anywhere ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; counter-reset: a; }
+.anywhere li { background: var(--panel); padding: 18px 20px 18px 62px; position: relative; color: var(--muted); counter-increment: a; }
+.anywhere li::before { content: counter(a, decimal-leading-zero); position: absolute; left: 20px; top: 19px; font: 600 .85rem/1 var(--mono); color: var(--accent-2); }
+.anywhere li b { display: block; color: var(--fg); font: 600 1.2rem/1.1 var(--display); margin-bottom: 4px; letter-spacing: .01em; }
+@media (max-width: 900px) { .anywhere { grid-template-columns: 1fr; gap: 28px; } }

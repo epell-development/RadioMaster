@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>How to Make a RadioMaster Plugin: Now Playing to Discord, OBS and More</title>
+<meta name="description" content="Write a RadioMaster plugin in any language: run scripts when a song starts, the hour changes or an encoder drops, post now playing to Discord or OBS, and control the station with RM: commands or the remote control API.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/plugins/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to make a RadioMaster plugin">
+<meta property="og:description" content="Run your own scripts when a song starts or the hour changes, and send commands back to RadioMaster.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/plugins/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="RadioMaster radio automation software">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to make a RadioMaster plugin">
+<meta name="twitter:description" content="Run your own scripts when a song starts or the hour changes, and send commands back to RadioMaster.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/plugins/#article",
+      "headline": "How to make a RadioMaster plugin",
+      "description": "Write a RadioMaster plugin in any language: run scripts when a song starts, the hour changes or an encoder drops, post now playing to Discord or OBS, and control the station with RM: commands or the remote control API.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/plugins/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Make a plugin",
+          "item": "https://radiomaster.dovafm.com/guides/plugins/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Make a plugin</nav>
+    <p class="eyebrow">Guide · Extend RadioMaster</p>
+    <h1 class="page-h">How to make a RadioMaster plugin</h1>
+    <p class="lede" style="margin-top:16px">A plugin is a small program, in any language, that RadioMaster runs when something happens on air. Post the current song to Discord, write it to a file for OBS, light the ON AIR sign, log to your own database, or control the station from another system.</p>
+    <nav class="toc" aria-label="On this page"><a href="#start">Start from the example</a><a href="#manifest">plugin.json</a><a href="#events">Events</a><a href="#data">Event data</a><a href="#control">Control RadioMaster</a><a href="#examples">Examples</a><a href="#api">Remote control API</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="start" style="margin-top:0">Start from the example</h2>
+      <ol>
+        <li>Open <b>Tools → Plugins</b> and press <b>📂 Open plugins folder</b>. RadioMaster creates the folder, with a working example in <code>example-now-playing</code>, and opens it. The window shows where the folder is.</li>
+        <li>Copy the example folder, rename it, and change its <code>plugin.json</code> and script.</li>
+        <li>Press <b>⟳ Reload plugins</b>. Your plugin appears in the list with a switch to turn it on or off.</li>
+        <li>Press <b>Send a test event</b> to run it straight away. Anything it prints shows up in the plugin's <b>Log</b>.</li>
+      </ol>
+
+      <h2 id="manifest">plugin.json</h2>
+      <p>Every plugin is a folder inside <code>plugins</code> with a <code>plugin.json</code>:</p>
+      <div class="code"><pre>{
+  &quot;name&quot;: &quot;Now playing to Discord&quot;,
+  &quot;description&quot;: &quot;Posts every song to our #now-playing channel.&quot;,
+  &quot;command&quot;: &quot;python&quot;,
+  &quot;args&quot;: [&quot;discord.py&quot;],
+  &quot;events&quot;: [&quot;track_started&quot;],
+  &quot;mode&quot;: &quot;event&quot;
+}</pre></div>
+      <div class="rundown-table"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td class="k">name, description</td><td>Shown in the Plugins window</td></tr><tr><td class="k">command, args</td><td>The program to run. It starts in the plugin's own folder</td></tr><tr><td class="k">events</td><td>Which events it wants (below), or <code>["*"]</code> for all of them</td></tr><tr><td class="k">mode</td><td><code>"event"</code> (the default) runs once per event. <code>"service"</code> starts with RadioMaster and keeps running</td></tr></tbody></table></div>
+
+      <h2 id="events">Events</h2>
+      <div class="rundown-table"><table><thead><tr><th>Event</th><th>When</th><th>Extra fields</th></tr></thead><tbody><tr><td class="k">app_start</td><td>RadioMaster started</td><td>version</td></tr><tr><td class="k">app_exit</td><td>RadioMaster is closing</td><td></td></tr><tr><td class="k">track_started</td><td>A song, voice track or jingle from the playlist started</td><td>title, artist, album, genre, year, path, duration, text</td></tr><tr><td class="k">item_started</td><td>Another playlist row started (stream relay, line input, speech, teaser…)</td><td>title, text</td></tr><tr><td class="k">playback_stopped</td><td>Playback stopped</td><td></td></tr><tr><td class="k">hour</td><td>The top of every hour</td><td>hour</td></tr><tr><td class="k">encoder</td><td>A stream encoder connected, failed or stopped</td><td>encoder, name, state</td></tr></tbody></table></div>
+      <p>Every event also has <code>event</code> and <code>time</code> (ISO 8601).</p>
+
+      <h2 id="data">How a plugin gets the event</h2>
+      <ul>
+        <li><b>Event plugins</b> get the event as one line of JSON on standard input, and as environment variables: <code>RM_EVENT</code>, <code>RM_TITLE</code>, <code>RM_ARTIST</code>, <code>RM_PATH</code> and so on (each field in capitals with <code>RM_</code> in front). A run that takes longer than 60 seconds is stopped.</li>
+        <li><b>Service plugins</b> get one JSON line on standard input per event, for as long as RadioMaster runs. When RadioMaster closes, standard input is closed: exit when that happens.</li>
+      </ul>
+
+      <h2 id="control">Control RadioMaster from a plugin</h2>
+      <p>Print a line starting with <code>RM:</code> and RadioMaster runs it as a <a href="/guides/event-scheduler/#commands">station command</a>:</p>
+      <div class="code"><pre>RM: STOP
+RM: VOLUME 60
+RM: PLAYLIST Evening
+RM: ENCODER START 1
+RM: RULE Station IDs
+RM: GENERATE Overnight</pre></div>
+
+      <h2 id="examples">Examples</h2>
+      <h3>Write the current song to a file for OBS (Python)</h3>
+      <div class="code"><pre>import json, sys
+e = json.loads(sys.stdin.readline())
+open(&quot;nowplaying.txt&quot;, &quot;w&quot;, encoding=&quot;utf-8&quot;).write(f&quot;{e[&#x27;artist&#x27;]} - {e[&#x27;title&#x27;]}&quot;)</pre></div>
+      <h3>Post to a Discord webhook (PowerShell)</h3>
+      <div class="code"><pre>$e = [Console]::In.ReadLine() | ConvertFrom-Json
+$body = @{ content = &quot;Now playing: $($e.artist) - $($e.title)&quot; } | ConvertTo-Json
+Invoke-RestMethod -Uri &quot;https://discord.com/api/webhooks/…&quot; -Method Post -Body $body -ContentType &quot;application/json&quot;</pre></div>
+      <p>with <code>"command": "powershell", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "discord.ps1"]</code>.</p>
+      <h3>Lower the volume at the top of every hour (a service, Python)</h3>
+      <div class="code"><pre>import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    if e[&quot;event&quot;] == &quot;hour&quot;:
+        print(&quot;RM: VOLUME 70&quot;, flush=True)</pre></div>
+      <h3>Shell script (macOS and Linux)</h3>
+      <div class="code"><pre>printf &#x27;%s - %s\n&#x27; &quot;$RM_ARTIST&quot; &quot;$RM_TITLE&quot; &gt; nowplaying.txt</pre></div>
+      <p class="tip warn"><b>Only install plugins you trust.</b> Plugins run with your account's rights. While the app is connected to RadioMaster Server, plugins keep running on your own computer.</p>
+
+      <h2 id="api">The remote control API</h2>
+      <p>To control RadioMaster from another computer, a stream deck or a web page, turn on the remote control API in <b>Settings → Remote API</b>: tick <b>Enable</b>, choose the port (9258 by default) and an API password, then restart RadioMaster. Every call is a simple GET that answers with JSON:</p>
+      <div class="rundown-table"><table><thead><tr><th>Call</th><th>Does</th></tr></thead><tbody><tr><td class="k">/api/status</td><td>State, artist, title, position, duration, volume, next and the playlist length</td></tr><tr><td class="k">/api/play, /api/pause, /api/stop</td><td>Play, pause or resume, stop</td></tr><tr><td class="k">/api/next, /api/prev</td><td>Next or previous</td></tr><tr><td class="k">/api/volume?v=0.8</td><td>Set the volume, 0 to 1</td></tr><tr><td class="k">/api/seek?s=30</td><td>Jump to 30 seconds into the song</td></tr><tr><td class="k">/api/cart?i=0</td><td>Fire cart pad 1 (counting from 0)</td></tr><tr><td class="k">/api/insert?path=…</td><td>Put a file after the song on air</td></tr></tbody></table></div>
+      <p>Add <code>&amp;pw=PASSWORD</code> to every call when a password is set, for example:</p>
+      <div class="code"><pre>curl &quot;http://192.168.1.10:9258/api/status?pw=yourpassword&quot;</pre></div>
+      <p>The API is plain HTTP, so keep it on your own network.</p>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
+<a class="guide-card" href="/guides/stream-to-icecast-shoutcast/"><span class="tag">Get started</span><b>Stream to Icecast or Shoutcast</b><span>Add an encoder, pick a format and bitrate, and send song titles to your listeners.</span></a>
+<a class="guide-card" href="/guides/playlist-generator/"><span class="tag">Run the station</span><b>Use the playlist generator</b><span>Categories, templates and patterns that build hours of programming in one click.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

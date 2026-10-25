@@ -895,6 +895,8 @@ impl App {
         let edit = self.perm.edit_playlists;
         let tools = self.perm.tool(crate::auth::tool::GENERATOR);
         let vt = edit && self.perm.tool(crate::auth::tool::VOICE_TRACK);
+        let keys = self.controls.clone();
+        let k = |id: &str| keys.key_label(id);
         fn item(ui: &mut egui::Ui, enabled: bool, text: &str, sc: &str) -> bool {
             let mut b = egui::Button::new(text);
             if !sc.is_empty() {
@@ -907,29 +909,29 @@ impl App {
                 false
             }
         }
-        if item(ui, tools, tr("🎲 Playlist Generator Pro…"), "Ctrl+G") {
+        if item(ui, tools, tr("🎲 Playlist Generator Pro…"), &k("generator")) {
             self.open_tool(ToolWin::Generator);
         }
         ui.separator();
-        if item(ui, edit, tr("Add file…"), "Alt+F") {
+        if item(ui, edit, tr("Add file…"), &k("add_files")) {
             self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::AddFiles(v)));
         }
-        if item(ui, edit, tr("Add folder…"), "Alt+D") {
+        if item(ui, edit, tr("Add folder…"), &k("add_folder")) {
             self.pick(Pick::Folder, tr("Add folder"), |fs, v| Some(Dlg::add_folder(fs, v.into_iter().next()?)));
         }
-        if item(ui, edit, tr("Add URL…"), "Alt+U") {
+        if item(ui, edit, tr("Add URL…"), &k("add_url")) {
             self.open_item_dlg(DlgKind::Url);
         }
         if item(ui, edit, tr("Add Line Input…"), "") {
             self.open_item_dlg(DlgKind::LineIn);
         }
-        if item(ui, edit, tr("Add command…"), "Alt+C") {
+        if item(ui, edit, tr("Add command…"), &k("add_command")) {
             self.open_item_dlg(DlgKind::Command);
         }
         if item(ui, edit, tr("Add event…"), "") {
             self.open_item_dlg(DlgKind::Event);
         }
-        if item(ui, edit, tr("Add timed pause…"), "Ctrl+P") {
+        if item(ui, edit, tr("Add timed pause…"), &k("add_pause")) {
             self.open_item_dlg(DlgKind::Pause);
         }
         if item(ui, edit, tr("Add teaser…"), "") {
@@ -938,20 +940,20 @@ impl App {
         if item(ui, edit, tr("Add time announcement…"), "") {
             self.open_item_dlg(DlgKind::TimeAnnounce);
         }
-        if item(ui, edit, tr("Add text to speech…"), "Alt+T") {
+        if item(ui, edit, tr("Add text to speech…"), &k("add_tts")) {
             self.open_item_dlg(DlgKind::Tts);
         }
-        if item(ui, edit, tr("Add comment…"), "Alt+W") {
+        if item(ui, edit, tr("Add comment…"), &k("add_comment")) {
             self.open_item_dlg(DlgKind::Comment);
         }
         if item(ui, edit, tr("Add container…"), "") {
             self.open_item_dlg(DlgKind::Container);
         }
         ui.separator();
-        if item(ui, edit, tr("Insert voice track…"), "Ctrl+W") {
+        if item(ui, edit, tr("Insert voice track…"), &k("insert_voice")) {
             self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Insert voice track"), |_, v| Some(Dlg::InsertVoice(v)));
         }
-        if item(ui, vt, tr("🔴 Record voice track…"), "Ctrl+R") {
+        if item(ui, vt, tr("🔴 Record voice track…"), &k("record_voice")) {
             self.show_vt = true;
         }
         ui.separator();
@@ -973,7 +975,7 @@ impl App {
         ui.separator();
         ui.menu_button(tr("Extra"), |ui| {
             let v = self.view_pl;
-            if item(ui, edit, tr("Add hour marker…"), "") {
+            if item(ui, edit, tr("Add hour marker…"), &k("add_hour")) {
                 self.open_item_dlg(DlgKind::HourMarker);
             }
             ui.separator();
@@ -1025,293 +1027,15 @@ impl App {
                 self.sel.clear();
             }
         });
-        if item(ui, true, tr("📝 Notepad…"), "T") {
+        if item(ui, true, tr("📝 Notepad…"), &k("notepad")) {
             self.open_tool(ToolWin::Notepad);
         }
-        if item(ui, true, tr("🔍 Find…"), "Ctrl+F") {
+        if item(ui, true, tr("🔍 Find…"), &k("find")) {
             self.show_find = true;
             self.find_focus = true;
         }
-    }
-
-    /// Keyboard shortcuts. Ignored while typing in a text box; each needs the matching permission.
-    pub(super) fn shortcuts(&mut self, ctx: &egui::Context, core: &mut Playout) {
-        use egui::{Key, Modifiers};
-        if ctx.wants_keyboard_input() {
-            return;
-        }
-        let p = self.perm;
-        let press = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
-        // (egui ignores extra Shift/Alt on a shortcut, so the more specific ones are checked first)
-        // ---- playback
-        if p.playback {
-            // Shift+F1 … Shift+F12: cart pads 1–12
-            let fkeys = [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6, Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12];
-            for (i, k) in fkeys.into_iter().enumerate() {
-                if press(Modifiers::SHIFT, k) && p.jingles {
-                    core.trigger_cart(i);
-                }
-            }
-            if press(Modifiers::NONE, Key::F5) || press(Modifiers::NONE, Key::Enter) {
-                let s = if self.view_pl == core.playing_tab || self.sel.is_empty() { self.sel.iter().next().copied() } else { None };
-                match s {
-                    Some(i) if self.view_pl != core.playing_tab => {
-                        let xf = if core.state == PlayState::Playing { core.cfg.crossfade_secs } else { 0.0 };
-                        core.with_tab(self.view_pl, |c| c.play_index(i, xf));
-                    }
-                    Some(i) if core.state == PlayState::Playing => {
-                        let xf = core.cfg.crossfade_secs;
-                        core.play_index(i, xf);
-                    }
-                    _ => core.play_pressed(s),
-                }
-            }
-            if press(Modifiers::NONE, Key::F6) {
-                core.pause_toggle();
-            }
-            if press(Modifiers::NONE, Key::F7) {
-                core.stop();
-            }
-            if press(Modifiers::NONE, Key::F8) {
-                core.next();
-            }
-            if press(Modifiers::NONE, Key::F9) {
-                core.prev();
-            }
-            if press(Modifiers::COMMAND, Key::J) && p.jingles {
-                core.stop_carts();
-            }
-            if press(Modifiers::COMMAND, Key::M) {
-                self.toggle_mic(core);
-            }
-            for (k, d) in [(Key::ArrowUp, 0.05f32), (Key::ArrowDown, -0.05)] {
-                if press(Modifiers::ALT, k) {
-                    let v = (core.cfg.volume + d).clamp(0.0, 1.0);
-                    core.set_volume(v);
-                }
-            }
-        }
-        // ---- playlist editing
-        if p.edit_playlists {
-            if press(Modifiers::ALT, Key::F) || press(Modifiers::NONE, Key::Insert) {
-                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::AddFiles(v)));
-            }
-            if press(Modifiers::ALT, Key::D) {
-                self.pick(Pick::Folder, tr("Add folder"), |fs, v| Some(Dlg::add_folder(fs, v.into_iter().next()?)));
-            }
-            if press(Modifiers::ALT, Key::U) {
-                self.open_item_dlg(DlgKind::Url);
-            }
-            if press(Modifiers::ALT, Key::C) {
-                self.open_item_dlg(DlgKind::Command);
-            }
-            if press(Modifiers::ALT, Key::T) {
-                self.open_item_dlg(DlgKind::Tts);
-            }
-            if press(Modifiers::COMMAND, Key::P) {
-                self.open_item_dlg(DlgKind::Pause);
-            }
-            if press(Modifiers::ALT, Key::W) {
-                self.open_item_dlg(DlgKind::Comment);
-            }
-            if press(Modifiers::COMMAND, Key::H) {
-                self.open_item_dlg(DlgKind::HourMarker);
-            }
-            if press(Modifiers::COMMAND, Key::W) {
-                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Insert voice track"), |_, v| Some(Dlg::InsertVoice(v)));
-            }
-            if press(Modifiers::COMMAND, Key::R) && p.tool(crate::auth::tool::VOICE_TRACK) {
-                self.show_vt = true;
-            }
-            if press(Modifiers::COMMAND, Key::N) {
-                self.tab_ops.push(super::plview::TabOp::New);
-            }
-            if press(Modifiers::COMMAND, Key::O) {
-                self.pick(Pick::File(M3U.0, M3U.1), tr("Open playlist"), |fs, v| Some(Dlg::load_m3u(fs, v.into_iter().next()?)));
-            }
-            if press(Modifiers::COMMAND, Key::S) {
-                let name = format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));
-                self.dlg(move || {
-                    rfd::FileDialog::new().add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u)
-                });
-            }
-            // Ctrl+↑ / Ctrl+↓ move the selected rows
-            for (k, up) in [(Key::ArrowUp, true), (Key::ArrowDown, false)] {
-                if press(Modifiers::COMMAND, k) && !self.sel.is_empty() {
-                    let sel = self.sel.clone();
-                    self.sel = core.with_tab(self.view_pl, |c| c.move_sel(&sel, up));
-                    self.scroll_to = self.sel.iter().next().copied();
-                }
-            }
-        }
-        if p.tools {
-            if press(Modifiers::COMMAND, Key::G) {
-                self.open_tool(ToolWin::Generator);
-            }
-            if press(Modifiers::COMMAND, Key::E) {
-                let row = self.sel.iter().next().copied();
-                core.with_tab(self.view_pl, |c| self.open_fade_editor(c, row));
-            }
-        }
-        // ---- moving around
-        let len = core.tab_len(self.view_pl);
-        for (k, up) in [(Key::ArrowUp, true), (Key::ArrowDown, false)] {
-            let shift = ctx.input(|i| i.modifiers.shift);
-            if (press(Modifiers::NONE, k) || press(Modifiers::SHIFT, k)) && len > 0 {
-                let from = if up { self.sel.iter().next().copied() } else { self.sel.iter().next_back().copied() };
-                let to = match from {
-                    Some(i) if up => i.saturating_sub(1),
-                    Some(i) => (i + 1).min(len - 1),
-                    None => core.current.unwrap_or(0).min(len - 1),
-                };
-                if shift {
-                    self.sel.insert(to);
-                } else {
-                    self.sel.clear();
-                    self.sel.insert(to);
-                    self.anchor = Some(to);
-                }
-                self.scroll_to = Some(to);
-            }
-        }
-        if press(shift_cmd, Key::Tab) && !core.tabs.is_empty() {
-            self.tab_ops.push(super::plview::TabOp::View((self.view_pl + core.tabs.len() - 1) % core.tabs.len()));
-        }
-        if press(Modifiers::COMMAND, Key::Tab) && !core.tabs.is_empty() {
-            self.tab_ops.push(super::plview::TabOp::View((self.view_pl + 1) % core.tabs.len()));
-        }
-        if press(Modifiers::COMMAND, Key::F) {
-            self.show_find = true;
-            self.find_focus = true;
-        }
-        if press(Modifiers::NONE, Key::T) {
-            self.open_tool(ToolWin::Notepad);
-        }
-        if press(Modifiers::COMMAND, Key::Comma) && p.settings {
-            self.show_settings = true;
-        }
-        if press(Modifiers::COMMAND, Key::Slash) {
-            self.show_keys = !self.show_keys;
-        }
-        // work zones: Ctrl+1/2/3 = number of panels, Ctrl+4 = new Additional window
-        for (k, n) in [(Key::Num1, 1u8), (Key::Num2, 2), (Key::Num3, 3)] {
-            if press(Modifiers::COMMAND, k) {
-                self.workzones.panels = n;
-            }
-        }
-        if press(Modifiers::COMMAND, Key::Num4) {
-            self.workzones.new_aux(Tab::AuxPlaylist);
-        }
-        if press(Modifiers::COMMAND, Key::L) {
-            self.workzones.show_left = !self.workzones.show_left;
-        }
-        for (k, tab) in [(Key::F1, Tab::FileExplorer), (Key::F2, Tab::Search)] {
-            if press(Modifiers::NONE, k) {
-                self.workzones.show_left = true;
-                self.workzones.left.add(tab);
-            }
-        }
-        if press(Modifiers::NONE, Key::F3) {
-            self.open_tool(ToolWin::Scheduler);
-        }
-        if press(Modifiers::NONE, Key::F4) {
-            self.open_tool(ToolWin::AudioFx);
-        }
-        if press(Modifiers::NONE, Key::F11) {
-            self.fullscreen = !self.fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
-        }
-    }
-
-    /// Help → Keyboard shortcuts.
-    pub(super) fn keys_window(&mut self, ctx: &egui::Context) {
-        if !self.show_keys {
-            return;
-        }
-        let mut open = true;
-        Self::window_for(ctx, "Keyboard shortcuts", [560.0, 560.0]).id(egui::Id::new("keys_window")).open(&mut open).show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for (group, keys) in SHORTCUTS {
-                    ui.add_space(6.0);
-                    ui.strong(*group);
-                    egui::Grid::new(("keys", *group)).num_columns(2).spacing([18.0, 4.0]).striped(true).show(ui, |ui| {
-                        for (k, what) in *keys {
-                            ui.label(RichText::new(*k).monospace().color(ACCENT));
-                            ui.label(*what);
-                            ui.end_row();
-                        }
-                    });
-                }
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(tr("Shortcuts don't fire while you're typing in a text box. Some need permission for your account."))
-                        .small()
-                        .color(GRAY),
-                );
-            });
-        });
-        self.show_keys = open;
     }
 }
-
-pub(super) const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "Playback",
-        &[
-            ("F5 / Enter", "Play (the selected row, or carry on)"),
-            ("F6", "Pause / resume"),
-            ("F7", "Stop"),
-            ("F8", "Next"),
-            ("F9", "Previous"),
-            ("Alt+↑ / Alt+↓", "Volume up / down"),
-            ("Shift+F1 … F12", "Fire cart pad 1 … 12 (again to stop it)"),
-            ("Ctrl+J", "Stop all jingles"),
-            ("Ctrl+M", "Microphone on / off"),
-        ],
-    ),
-    (
-        "Playlist",
-        &[
-            ("↑ / ↓", "Select the row above / below (Shift adds to the selection)"),
-            ("Ctrl+↑ / Ctrl+↓", "Move the selected rows"),
-            ("Delete", "Remove the selected rows"),
-            ("Ctrl+A", "Select all"),
-            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous playlist tab"),
-            ("Ctrl+N", "New playlist"),
-            ("Ctrl+O / Ctrl+S", "Open / save playlist (M3U)"),
-            ("Insert / Alt+F", "Add files"),
-            ("Alt+D", "Add folder"),
-            ("Alt+U", "Add URL"),
-            ("Alt+C", "Add command"),
-            ("Alt+T", "Add text to speech"),
-            ("Alt+W", "Add comment"),
-            ("Ctrl+P", "Add timed pause"),
-            ("Ctrl+H", "Add hour marker"),
-            ("Ctrl+W", "Insert voice track"),
-            ("Ctrl+R", "Record voice track"),
-            ("Ctrl+F", "Find"),
-            ("Drag rows", "Reorder, or drop on another playlist's tab to move them there"),
-        ],
-    ),
-    (
-        "Tools and windows",
-        &[
-            ("Ctrl+G", "Playlist generator"),
-            ("Ctrl+E", "Track editor for the selected row"),
-            ("F4", "Audio processing"),
-            ("T", "Notepad"),
-            ("Ctrl+,", "Settings"),
-            ("Ctrl+1 / 2 / 3", "Work zone with 1, 2 or 3 panels"),
-            ("Ctrl+4", "New Additional window"),
-            ("Ctrl+L", "Left panel on / off"),
-            ("F1 / F2 / F3", "File explorer / Search / Scheduler in the left panel"),
-            ("F11", "Full screen"),
-            ("Ctrl+Shift+P", "Performance numbers"),
-            ("Ctrl+/", "This list"),
-        ],
-    ),
-];
 
 /// Voice choice with a search box (there can be hundreds of voices). `none` = the empty choice.
 pub(super) fn voice_picker(ui: &mut egui::Ui, id: &str, voice: &mut String, none: &str) {

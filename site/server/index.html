@@ -64,30 +64,33 @@
 </head>
 <body>
 
+<!-- NAV -->
 <header class="top">
   <div class="wrap">
     <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
-    <nav class="links" aria-label="Sections">
-      <a class="hide-sm" href="/#features">Features</a>
-      <a class="hide-sm active" href="/server/">Server</a>
-      <a class="hide-sm" href="/guides/start-an-internet-radio-station/">Guide</a>
-      <a class="hide-sm" href="/updates/">Updates</a>
-      <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
-      <a class="hide-sm" href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
-      <a class="btn primary small" href="#download">Download</a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a href="/guides/">Guides</a>
+      <a class="active" aria-current="page" href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
     </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
   </div>
 </header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
 
 <main id="top">
-  <section class="wrap" style="padding-block:56px 24px">
+  <section class="wrap page-top">
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / RadioMaster Server</nav>
     <p class="eyebrow">RadioMaster Server</p>
     <h1 class="page-h">Headless radio automation for Linux and Windows Server</h1>
     <p class="lede" style="margin-top:16px">RadioMaster Server is RadioMaster without a window. It runs your station 24/7 on a Linux box, a VPS or Windows Server: it plays the playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast on its own. Presenters run it from the free RadioMaster desktop app with <b>File → Connect to Server</b>. Like the desktop app it is free and open source under the MIT licence.</p>
     <div class="related">
       <a class="btn primary" href="#download">Download RadioMaster Server</a>
-      <a class="btn ghost" href="https://github.com/epell-development/RadioMaster/blob/main/docs/SERVER.md">Full server guide</a>
+      <a class="btn ghost" href="/server/docs/">Full documentation</a>
     </div>
   </section>
 
@@ -104,6 +107,9 @@
         <div class="feature"><span class="tag">Remote studio</span><h3>Run it from the app</h3><p>Connect from the desktop app and everything you do happens on the server: playlists, play/stop/next, carts, encoders, scheduler, adverts and settings.</p></div>
         <div class="feature"><span class="tag">Team</span><h3>Several presenters</h3><p>More than one app can be connected at once. Your own local session is saved as a profile and comes back exactly when you disconnect.</p></div>
         <div class="feature"><span class="tag">Service</span><h3>Starts at boot</h3><p>A systemd unit for Linux is in the package. On Windows Server, start it at boot with Task Scheduler or a service wrapper.</p></div>
+        <div class="feature"><span class="tag">Web portal</span><h3>Run it from a phone</h3><p>Turn on the web portal and run the station from any browser: what's on air, transport buttons, volume, playlists, streams and the log.</p></div>
+        <div class="feature"><span class="tag">HTTPS</span><h3>Encrypted end to end</h3><p>Use your own certificate (Let's Encrypt works) or let the server make one, which the app checks by its fingerprint.</p></div>
+        <div class="feature"><span class="tag">Remote</span><h3>Broadcast from anywhere</h3><p>Present from home with the desktop app: your microphone goes to the server and on air, and you hear the station's mix. <a href="/guides/broadcast-from-anywhere/">How it works</a></p></div>
       </div>
     </div>
   </section>
@@ -114,7 +120,7 @@
       <h2 style="margin-top:0">Install RadioMaster Server in three steps</h2>
       <ol>
         <li><b>Download</b> the Linux tar.gz or Windows zip from the <a href="https://github.com/epell-development/RadioMaster/releases/latest">latest release</a> and unpack it. On Linux it needs <code>libasound2</code> (ALSA), which nearly every distribution has.</li>
-        <li><b>Run the setup once.</b> It asks for the station name, the username and password the desktop apps sign in with (at least 12 characters), and the port (9259 unless you choose another).
+        <li><b>Run the setup once.</b> It asks for the station name, the username and password the desktop apps sign in with (at least 12 characters), the port (9259 unless you choose another), and whether to use HTTPS and the web portal.
           <div class="code"><pre>RadioMaster-Server --setup</pre></div>
           Without a terminal, for example in a script or a container, give the answers as options; the password can come from the <code>RADIOMASTER_PASSWORD</code> environment variable.
           <div class="code"><pre>RADIOMASTER_PASSWORD='a long password' RadioMaster-Server --setup --user studio --name "My Station"</pre></div>
@@ -130,6 +136,8 @@
             <tr><td class="k">--setup</td><td>Set the station name, username, password and port, then exit</td></tr>
             <tr><td class="k">--user, --password, --name</td><td>Answers for <code>--setup</code></td></tr>
             <tr><td class="k">--port N, --bind ADDRESS</td><td>Where to listen (default <code>0.0.0.0:9259</code>)</td></tr>
+            <tr><td class="k">--https, --cert FILE, --key FILE</td><td>Serve over HTTPS, with your own certificate or one the server makes</td></tr>
+            <tr><td class="k">--portal, --portal-port N</td><td>The web portal and its port (default 9260)</td></tr>
             <tr><td class="k">--data FOLDER</td><td>The data folder (default <code>~/.config/RadioMaster-Server</code>, or <code>%APPDATA%\RadioMaster-Server</code> on Windows)</td></tr>
             <tr><td class="k">--no-audio</td><td>Don't use a sound card: stream only</td></tr>
             <tr><td class="k">--list-devices</td><td>List the sound cards</td></tr>
@@ -153,7 +161,10 @@
       <p>Music files, folders and the library are the server's, so a library folder is typed as the server sees it (for example <code>/srv/music</code>). Previews, waveforms in the fade editor and the microphone need the files on your own computer and don't work while connected.</p>
 
       <h2>Security</h2>
-      <p>The password is checked with Argon2 and only its hash is stored. Sign-ins expire after a day without use, and repeated wrong passwords are slowed down. Whoever signs in can do everything the station can, so use a strong password and run the server under its own unprivileged account (the systemd unit does). The server speaks plain HTTP: on a network you don't trust, or over the internet, put it behind an HTTPS reverse proxy such as Caddy or nginx, or a VPN.</p>
+      <p>The password is checked with Argon2 and only its hash is stored. Sign-ins expire after a day without use, and repeated wrong passwords are slowed down. Whoever signs in can do everything the station can, so use a strong password and run the server under its own unprivileged account (the systemd unit does). On a network you don't trust, or over the internet, turn on <a href="/server/docs/#https">HTTPS</a> (<code>--https</code>) with your own certificate or one the server makes, or put it behind an HTTPS reverse proxy or a VPN.</p>
+      <h2>Everything else</h2>
+      <p>The <a href="/server/docs/">RadioMaster Server documentation</a> covers every option, the data folder, HTTPS with Let's Encrypt, the web portal, nginx, Caddy and IIS reverse proxies, sound output and troubleshooting.</p>
+      <div class="related"><a class="btn primary" href="/server/docs/">Read the documentation</a><a class="btn ghost" href="/guides/broadcast-from-anywhere/">Guide: broadcast from anywhere</a></div>
     </div>
   </section>
 
@@ -187,23 +198,27 @@
   </section>
 </main>
 
+<!-- FOOTER -->
 <footer>
   <div class="wrap">
     <div class="row">
       <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
-      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
-      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="/guides/">Guides</a>
       <a href="/server/">RadioMaster Server</a>
-      <a href="/guides/start-an-internet-radio-station/">Start a radio station</a>
+      <a href="/server/docs/">Server docs</a>
       <a href="/updates/">Updates</a>
       <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
     </div>
-    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
     <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
   </div>
 </footer>
+<!-- /FOOTER -->
 
 </body>
 </html>

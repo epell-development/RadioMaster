@@ -301,7 +301,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.radio_value(&mut r.trigger, Trigger::Minutes, tr("Every"));
             ui.add_enabled_ui(r.trigger == Trigger::Minutes, |ui| {
-                let hours = r.every_mins >= 60 && r.every_mins % 60 == 0 || self.ads.hours_unit;
+                let hours = r.every_mins >= 60 && r.every_mins.is_multiple_of(60) || self.ads.hours_unit;
                 if hours {
                     let mut h = (r.every_mins / 60).max(1);
                     if ui.add(egui::DragValue::new(&mut h).range(1..=24)).changed() {
