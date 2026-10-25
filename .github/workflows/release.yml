@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.2.0 to build RadioMaster.exe and publish a GitHub release with it.
+# Push a tag like v0.2.0 to build RadioMaster.exe and publish a GitHub release with it
+# (plus macOS, Linux and the headless RadioMaster Server for Linux and Windows).
 on:
   push:
     tags: ['v*']
@@ -28,6 +29,14 @@ jobs:
           Copy-Item README.md, LICENSE, CHANGELOG.md, PLUGINS.md $name/
           Copy-Item -Recurse lang $name/lang
           Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - name: Package RadioMaster Server
+        shell: pwsh
+        run: |
+          $name = "RadioMaster-Server-${{ github.ref_name }}-windows-x64"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/release/RadioMaster-Server.exe $name/
+          Copy-Item docs/SERVER.md, LICENSE, CHANGELOG.md $name/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
       - name: Installer
         shell: pwsh
         run: |
@@ -41,6 +50,7 @@ jobs:
         run: python tools/changelog_section.py "${{ github.ref_name }}" notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          # (the first pattern also takes RadioMaster-Server-*-windows-x64.zip)
           files: |
             RadioMaster-*-windows-x64.zip
             dist/RadioMaster-Setup-*.exe
@@ -65,6 +75,26 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: RadioMaster-*-linux-x64.tar.gz
+
+  server-linux:
+    # an older Ubuntu, so the binary also runs on older server distributions (glibc 2.35+)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin RadioMaster-Server
+      - name: Package
+        run: |
+          name="RadioMaster-Server-${GITHUB_REF_NAME}-linux-x64"
+          mkdir "$name"
+          cp target/release/RadioMaster-Server docs/SERVER.md server/radiomaster-server.service LICENSE CHANGELOG.md "$name/"
+          tar czf "$name.tar.gz" "$name"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: RadioMaster-Server-*-linux-x64.tar.gz
 
   macos:
     runs-on: macos-latest

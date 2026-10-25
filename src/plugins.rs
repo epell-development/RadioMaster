@@ -118,6 +118,12 @@ impl Plugins {
         p
     }
 
+    /// No plugins at all (a playout that mirrors a server: the server runs the plugins).
+    pub fn none(log: LogSink) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        Plugins { defs: vec![], services: HashMap::new(), cmd_tx, cmd_rx, log }
+    }
+
     /// Read plugin folders again; (re)start services that are switched on.
     pub fn reload(&mut self, off: &[String]) {
         self.stop_services();

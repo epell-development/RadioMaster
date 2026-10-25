@@ -5,7 +5,19 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Settings, library cache, playlists and history live here (per Windows user).
+static DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Use another data folder (the headless server keeps its own). Call before anything is loaded.
+#[allow(dead_code)] // RadioMaster-Server only
+pub fn set_data_dir(dir: PathBuf) {
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = DATA_DIR.set(dir);
+}
+
 pub fn data_dir() -> PathBuf {
+    if let Some(d) = DATA_DIR.get() {
+        return d.clone();
+    }
     static MIGRATED: std::sync::Once = std::sync::Once::new();
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     let d = base.join("RadioMaster");

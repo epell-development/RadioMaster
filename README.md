@@ -18,17 +18,42 @@ Playlists, hour markers, smart crossfades, Icecast / Shoutcast streaming and Azu
 RadioMaster uses a classic broadcast-automation layout: playlist tabs in the centre, transport,
 VU meters and the Last / On Air / Next tiles on top, panels around it, and tools in their own windows.
 
-## Download
-From the [latest release](../../releases/latest):
-- **`RadioMaster-Setup-<version>.exe`** — installer with Start-menu / desktop shortcuts and an uninstaller
-  (install just for you, no admin needed, or for all users), or
-- **`RadioMaster-<version>-windows-x64.zip`** — portable: unzip anywhere and run `RadioMaster.exe`.
-- **`RadioMaster-<version>-macos.zip`** — RadioMaster.app for macOS 12+ (see [macOS and Linux](#macos-and-linux)).
-- **`RadioMaster-<version>-linux-x64.tar.gz`** — unpack and run `./RadioMaster`.
+## Install
+Everything is on the [latest release](../../releases/latest) page.
 
-On first start you create the local administrator account. RadioMaster tells you when a new version is out
-(the button next to the logo); installed copies update themselves in one click.
+### Windows 10 / 11
+1. Download **`RadioMaster-Setup-<version>.exe`** and run it. You can install just for yourself (no admin
+   needed) or for all users; you get Start-menu and desktop shortcuts and an uninstaller.
+2. Prefer no installer? Download **`RadioMaster-<version>-windows-x64.zip`**, unzip it anywhere (a USB stick
+   works) and run `RadioMaster.exe`.
+
 Embedded web panels use the Microsoft Edge WebView2 runtime, which Windows 10/11 already include.
+
+### macOS 12 or later
+Download **`RadioMaster-<version>-macos.zip`**, unzip it and drag **RadioMaster.app** to Applications. The app
+isn't signed by Apple, so the first time right-click it → **Open** → **Open**. Allow the microphone when asked
+if you use the mic for talk-overs.
+
+### Linux (x64)
+Download **`RadioMaster-<version>-linux-x64.tar.gz`**, then:
+
+```
+tar xzf RadioMaster-<version>-linux-x64.tar.gz
+cd RadioMaster-<version>-linux-x64
+./RadioMaster
+```
+
+It needs ALSA (`libasound2`) and an X11 or Wayland desktop, which desktop distributions already have.
+
+### First start
+You create the local administrator account, then add your music with **File → Add library folder…**.
+RadioMaster tells you when a new version is out (the button next to the logo); installed copies update
+themselves in one click.
+
+### RadioMaster Server
+For a station that runs on its own on a Linux or Windows server, download
+**`RadioMaster-Server-<version>-linux-x64.tar.gz`** or **`RadioMaster-Server-<version>-windows-x64.zip`**
+and follow [Installing RadioMaster Server](#installing-radiomaster-server) below.
 
 ## Build from source (Windows)
 Double-click **`run-windows.bat`** (or `cargo run --release` in this folder).
@@ -162,6 +187,49 @@ File → Users: administrators can add operators and choose what each one may do
 editing playlists, streaming and settings — and exactly which tools they can open (track editor, generator,
 adverts, Audio FX, AzuraCast, reports, history, notepad, plugins, scheduler, voice tracks, library, file explorer,
 song requests, web panels). They can also reset passwords and disable or delete accounts.
+
+## RadioMaster Server (headless)
+RadioMaster Server runs the station without a window on Linux or Windows Server: playlists, scheduler,
+adverts, streaming and, if you want, its own sound cards. Presenters run it from the desktop app with
+**File → Connect to Server**. RadioMaster offers to save your local session as a station profile first and
+brings it back when you disconnect; while connected, a green button with the station's name sits next to
+the logo, and **File → Server settings…** changes the server's name, sound output and password.
+
+### Installing RadioMaster Server
+**Linux** (Debian/Ubuntu shown; any x64 distribution with glibc 2.35 or later works):
+
+```
+sudo apt install libasound2                 # ALSA, usually there already
+tar xzf RadioMaster-Server-<version>-linux-x64.tar.gz
+cd RadioMaster-Server-<version>-linux-x64
+sudo cp RadioMaster-Server /usr/local/bin/
+# run it as its own account, as a service
+sudo useradd --system --create-home --home-dir /var/lib/radiomaster radiomaster
+sudo usermod -aG audio radiomaster          # only if it should play through a sound card
+sudo -u radiomaster RadioMaster-Server --data /var/lib/radiomaster --setup
+sudo cp radiomaster-server.service /etc/systemd/system/
+sudo systemctl enable --now radiomaster-server
+journalctl -u radiomaster-server -f         # the station log
+```
+
+**Windows Server:** unzip **`RadioMaster-Server-<version>-windows-x64.zip`** (e.g. to
+`C:\RadioMaster-Server`), open a command prompt there and run `RadioMaster-Server.exe --setup`. Then run
+`RadioMaster-Server.exe`, or start it at boot with Task Scheduler (*At startup*, *Run whether user is logged on
+or not*) or a service wrapper such as NSSM. Allow the port (9259) through Windows Firewall.
+
+`--setup` asks for the station name, the **username and password** the desktop apps sign in with (at least 12
+characters) and the port. To script it, use `--user`, `--name`, `--port` and the `RADIOMASTER_PASSWORD`
+environment variable.
+
+**Sound:** the server plays through its default sound card, or the ones ticked in **File → Server settings…**
+in the app. Switch "Play through the server's sound cards" off (or start it with `--no-audio`) for a server
+that only streams. With no sound card at all it runs on a silent clock, and streaming works as normal.
+
+**Connect:** in the desktop app, **File → Connect to Server…**, type the server's address (e.g.
+`192.168.1.20:9259`), the username and the password. Over the internet, put the server behind an HTTPS
+reverse proxy or a VPN and connect to its `https://` address.
+
+More detail (options, moving an existing station to a server, security): [docs/SERVER.md](docs/SERVER.md).
 
 ## macOS and Linux
 Each release also has `RadioMaster-<version>-macos.zip` (RadioMaster.app; unsigned, so right-click → Open the

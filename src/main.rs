@@ -13,6 +13,7 @@ mod generator;
 mod i18n;
 mod items;
 mod library;
+mod link;
 mod live;
 mod mic;
 mod pdf;

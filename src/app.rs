@@ -170,6 +170,8 @@ mod pltools;
 mod plview;
 #[path = "reportui.rs"]
 mod reportui;
+#[path = "serverui.rs"]
+mod serverui;
 
 /// Presenter notes for the Track Info tab (notes.json in the data folder).
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -313,6 +315,8 @@ pub struct App {
     left_w: f32,
     right_w: f32,
     art_rx: Option<mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>>,
+    /// File → Connect to Server
+    srv: serverui::ServerUi,
 }
 
 /// The one delete button used everywhere: 🗑, then "Delete!" / "Keep" so nothing goes by accident.
@@ -564,6 +568,7 @@ impl App {
             left_w: 300.0,
             right_w: 400.0,
             art_rx: None,
+            srv: Default::default(),
             seek_drag: None,
             mic_stream: None,
             mic_on: false,
@@ -887,7 +892,7 @@ impl App {
                     }
                     ui.separator();
                     if ui.button(tr("Add library folder…")).clicked() {
-                        self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
+                        self.pick_library_folder();
                         ui.close_menu();
                     }
                     if ui.button(tr("Rescan library")).clicked() {
@@ -899,6 +904,7 @@ impl App {
                         self.show_profiles = true;
                         ui.close_menu();
                     }
+                    self.server_menu(ui, core);
                     if self.logged_in.as_ref().is_some_and(|a| a.admin) && ui.button(tr("Users…")).clicked() {
                         self.show_users = true;
                         ui.close_menu();
@@ -1109,6 +1115,7 @@ impl App {
                     if let Some(t) = &icon {
                         ui.add(egui::Image::new((t.id(), egui::vec2(18.0, 18.0))));
                     }
+                    self.server_chip(ui);
                     if let Some(v) = &new_version {
                         let b = egui::Button::new(RichText::new(format!("⬆ Update available: v{v}")).strong().color(Color32::WHITE))
                             .fill(Color32::from_rgb(20, 150, 235));
@@ -1736,7 +1743,7 @@ impl App {
                                 }
                                 if let Some(i)=remove {core.cfg.library_folders.remove(i);}
                                 if ui.button(tr("Add folder…")).clicked() {
-                                    self.dlg(||rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
+                                    self.pick_library_folder();
                                 }
                                 if ui.button(tr("Rescan")).clicked(){core.start_scan();}
                             },
@@ -2101,7 +2108,7 @@ impl App {
     fn tab_library(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr("➕ Folder…")).clicked() {
-                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
+                self.pick_library_folder();
             }
             if ui.add_enabled(!core.scanning, egui::Button::new("⟳")).on_hover_text(tr("Rescan")).clicked() {
                 core.start_scan();
@@ -2271,7 +2278,7 @@ impl App {
             let pad_width = ((ui.available_width() - (cols.saturating_sub(1)) as f32 * 6.0) / cols as f32 - 8.0).max(86.0);
             let mut trigger = None;
             let may_play = self.perm.jingles;
-            let playing = core.engine.carts_playing();
+            let playing = core.carts_playing();
             if !playing.is_empty() {
                 ui.ctx().request_repaint_after(Duration::from_millis(200));
             }
@@ -2428,7 +2435,8 @@ impl App {
                 ui.spinner();
             }
             if ui.button(tr("Apply outputs")).clicked() {
-                self.audio.apply(&core.engine, &core.cfg.audio_devices);
+                let engine = self.output_engine(core);
+                self.audio.apply(&engine, &core.cfg.audio_devices);
                 core.say("Audio outputs applied");
             }
         });
@@ -2488,7 +2496,8 @@ impl App {
             changed = true;
         }
         if changed {
-            self.audio.apply(&core.engine, &core.cfg.audio_devices);
+            let engine = self.output_engine(core);
+            self.audio.apply(&engine, &core.cfg.audio_devices);
         }
         if !self.audio.report.is_empty() {
             ui.add_space(4.0);
@@ -3452,6 +3461,7 @@ impl eframe::App for App {
         core.engine.set_mic(self.mic_on, core.cfg.mic_gain, duck);
         self.tag_window(ctx, &mut core);
         self.profiles_window(ctx, &mut core);
+        self.server_windows(ctx, &mut core);
         self.users_window(ctx);
         self.settings_window(ctx, &mut core);
         let v = self.view_pl;
@@ -3474,8 +3484,13 @@ impl eframe::App for App {
         self.apply_tab_ops(&mut core);
         // A native web view paints above everything egui draws, so hide the main window's views
         // whenever an egui window, menu, combo list or popup overlaps them.
-        let force =
-            self.show_settings || self.show_users || self.show_profiles || self.show_about || self.show_update || self.tag_edit.is_some();
+        let force = self.show_settings
+            || self.show_users
+            || self.show_profiles
+            || self.show_about
+            || self.show_update
+            || self.tag_edit.is_some()
+            || self.srv.window_open();
         self.guard_web_views(ctx, "", force);
         self.browsers.finish();
         // save the layout when it changed, at most every 2 seconds (never while a window is being dragged)
@@ -3524,7 +3539,10 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let mut c = self.core.lock();
+        let arc = self.core.clone();
+        let mut c = arc.lock();
+        // connected to a server: the local session comes back first, so it is what gets saved
+        self.disconnect(&mut c);
         c.plugin_event("app_exit", serde_json::json!({}));
         for i in 0..c.cfg.encoders.len() {
             c.stop_encoder(i);

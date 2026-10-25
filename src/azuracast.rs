@@ -181,6 +181,10 @@ impl Client {
 
 pub fn spawn_poller(cfg: Arc<Mutex<AzuraConfig>>, state: Arc<Mutex<AzuraState>>) {
     thread::spawn(move || loop {
+        // the playout that owned it is gone
+        if Arc::strong_count(&state) == 1 {
+            break;
+        }
         let c = cfg.lock().clone();
         let wait = if c.enabled && !c.base_url.trim().is_empty() && !c.station.trim().is_empty() {
             match Client::new(&c).now_playing() {
