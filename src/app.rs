@@ -2170,7 +2170,10 @@ impl App {
                     let v = self.view_pl;
                     core.with_tab(v, |c| c.add_paths(paths));
                 }
-                "next" if edit => core.insert_next(paths),
+                "next" if edit => {
+                    let v = self.view_pl;
+                    core.with_tab(v, |c| c.insert_next(paths));
+                }
                 "now" if edit && self.perm.playback => {
                     core.insert_next(vec![core.library[li].path.clone()]);
                     core.next();
