@@ -162,6 +162,9 @@ impl App {
     /// Open the dialog for the row scheduler event `i` inserts: a new one of `kind`, or (None)
     /// the one it has. A time announcement needs no settings and is set straight away.
     pub(super) fn edit_event_item(&mut self, core: &mut Playout, i: usize, kind: Option<DlgKind>) {
+        if !self.perm.tool(crate::auth::tool::SCHEDULER) {
+            return;
+        }
         let d = match kind {
             Some(DlgKind::TimeAnnounce) => {
                 if let (Some(ev), Ok(row)) = (core.cfg.events.get_mut(i), Self::item_from_dlg(&self.new_item_dlg(DlgKind::TimeAnnounce))) {
@@ -369,8 +372,10 @@ impl App {
 
     pub(super) fn item_dialog_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         let Some(mut d) = self.item_dlg.take() else { return };
-        if d.event.is_none() && !self.perm.edit_playlists {
-            return; // the dialog closes: this account can't change playlists
+        // a scheduler event's item is the scheduler's to change; any other row is the playlist's
+        let allowed = if d.event.is_some() { self.perm.tool(crate::auth::tool::SCHEDULER) } else { self.perm.edit_playlists };
+        if !allowed {
+            return; // the dialog closes: this account can't change it
         }
         let mut open = true;
         let (mut ok, mut cancel) = (false, false);
