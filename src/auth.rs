@@ -178,12 +178,17 @@ pub struct Accounts {
     pub users: Vec<Operator>,
 }
 
-fn hash(password: &str) -> Result<String, String> {
+pub fn hash(password: &str) -> Result<String, String> {
     if password.len() < 12 {
         return Err("Use a password of at least 12 characters".into());
     }
     let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default().hash_password(password.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string())
+}
+
+/// Check a password against an Argon2 hash made by `hash`.
+pub fn verify(password_hash: &str, password: &str) -> bool {
+    PasswordHash::new(password_hash).map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok()).unwrap_or(false)
 }
 
 impl Accounts {
@@ -252,17 +257,7 @@ impl Accounts {
         self.save()
     }
     pub fn login(&self, name: &str, password: &str) -> Option<Operator> {
-        self.users
-            .iter()
-            .find(|u| {
-                !u.disabled
-                    && u.name == name
-                    && PasswordHash::new(&u.password_hash)
-                        .ok()
-                        .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
-                        .unwrap_or(false)
-            })
-            .cloned()
+        self.users.iter().find(|u| !u.disabled && u.name == name && verify(&u.password_hash, password)).cloned()
     }
 }
 

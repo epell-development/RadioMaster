@@ -13,6 +13,11 @@ categories = ["multimedia::audio"]
 name = "RadioMaster"
 path = "src/main.rs"
 
+# The headless server (no window): desktop apps connect to it with File → Connect to Server.
+[[bin]]
+name = "RadioMaster-Server"
+path = "src/server_main.rs"
+
 [dependencies]
 ab_glyph = "0.2.32"
 flate2 = "1"
@@ -38,6 +43,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 argon2 = { version = "0.5", features = ["std"] }
 tiny_http = "0.12"
 urlencoding = "2"
+# RadioMaster-Server: stop cleanly on Ctrl+C / service stop, read the password without showing it
+ctrlc = { version = "3", features = ["termination"] }
+rpassword = "7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wry = "=0.50.5"

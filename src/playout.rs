@@ -25,7 +25,7 @@ use std::{
     time::Instant,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlayState {
     Stopped,
     Playing,
@@ -244,16 +244,23 @@ pub struct Playout {
     pub log_sink: LogSink,
     /// speech row already rendered ahead (row|text)
     speech_ready: String,
+    // ---- RadioMaster Server
+    /// set while this playout mirrors a RadioMaster Server: actions go to the server and nothing is saved here
+    pub link: Option<crossbeam_channel::Sender<sync::Cmd>>,
+    /// tab whose rows are in `playlist` (differs from `playing_tab` inside `with_tab`)
+    in_tab: Option<usize>,
+    /// jingles playing on the server
+    mirror_carts: Vec<PathBuf>,
+    /// lines ever written to the log (how the server's clients follow it)
+    pub log_total: u64,
 }
+
+#[path = "sync.rs"]
+pub mod sync;
 
 impl Playout {
     pub fn new(engine: Engine, cfg: Config) -> Self {
         std::thread::spawn(live::clean_speech_files);
-        engine.set_dsp(&cfg.dsp);
-        let dsp_shared = cfg.dsp.clone();
-        let azura_shared = Arc::new(Mutex::new(cfg.azuracast.clone()));
-        let azura = Arc::new(Mutex::new(AzuraState::default()));
-        azuracast::spawn_poller(azura_shared.clone(), azura.clone());
         let log_sink: LogSink = Arc::new(Mutex::new(vec![]));
         let mut plugins = crate::plugins::Plugins::new(log_sink.clone());
         if !cfg.plugins_off.is_empty() {
@@ -261,6 +268,39 @@ impl Playout {
         }
         let library: Vec<Track> =
             std::fs::read_to_string(data_dir().join("library.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let cues: HashMap<PathBuf, Cues> = std::fs::read_to_string(data_dir().join("cues.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<(PathBuf, Cues)>>(&s).ok())
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default();
+        let plays: HashMap<PathBuf, i64> =
+            std::fs::read_to_string(data_dir().join("plays.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let n_enc = cfg.encoders.len();
+        let mut p = Self::build(engine, cfg, library, cues, plays, plugins, log_sink);
+        p.reindex();
+        p.load_tabs();
+        for i in 0..n_enc {
+            if p.cfg.encoders[i].start_with_app {
+                p.start_encoder(i);
+            }
+        }
+        p
+    }
+
+    fn build(
+        engine: Engine,
+        cfg: Config,
+        library: Vec<Track>,
+        cues: HashMap<PathBuf, Cues>,
+        plays: HashMap<PathBuf, i64>,
+        plugins: crate::plugins::Plugins,
+        log_sink: LogSink,
+    ) -> Self {
+        engine.set_dsp(&cfg.dsp);
+        let dsp_shared = cfg.dsp.clone();
+        let azura_shared = Arc::new(Mutex::new(cfg.azuracast.clone()));
+        let azura = Arc::new(Mutex::new(AzuraState::default()));
+        azuracast::spawn_poller(azura_shared.clone(), azura.clone());
         let n_enc = cfg.encoders.len();
         // background analyser: decodes files and builds waveforms for smart fading / the editor
         let (analyze_tx, job_rx) = mpsc::channel::<PathBuf>();
@@ -273,14 +313,7 @@ impl Playout {
                 }
             }
         });
-        let cues: HashMap<PathBuf, Cues> = std::fs::read_to_string(data_dir().join("cues.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str::<Vec<(PathBuf, Cues)>>(&s).ok())
-            .map(|v| v.into_iter().collect())
-            .unwrap_or_default();
-        let plays: HashMap<PathBuf, i64> =
-            std::fs::read_to_string(data_dir().join("plays.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        let mut p = Playout {
+        Playout {
             cfg,
             engine,
             library,
@@ -336,15 +369,11 @@ impl Playout {
             log_sink,
             speech_ready: String::new(),
             plugins,
-        };
-        p.reindex();
-        p.load_tabs();
-        for i in 0..n_enc {
-            if p.cfg.encoders[i].start_with_app {
-                p.start_encoder(i);
-            }
+            link: None,
+            in_tab: None,
+            mirror_carts: vec![],
+            log_total: 0,
         }
-        p
     }
 
     /// Status-bar message; also written to the log.
@@ -360,6 +389,7 @@ impl Playout {
             let l = m.to_lowercase();
             let error = ["fail", "error", "cannot", "could not", "unsupported", "unknown command"].iter().any(|k| l.contains(k));
             self.log.push(LogLine { time: Local::now().format("%H:%M:%S").to_string(), text: m, error });
+            self.log_total += 1;
         }
         let n = self.log.len();
         if n > 500 {
@@ -369,6 +399,11 @@ impl Playout {
 
     // ---------------------------------------------------------------- tick
     pub fn tick(&mut self) {
+        if self.link.is_some() {
+            // mirroring a server: the server plays and schedules, this copy only shows it
+            self.drain_log();
+            return;
+        }
         self.drain_scan();
         self.drain_log();
         {
@@ -515,6 +550,9 @@ impl Playout {
     }
 
     pub fn save_all(&mut self) {
+        if self.link.is_some() {
+            return;
+        }
         self.cfg.save();
         if self.cues_dirty {
             let v: Vec<(&PathBuf, &Cues)> = self.cues.iter().collect();
@@ -560,6 +598,9 @@ impl Playout {
     }
 
     pub fn save_tabs(&self) {
+        if self.link.is_some() {
+            return;
+        }
         let tabs = self
             .tabs
             .iter()
@@ -589,7 +630,9 @@ impl Playout {
         let old = self.playing_tab;
         self.swap_tab(v);
         self.adopt = false;
+        let outer = self.in_tab.replace(v);
         let r = f(self);
+        self.in_tab = outer;
         if self.adopt {
             // tab v is now on air; the previous on-air list moves back into its own slot
             let e = std::mem::take(&mut self.tabs[v].entries);
@@ -677,6 +720,9 @@ impl Playout {
 
     /// Put another playlist on air, continuing from its first unplayed row.
     pub fn put_tab_on_air(&mut self, i: usize) {
+        if self.forward(|_| sync::Cmd::TabOnAir { tab: i }) {
+            return;
+        }
         if i >= self.tabs.len() {
             return;
         }
@@ -754,6 +800,9 @@ impl Playout {
 
     /// Play a row now (double-click / Play).
     pub fn play_index(&mut self, i: usize, xfade: f32) -> bool {
+        if self.forward(|tab| sync::Cmd::PlayIndex { tab, row: i, xfade }) {
+            return true;
+        }
         self.sub_queue.clear();
         self.pending_jump = None;
         self.wait_until = None;
@@ -1303,6 +1352,9 @@ impl Playout {
     /// STOP, PAUSE, VOLUME <0-100>, ENCODER START <n>, ENCODER STOP <n>, LOAD <file.m3u>,
     /// PLAYLIST <tab name>, RUN <program and arguments>.
     pub fn run_command(&mut self, cmd: &str) {
+        if self.forward(|tab| sync::Cmd::Command { tab, text: cmd.to_string() }) {
+            return;
+        }
         let c = cmd.trim();
         let up = c.to_uppercase();
         let words: Vec<&str> = c.split_whitespace().collect();
@@ -1495,6 +1547,9 @@ impl Playout {
 
     /// Store hand-edited cues (from the track editor).
     pub fn set_manual_cues(&mut self, path: &Path, mut c: Cues, duration: f32) {
+        if self.forward(|_| sync::Cmd::SetCues { path: path.to_path_buf(), cues: c, duration }) {
+            return;
+        }
         c.manual = true;
         c.clamp(duration);
         self.cues.insert(path.to_path_buf(), c);
@@ -1509,6 +1564,9 @@ impl Playout {
 
     /// Forget hand-edited cues; smart analysis takes over again.
     pub fn clear_manual_cues(&mut self, path: &Path) {
+        if self.forward(|_| sync::Cmd::ClearCues { path: path.to_path_buf() }) {
+            return;
+        }
         if let Some(w) = self.waves.get(path).cloned() {
             self.cues.insert(path.to_path_buf(), smart_cues(&w, &self.cfg.fade));
         } else {
@@ -1520,6 +1578,9 @@ impl Playout {
 
     /// Recompute every analysed (non-manual) track after the smart settings changed.
     pub fn reanalyse_cues(&mut self) {
+        if self.forward(|_| sync::Cmd::ReanalyseCues) {
+            return;
+        }
         let fc = self.cfg.fade.clone();
         for (p, w) in &self.waves {
             if !self.cues.get(p).is_some_and(|c| c.manual) {
@@ -1576,6 +1637,9 @@ impl Playout {
     /// Run rule `id` now: pick its files and put them after `after` (or after the on-air row).
     /// Returns how many were queued.
     pub fn fire_rule(&mut self, id: u64, after: Option<usize>) -> usize {
+        if self.forward(|tab| sync::Cmd::FireRule { tab, id, after }) {
+            return 0;
+        }
         use crate::config::RotPick;
         let Some(k) = self.cfg.ad_rules.iter().position(|r| r.id == id) else { return 0 };
         let r = self.cfg.ad_rules[k].clone();
@@ -1634,6 +1698,9 @@ impl Playout {
     }
 
     pub fn play_pressed(&mut self, selected: Option<usize>) {
+        if self.forward(|tab| sync::Cmd::PlayPressed { tab, selected }) {
+            return;
+        }
         match self.state {
             PlayState::Paused => {
                 self.engine.set_paused(false);
@@ -1649,6 +1716,9 @@ impl Playout {
     }
 
     pub fn pause_toggle(&mut self) {
+        if self.forward(|_| sync::Cmd::PauseToggle) {
+            return;
+        }
         match self.state {
             PlayState::Playing => {
                 self.engine.set_paused(true);
@@ -1663,6 +1733,9 @@ impl Playout {
     }
 
     pub fn stop(&mut self) {
+        if self.forward(|_| sync::Cmd::Stop) {
+            return;
+        }
         self.engine.stop(1.0);
         if self.state != PlayState::Stopped {
             self.plugin_event("playback_stopped", json!({}));
@@ -1674,6 +1747,9 @@ impl Playout {
     }
 
     pub fn next(&mut self) {
+        if self.forward(|_| sync::Cmd::Next) {
+            return;
+        }
         let xf = self.cfg.crossfade_secs;
         if !self.advance(xf) {
             self.stop();
@@ -1681,6 +1757,9 @@ impl Playout {
     }
 
     pub fn prev(&mut self) {
+        if self.forward(|_| sync::Cmd::Prev) {
+            return;
+        }
         if let Some(c) = self.current {
             if c > 0 {
                 let xf = self.cfg.crossfade_secs;
@@ -1690,12 +1769,19 @@ impl Playout {
     }
 
     pub fn set_volume(&mut self, v: f32) {
+        if self.forward(|_| sync::Cmd::Volume { v }) {
+            self.cfg.volume = v;
+            return;
+        }
         self.cfg.volume = v;
         self.engine.set_volume(v);
     }
 
     /// Fire a cart pad; pressing a pad that is already playing stops it.
     pub fn trigger_cart(&mut self, idx: usize) {
+        if self.forward(|_| sync::Cmd::Cart { idx }) {
+            return;
+        }
         if let Some(p) = self.cfg.carts.get(idx).map(|c| c.path.clone()) {
             if !p.is_empty() {
                 if self.engine.stop_carts(Some(Path::new(&p)), 0.4) > 0 {
@@ -1715,6 +1801,9 @@ impl Playout {
 
     /// Stop every jingle that is playing (quick fade).
     pub fn stop_carts(&self) {
+        if self.forward(|_| sync::Cmd::StopCarts) {
+            return;
+        }
         let n = self.engine.stop_carts(None, 0.4);
         if n > 0 {
             self.say(format!("Stopped {n} jingle(s)"));
@@ -1937,6 +2026,9 @@ impl Playout {
     }
 
     pub fn start_scan(&mut self) {
+        if self.forward(|_| sync::Cmd::Rescan) {
+            return;
+        }
         if self.scanning {
             return;
         }
@@ -1982,6 +2074,9 @@ impl Playout {
     }
 
     pub fn update_tags(&mut self, t: Track) {
+        if self.forward(|_| sync::Cmd::WriteTags { track: t.clone() }) {
+            return;
+        }
         match library::write_tags(&t) {
             Ok(()) => {
                 if let Some(&i) = self.lib_index.get(&t.path) {
@@ -2005,6 +2100,9 @@ impl Playout {
     // ------------------------------------------------------- library cleanup
     /// Write library.json on the background writer.
     pub fn save_library(&self) {
+        if self.link.is_some() {
+            return;
+        }
         if let Ok(s) = serde_json::to_string(&self.library) {
             write_in_background(data_dir().join("library.json"), s);
         }
@@ -2105,6 +2203,9 @@ impl Playout {
 
     // ------------------------------------------------------------- encoders
     pub fn start_encoder(&mut self, i: usize) {
+        if self.forward(|_| sync::Cmd::EncoderStart { i }) {
+            return;
+        }
         if i >= self.cfg.encoders.len() {
             return;
         }
@@ -2120,6 +2221,9 @@ impl Playout {
     }
 
     pub fn stop_encoder(&mut self, i: usize) {
+        if self.forward(|_| sync::Cmd::EncoderStop { i }) {
+            return;
+        }
         if let Some(Some(h)) = self.handles.get(i) {
             h.stop();
         }
@@ -2151,6 +2255,9 @@ impl Playout {
 
     // ------------------------------------------------- generator / ads / misc
     pub fn generate_playlist(&mut self, name: &str, append: bool) -> usize {
+        if self.forward(|tab| sync::Cmd::Generate { tab, name: name.to_string(), append }) {
+            return 0;
+        }
         let Some(tpl) = self.cfg.templates.iter().find(|t| t.name == name).cloned() else {
             self.say(format!("Template '{name}' not found"));
             return 0;
@@ -2237,6 +2344,9 @@ impl Playout {
     }
 
     pub fn seek(&mut self, secs: f32) {
+        if self.forward(|_| sync::Cmd::Seek { secs }) {
+            return;
+        }
         if let Err(e) = self.engine.seek(secs) {
             self.say(format!("Seek failed: {e}"));
         }
@@ -2344,6 +2454,9 @@ impl Playout {
     }
 
     pub fn run_event(&mut self, e: &Event) {
+        if self.forward(|_| sync::Cmd::Event { event: e.clone() }) {
+            return;
+        }
         let xf = self.cfg.crossfade_secs;
         self.say(format!("Scheduler: {}", e.name));
         match e.action {

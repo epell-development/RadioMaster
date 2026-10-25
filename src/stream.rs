@@ -88,6 +88,15 @@ impl EncoderHandle {
         self.stop.store(true, Ordering::Relaxed);
     }
 
+    /// A handle that only shows another machine's encoder status (nothing is encoded here).
+    pub fn mirror(state: EncState, bytes: u64, reconnects: u32) -> Self {
+        EncoderHandle {
+            stop: Arc::new(AtomicBool::new(false)),
+            running: Arc::new(AtomicBool::new(true)),
+            status: Arc::new(Mutex::new(EncStatus { state, bytes, reconnects })),
+        }
+    }
+
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }

@@ -25,6 +25,8 @@ From the [latest release](../../releases/latest):
 - **`RadioMaster-<version>-windows-x64.zip`** — portable: unzip anywhere and run `RadioMaster.exe`.
 - **`RadioMaster-<version>-macos.zip`** — RadioMaster.app for macOS 12+ (see [macOS and Linux](#macos-and-linux)).
 - **`RadioMaster-<version>-linux-x64.tar.gz`** — unpack and run `./RadioMaster`.
+- **`RadioMaster-Server-<version>-linux-x64.tar.gz`** / **`RadioMaster-Server-<version>-windows-x64.zip`** —
+  the headless server (see [RadioMaster Server](#radiomaster-server-headless)).
 
 On first start you create the local administrator account. RadioMaster tells you when a new version is out
 (the button next to the logo); installed copies update themselves in one click.
@@ -162,6 +164,13 @@ File → Users: administrators can add operators and choose what each one may do
 editing playlists, streaming and settings — and exactly which tools they can open (track editor, generator,
 adverts, Audio FX, AzuraCast, reports, history, notepad, plugins, scheduler, voice tracks, library, file explorer,
 song requests, web panels). They can also reset passwords and disable or delete accounts.
+
+## RadioMaster Server (headless)
+RadioMaster Server runs the station without a window on Linux or Windows Server: playlists, scheduler,
+adverts and streaming. Set it up with `RadioMaster-Server --setup` (station name, username, password, port),
+then connect from the desktop app with **File → Connect to Server**. RadioMaster offers to save your local
+session as a station profile and brings it back when you disconnect; while connected, a green button with the
+station's name sits next to the logo. Full guide: [docs/SERVER.md](docs/SERVER.md).
 
 ## macOS and Linux
 Each release also has `RadioMaster-<version>-macos.zip` (RadioMaster.app; unsigned, so right-click → Open the

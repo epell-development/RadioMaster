@@ -46,4 +46,5 @@ jobs:
           name: RadioMaster-windows
           path: |
             target/release/RadioMaster.exe
+            target/release/RadioMaster-Server.exe
             dist/RadioMaster-Setup-*.exe
