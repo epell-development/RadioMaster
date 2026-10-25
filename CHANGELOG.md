@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.7 — 2026-10-25
+**New**
+- RadioMaster Server: a headless version for Linux and Windows Server that plays, schedules and streams
+  without a window. Set it up with a station name, a username and password and a port
+  (`RadioMaster-Server --setup`); it can play through its own sound cards or only stream. Downloads for
+  Linux (with a systemd service) and Windows, see docs/SERVER.md
+- File → Connect to Server: run a server's station from the app. Your local session can be saved as a
+  profile and comes back exactly when you disconnect. A green button next to the logo shows the
+  connection, and File → Server settings changes the server's name, sound output and password
+- Studio monitor outputs (Settings → Devices → Outputs): outputs marked as studio monitors go quiet while
+  the mic is on, so the host gets no feedback; the stream and other outputs carry on
+- New mic mode "keeps playing at full level", for stations that don't want the music lowered on air
+- Install steps for Windows, macOS, Linux and RadioMaster Server in the README
+
+**Fixed**
+- Inserting a pause, comment, text to speech, voice track or tracks from a playlist while viewing another
+  playlist tab put the row into Main instead; Library → Insert as next now goes into the playlist you're
+  viewing
+- Track editor changes to a song's tags were lost from the library after a restart; they now reach the
+  file (every tag in it), the library and every playlist row, and a failed write is reported and undone
+- The app froze or lagged while adding files and folders, dragging from the file explorer, using
+  Library → Add all, opening playlists, picking adverts and jingles, opening Settings → Devices or
+  Reports, and while saving; that work now happens in the background
+
+**Changed**
+- The website moved to https://radiomaster.dovafm.com, with a robots.txt, image sitemap and fixed links
+
 ## v0.2.6 — 2026-10-25
 **New**
 - Library cleanup (Tools → Library cleanup): finds duplicate tracks (identical files and, optionally, the
