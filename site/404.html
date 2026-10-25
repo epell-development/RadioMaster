@@ -6,24 +6,64 @@
 <link rel="icon" href="/img/icon.png">
 <title>Page not found · RadioMaster</title>
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#080e17">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<!-- NAV -->
 <header class="top">
   <div class="wrap">
     <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
-    <nav class="links" aria-label="Sections">
-      <a class="hide-sm" href="/updates/">Updates</a>
-      <a class="btn primary small" href="/#download">Download</a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
     </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
   </div>
 </header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
 <main id="top">
   <section class="wrap" style="padding-block:72px">
     <p class="eyebrow">404</p>
-    <h1 style="margin-top:14px;font-size:clamp(2.8rem,6vw,4.6rem);text-transform:uppercase;font-weight:800">Dead air</h1>
-    <p class="lede" style="margin-top:16px">That page isn't on the playlist. Head back to <a href="/">RadioMaster, the free, open-source radio automation software</a>, see the <a href="/updates/">latest updates</a>, read about <a href="/server/">RadioMaster Server</a>, or learn <a href="/guides/start-an-internet-radio-station/">how to start an internet radio station</a>.</p>
+    <h1 class="page-h">Dead air</h1>
+    <p class="lede" style="margin-top:16px">That page isn't on the playlist. It may have moved, or the link has a typo.</p>
+    <div class="related" style="margin-top:28px">
+      <a class="btn primary" href="/">&larr; Return home</a>
+      <a class="btn ghost" href="/guides/">Browse the guides</a>
+      <a class="btn ghost" href="/#download">Download RadioMaster</a>
+    </div>
+    <p class="lede" style="margin-top:28px;font-size:1rem">Looking for something else? See the <a href="/updates/">latest updates</a>, read about <a href="/server/">RadioMaster Server</a>, or ask on the <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>.</p>
   </section>
 </main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
 </body>
 </html>

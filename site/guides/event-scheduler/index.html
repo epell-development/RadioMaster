@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>RadioMaster Event Scheduler: Automate Shows, Playlists and Commands at Set Times</title>
+<meta name="description" content="Use RadioMaster&#x27;s event scheduler to run your station on autopilot: generate playlists from templates, put show playlists on air, fire advert rules, start and stop encoders and run station commands at set times and days.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/event-scheduler/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to automate with the event scheduler">
+<meta property="og:description" content="Generate playlists, switch shows, fire advert rules and run commands at set times, on autopilot.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/event-scheduler/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="RadioMaster radio automation software">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to automate with the event scheduler">
+<meta name="twitter:description" content="Generate playlists, switch shows, fire advert rules and run commands at set times, on autopilot.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/event-scheduler/#article",
+      "headline": "How to automate with the event scheduler",
+      "description": "Use RadioMaster's event scheduler to run your station on autopilot: generate playlists from templates, put show playlists on air, fire advert rules, start and stop encoders and run station commands at set times and days.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/event-scheduler/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Event scheduler",
+          "item": "https://radiomaster.dovafm.com/guides/event-scheduler/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Event scheduler</nav>
+    <p class="eyebrow">Guide · Run the station</p>
+    <h1 class="page-h">How to automate with the event scheduler</h1>
+    <p class="lede" style="margin-top:16px">The event scheduler does things at set times so you don't have to be there: make a fresh playlist every morning, put Friday night's show on air at 19:00, start the second stream for a sports match, or run any station command.</p>
+    <nav class="toc" aria-label="On this page"><a href="#add">Add an event</a><a href="#actions">Actions</a><a href="#commands">Station commands</a><a href="#recipes">Recipes</a><a href="#rows">Events in the playlist</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="add" style="margin-top:0">Add an event</h2>
+      <p>Open <b>Tools → Event scheduler</b> or press <kbd>F3</kbd>. It opens in its own window, so you can keep it on a second screen.</p>
+      <ol>
+        <li>Press <b>➕ Add event</b> and give it a name.</li>
+        <li>Set the time it runs <b>at</b> (hour and minute) and tick the <b>days</b>.</li>
+        <li>Optionally limit it to <b>dates</b>, for example a holiday schedule that runs from 24 to 26 December. An event outside its dates shows <b>○ not today</b>.</li>
+        <li>Choose what to <b>Do</b> (the actions are below) and fill in what it needs, such as a template, a playlist tab or a rule.</li>
+        <li>Press <b>▶ Run now</b> to try it straight away.</li>
+      </ol>
+      <p>Each event has its own on/off tick, so you can park one without deleting it.</p>
+
+      <h2 id="actions">Actions</h2>
+      <div class="rundown-table"><table><thead><tr><th>Action</th><th>What it does</th></tr></thead><tbody><tr><td class="it">Generate a new playlist from a template</td><td>Replaces the playlist with a fresh one from a <a href="/guides/playlist-generator/">generator template</a></td></tr><tr><td class="it">Add tracks from a template after the playlist</td><td>Appends a template's tracks to the end</td></tr><tr><td class="it">Play adverts / jingles from a rule</td><td>Queues an <a href="/guides/advertisement-scheduler/">advert or jingle rule</a> after the song on air</td></tr><tr><td class="it">Put a playlist tab on air</td><td>Switches to another playlist tab, for example a show you prepared earlier</td></tr><tr><td class="it">Play the on-air playlist again from the top</td><td>Restarts the on-air playlist, which keeps a playlist looping</td></tr><tr><td class="it">Load playlist (M3U) and play</td><td>Opens an M3U file and plays it</td></tr><tr><td class="it">Play file now</td><td>Plays one file straight away</td></tr><tr><td class="it">Insert file as next</td><td>Puts a file after the song on air</td></tr><tr><td class="it">Stop playback</td><td>Stops the station</td></tr><tr><td class="it">Start encoder # / Stop encoder #</td><td>Starts or stops one of your <a href="/guides/stream-to-icecast-shoutcast/">streams</a>. Here the first encoder is #0</td></tr><tr><td class="it">Set volume (0-1)</td><td>Sets the master volume, 1 being full</td></tr><tr><td class="it">Run a station command</td><td>Any command below</td></tr></tbody></table></div>
+
+      <h2 id="commands">Station commands</h2>
+      <p>The same commands work in an event, in a playlist <b>Command</b> row (<kbd>Alt+C</kbd>) and from a <a href="/guides/plugins/">plugin</a>.</p>
+      <div class="rundown-table"><table><thead><tr><th>Command</th><th>What it does</th></tr></thead><tbody><tr><td class="k">STOP</td><td>Stop playback</td></tr><tr><td class="k">PAUSE</td><td>Pause or carry on</td></tr><tr><td class="k">VOLUME 80</td><td>Set the volume, 0 to 100</td></tr><tr><td class="k">ENCODER START 1 / ENCODER STOP 1</td><td>Start or stop an encoder, counting from 1 (the first encoder is 1)</td></tr><tr><td class="k">PLAYLIST Evening</td><td>Put the playlist tab called Evening on air</td></tr><tr><td class="k">LOAD C:\Shows\news.m3u</td><td>Load an M3U playlist and carry on from its first row</td></tr><tr><td class="k">GENERATE Overnight</td><td>Make a new playlist from a template</td></tr><tr><td class="k">APPEND Daytime</td><td>Add a template's tracks after the playlist</td></tr><tr><td class="k">RULE Station IDs</td><td>Queue an advert or jingle rule's files after the song on air</td></tr><tr><td class="k">RUN C:\Scripts\lights.bat</td><td>Start a program</td></tr></tbody></table></div>
+
+      <h2 id="recipes">Recipes</h2>
+      <ul>
+        <li><b>A new playlist every morning</b>: 05:55, every day, Generate a new playlist from a template → <i>Breakfast</i>.</li>
+        <li><b>A weekly show</b>: build the show in its own playlist tab, then Friday 19:00, Put a playlist tab on air → <i>Friday Night</i>. End the show's tab with an <a href="#rows">Event row</a> that puts <i>Main</i> back on air.</li>
+        <li><b>A sponsored news intro</b>: 07:59, weekdays, Play adverts / jingles from a rule → <i>News sponsor</i>.</li>
+        <li><b>A second stream for a match</b>: Saturday 14:45, Run a station command → <code>ENCODER START 2</code>, and 17:15, <code>ENCODER STOP 2</code>.</li>
+        <li><b>Quieter overnight</b>: 00:00, Set volume 0.8; 06:00, Set volume 1.</li>
+      </ul>
+      <p class="tip"><b>Something every hour?</b> An event runs at one time of day. For a station ID or a top-of-the-hour jingle every hour, make a jingle rule that plays <b>every 1 hour on the clock</b> in the <a href="/guides/advertisement-scheduler/">advertisement scheduler</a>, or an insert in your <a href="/guides/playlist-generator/">generator template</a>.</p>
+
+      <h2 id="rows">Events in the playlist</h2>
+      <p><b>Playlist → Add event</b> puts an Event row in the running order. When playback reaches it, it runs a scheduler action, for example ending a show's playlist with "Put a playlist tab on air → Main" so Main carries on where it left off instead of dead air.</p>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/playlist-generator/"><span class="tag">Run the station</span><b>Use the playlist generator</b><span>Categories, templates and patterns that build hours of programming in one click.</span></a>
+<a class="guide-card" href="/guides/advertisement-scheduler/"><span class="tag">Run the station</span><b>Schedule adverts and jingles</b><span>Rules for every N songs, every N minutes or set times, with run dates for each advert.</span></a>
+<a class="guide-card" href="/guides/users-and-permissions/"><span class="tag">Run the station</span><b>Set up users and permissions</b><span>A login for every presenter, and exactly which tools each one can open.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

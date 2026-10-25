@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>How to Schedule Radio Adverts and Jingles in RadioMaster (Advertisement Scheduler)</title>
+<meta name="description" content="Schedule radio adverts and jingles with RadioMaster&#x27;s advertisement scheduler: play them every N songs, every N minutes or at set times, limit rules to dates, days and hours, give each advert its own run dates and export proof of play.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/advertisement-scheduler/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to schedule adverts and jingles">
+<meta property="og:description" content="Every N songs, every N minutes or at set times, with run dates for every advert and proof-of-play reports.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/advertisement-scheduler/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="RadioMaster radio automation software">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to schedule adverts and jingles">
+<meta name="twitter:description" content="Every N songs, every N minutes or at set times, with run dates for every advert and proof-of-play reports.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/advertisement-scheduler/#article",
+      "headline": "How to schedule adverts and jingles",
+      "description": "Schedule radio adverts and jingles with RadioMaster's advertisement scheduler: play them every N songs, every N minutes or at set times, limit rules to dates, days and hours, give each advert its own run dates and export proof of play.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/advertisement-scheduler/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Advertisement scheduler",
+          "item": "https://radiomaster.dovafm.com/guides/advertisement-scheduler/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Advertisement scheduler</nav>
+    <p class="eyebrow">Guide · Run the station</p>
+    <h1 class="page-h">How to schedule adverts and jingles</h1>
+    <p class="lede" style="margin-top:16px">The advertisement scheduler plays your adverts, jingles and station IDs by rules: after every few songs, every so many minutes, or at set times of day. Each advert can have its own run dates, and every play is logged for proof-of-play reports.</p>
+    <nav class="toc" aria-label="On this page"><a href="#open">Open it</a><a href="#adverts">Adverts list</a><a href="#rule">Make a rule</a><a href="#often">How often</a><a href="#when">When it&#x27;s in force</a><a href="#test">Test it</a><a href="#more">More ways to use rules</a><a href="#proof">Proof of play</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="open" style="margin-top:0">Open the scheduler</h2>
+      <p>Choose <b>Tools → Advertisement scheduler</b>. It has two tabs:</p>
+      <ul>
+        <li><b>📋 Rules</b>: what plays, how often, and when. Rules are listed on the left, and the one you pick opens on the right.</li>
+        <li><b>Adverts list</b>: your adverts, each with the dates and days it may run. Rules can play from this list.</li>
+      </ul>
+      <p class="tip"><b>Good to know:</b> adverts and jingles never count as songs, so a rule for "every 4 songs" counts music only.</p>
+
+      <h2 id="adverts">1. Add your adverts (optional)</h2>
+      <p>If you sell airtime, put each advert on the <b>Adverts list</b>: press <b>➕ Add advert</b>, pick its audio file, and set the dates it <b>runs from</b> and <b>to</b> and the days of the week it may play. Each advert shows whether it's <b>● running today</b> and which rules play it. When a campaign ends, the advert simply stops being picked; there's nothing to remember to remove.</p>
+      <p>For jingles and station IDs you don't need the list: a rule can play straight from a folder.</p>
+
+      <h2 id="rule">2. Make a rule</h2>
+      <p>On the Rules tab press <b>➕ Advert rule</b> or <b>➕ Jingle rule</b>. A rule is set up in three steps, top to bottom.</p>
+      <h3>What plays</h3>
+      <ul>
+        <li><b>From the Adverts list</b> (advert rules): each advert plays only within its own dates and days. Best for paid adverts.</li>
+        <li><b>From a folder or chosen files</b>: choose a folder, or press <b>➕ Add files</b> to hand-pick files (chosen files are used instead of the folder). Best for jingles, IDs and promos.</li>
+      </ul>
+      <p>Then choose how many to play each time and how to pick them: <b>random</b>, <b>taking turns</b> (each one in order, carrying on where it left off) or <b>all of them</b>.</p>
+
+      <h2 id="often">3. Choose how often</h2>
+      <div class="rundown-table"><table><thead><tr><th>Trigger</th><th>Example</th><th>How it plays</th></tr></thead><tbody><tr><td class="it">After every N songs</td><td>After every 4 songs, play 1 jingle</td><td>Added straight after the song that starts.</td></tr><tr><td class="it">Every N minutes or hours</td><td>Every 30 minutes, play 2 adverts</td><td>Queued after the song on air when the time comes; the song is never cut.</td></tr><tr><td class="it">At set times</td><td>At 08:58, 12:58 and 17:58</td><td>Queued after the song on air at each time. Press <b>➕ Add time</b> for more.</td></tr></tbody></table></div>
+      <p>For minutes and hours, <b>on the clock</b> means the times line up with the clock: every 30 minutes on the clock plays at :00 and :30. With it off, the next one is 30 minutes after the last time the rule played.</p>
+
+      <h2 id="when">4. Set when it's in force</h2>
+      <ul>
+        <li><b>Dates</b>: from and to, with a calendar. Leave them empty to run all the time.</li>
+        <li><b>Days</b>: tick days, or use <b>Every day</b>, <b>Weekdays</b> or <b>Weekends</b>.</li>
+        <li><b>Hours</b>: <b>all day</b>, or from one hour until another. Ranges over midnight work, so from 22 until 6 covers the overnight show.</li>
+      </ul>
+      <p>Each rule in the list shows <b>● in force now</b> or <b>○ waiting</b> (outside its dates, days or hours), and the <b>On / off</b> switch turns a rule off without losing it.</p>
+
+      <h2 id="test">Test it</h2>
+      <ul>
+        <li><b>▶ Play it now</b> plays the rule's picks straight away.</li>
+        <li><b>Queue them after the song on air</b> adds them as the next rows, as if the rule had just gone off.</li>
+        <li><b>Duplicate</b> copies a rule, which is the quickest way to make a weekend version of a weekday rule.</li>
+      </ul>
+
+      <h2 id="more">More ways to use rules</h2>
+      <ul>
+        <li><b>In the playlist generator</b>: a rule can be a <a href="/guides/playlist-generator/">pattern step or a timed insert</a>, so generated playlists carry your jingles and adverts already.</li>
+        <li><b>From the event scheduler</b>: the action <b>Play adverts / jingles from a rule</b> fires a rule at a set time, for example a sponsor's message before the news.</li>
+        <li><b>As a command</b>: <code>RULE Morning sponsors</code> in a playlist command row, a plugin or an event queues that rule's files after the song on air.</li>
+      </ul>
+
+      <h2 id="proof">Proof of play</h2>
+      <p>Every advert and jingle that plays is recorded. In <b>Tools → Reports</b>, choose adverts or jingles and a period (this week, last month…), click an item to see every time it played, and export a <b>proof of play PDF</b> for the advertiser with every air time, or a CSV that opens in Excel.</p>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/playlist-generator/"><span class="tag">Run the station</span><b>Use the playlist generator</b><span>Categories, templates and patterns that build hours of programming in one click.</span></a>
+<a class="guide-card" href="/guides/event-scheduler/"><span class="tag">Run the station</span><b>Automate with the event scheduler</b><span>Generate tomorrow&#x27;s playlist, switch shows and run commands at set times.</span></a>
+<a class="guide-card" href="/guides/users-and-permissions/"><span class="tag">Run the station</span><b>Set up users and permissions</b><span>A login for every presenter, and exactly which tools each one can open.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

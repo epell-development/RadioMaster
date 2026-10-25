@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>Manage an AzuraCast Station from RadioMaster: API Key, Queue, Requests, Media and DJs</title>
+<meta name="description" content="Connect RadioMaster to your AzuraCast server and manage the station from the studio: now playing, skip songs, restart services, the AutoDJ queue, listener requests, playlists, media uploads, streamers/DJs, listeners, history and schedule.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/azuracast/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to manage an AzuraCast station">
+<meta property="og:description" content="Connect your AzuraCast server, then run the queue, requests, media and DJs from the studio.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/azuracast/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/azuracast.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="The AzuraCast station manager window in RadioMaster">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to manage an AzuraCast station">
+<meta name="twitter:description" content="Connect your AzuraCast server, then run the queue, requests, media and DJs from the studio.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/azuracast.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/azuracast/#article",
+      "headline": "How to manage an AzuraCast station",
+      "description": "Connect RadioMaster to your AzuraCast server and manage the station from the studio: now playing, skip songs, restart services, the AutoDJ queue, listener requests, playlists, media uploads, streamers/DJs, listeners, history and schedule.",
+      "image": "https://radiomaster.dovafm.com/img/azuracast.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/azuracast/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Manage an AzuraCast station",
+          "item": "https://radiomaster.dovafm.com/guides/azuracast/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Manage an AzuraCast station</nav>
+    <p class="eyebrow">Guide · On air</p>
+    <h1 class="page-h">How to manage an AzuraCast station</h1>
+    <p class="lede" style="margin-top:16px">RadioMaster's AzuraCast tool puts your AzuraCast station inside the studio. With just the address you see what's playing and who's listening; add an API key and you can skip songs, restart services, manage the AutoDJ queue, answer requests, upload media and look after your DJs without opening a browser.</p>
+    <nav class="toc" aria-label="On this page"><a href="#connect">Connect</a><a href="#key">API key</a><a href="#pages">What you can do</a><a href="#live">Go live on AzuraCast</a><a href="#trouble">Troubleshooting</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="connect" style="margin-top:0">1. Connect to your AzuraCast server</h2>
+      <ol>
+        <li>Open <b>Tools → AzuraCast station manager</b>. The first time, it opens on the <b>🔑 Connection</b> page.</li>
+        <li>Type the <b>Base URL</b> of your AzuraCast server, for example <code>https://radio.example.com</code>.</li>
+        <li>Press <b>Find stations on this server</b> and press <b>Use</b> next to your station. (Or type its <b>Station</b> short name or ID yourself.)</li>
+        <li>Leave <b>Enable polling</b> on and choose how often to refresh with <b>Poll every (s)</b>.</li>
+      </ol>
+      <p>That's enough for the <b>📻 Overview</b> page to show what's playing, the listen link and the number of listeners.</p>
+
+      <h2 id="key">2. Add an API key to manage the station</h2>
+      <p>To change anything on the station, RadioMaster needs an API key:</p>
+      <ol>
+        <li>In AzuraCast, open your account (top right) → <b>API Keys</b> → <b>Add API key</b>.</li>
+        <li>Copy the key (it looks like <code>id:secret</code>) and paste it into <b>API key</b> on the 🔑 Connection page.</li>
+        <li>Press <b>Test API key</b>.</li>
+      </ol>
+      <p>The key can do whatever the AzuraCast account that made it can do, so use an account with rights to that station. Optionally set an <b>Upload folder</b> for files you upload from RadioMaster.</p>
+      <p class="tip"><b>Permission:</b> the AzuraCast tool can be allowed or blocked per user. See <a href="/guides/users-and-permissions/">users and permissions</a>.</p>
+
+      <h2 id="pages">What you can do</h2>
+      <div class="rundown-table"><table><thead><tr><th>Page</th><th>What it does</th></tr></thead><tbody><tr><td class="it">📻 Overview</td><td>Now playing with the listen link, and station control: <b>⏭ Skip song</b>, start, stop or restart AutoDJ and the broadcast server, and <b>🔌 Disconnect live DJ</b></td></tr><tr><td class="it">⏭ Queue</td><td>What AutoDJ plays next, with a button to remove songs</td></tr><tr><td class="it">🙋 Requests</td><td>Listener requests: delete them, <b>Clear all pending</b>, or find the song in your local library and add it to your playlist in one click. You can also search the requestable songs and request one</td></tr><tr><td class="it">📃 Playlists</td><td>Turn AzuraCast playlists on and off, <b>🔀 Reshuffle</b>, or <b>Queue all</b> of a playlist's songs to play next</td></tr><tr><td class="it">🗁 Media</td><td>Browse folders, <b>☁ Upload files here…</b>, <b>📁 Create folder</b>, then add a song to your RadioMaster playlist (<b>➕ Playlist</b> or <b>Insert</b> after the selected row), <b>Queue next</b> on AutoDJ, or delete it from the station</td></tr><tr><td class="it">🎤 Streamers/DJs</td><td>Add and edit DJ accounts: username, password, display name, comments, active, and only during scheduled times. One click fills encoder 1 with a DJ's login</td></tr><tr><td class="it">👥 Listeners</td><td>Who's listening right now</td></tr><tr><td class="it">📜 History</td><td>What played, with a calendar to pick the day</td></tr><tr><td class="it">📅 Schedule</td><td>The station's schedule, with what's on <b>NOW</b> highlighted</td></tr></tbody></table></div>
+      <p>Songs added to your playlist from AzuraCast are downloaded and cached, so they play like any local file.</p>
+
+      <h2 id="live">Go live on AzuraCast</h2>
+      <p>To broadcast from RadioMaster through AzuraCast instead of using AutoDJ, connect an encoder to the station's DJ port:</p>
+      <ol>
+        <li>On <b>🎤 Streamers/DJs</b>, add a DJ account (or pick an existing one) and use the button to fill encoder 1 with its login.</li>
+        <li>In <b>Tools → Streams / encoders</b>, check the encoder: server type Icecast, the station's DJ port (usually 8005), mount <code>/</code>, and type the DJ's password.</li>
+        <li>Press <b>▶ Connect</b>. AzuraCast puts your stream on air and AutoDJ steps aside until you disconnect.</li>
+      </ol>
+      <p>More detail on encoders is in the <a href="/guides/stream-to-icecast-shoutcast/">streaming guide</a>.</p>
+
+      <h2 id="trouble">Troubleshooting</h2>
+      <ul>
+        <li><b>"This page needs an AzuraCast API key"</b>: add a key on the Connection page; only the Overview works without one.</li>
+        <li><b>The API key test fails</b>: check the key was copied whole (both parts, with the colon), and that its account can manage this station.</li>
+        <li><b>No stations found</b>: check the Base URL opens AzuraCast in a browser, including <code>https://</code>.</li>
+        <li><b>The encoder won't connect</b>: the DJ account must be active (and inside its scheduled times if that's ticked), and the DJ port must be open on the server's firewall.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/live-shows/"><span class="tag">On air</span><b>Present a live show</b><span>The microphone, the cart wall, voice tracks and text to speech.</span></a>
+<a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
+<a class="guide-card" href="/guides/stream-to-icecast-shoutcast/"><span class="tag">Get started</span><b>Stream to Icecast or Shoutcast</b><span>Add an encoder, pick a format and bitrate, and send song titles to your listeners.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

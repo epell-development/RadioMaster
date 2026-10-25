@@ -125,7 +125,7 @@ impl Revs {
             self.rev += 1;
         }
         self.ticks = self.ticks.wrapping_add(1);
-        if changed || self.ticks % 8 == 0 {
+        if changed || self.ticks.is_multiple_of(8) {
             let m = sync::missing_in(&self.tabs);
             let mh = digest(&m);
             if mh != self.missing_rev {
@@ -814,6 +814,14 @@ mod tests {
         }
     }
 
+    /// A station with just these rows. (The data folder is shared by the tests running at the same
+    /// time, so the playlists another test saved there are replaced, not added to.)
+    fn station_with(rows: Vec<PlEntry>) -> Arc<Mutex<Playout>> {
+        let mut p = Playout::new(Engine::new_detached(), crate::config::Config::default());
+        p.set_tabs(TabsWire { tabs: vec![sync::TabWire { name: "Main".into(), entries: rows, current: None }], playing: 0 });
+        Arc::new(Mutex::new(p))
+    }
+
     fn row(name: &str) -> PlEntry {
         PlEntry::file(Track { path: format!("/srv/music/{name}.mp3").into(), title: name.into(), ..Default::default() })
     }
@@ -908,7 +916,7 @@ mod tests {
             });
             (stop, h)
         };
-        let delay = sound_after(&on_air, 10.0).expect("the mic should be on air");
+        sound_after(&on_air, 10.0).expect("the mic should be on air");
         sender.0.store(true, Ordering::Relaxed);
         sender.1.join().unwrap();
         post("mic/off", b"{}").unwrap();
@@ -922,8 +930,7 @@ mod tests {
     #[test]
     fn app_and_server_stay_in_step() {
         crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
-        station.lock().append_to_tab(0, vec![row("one"), row("two")]);
+        let station = station_with(vec![row("one"), row("two")]);
         let cfg = ServerCfg {
             user: "studio".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),
@@ -1016,9 +1023,8 @@ mod tests {
         let tone = dir.join("tone.wav");
         write_wav(&tone, 3.0);
         let gone = dir.join("gone.mp3");
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
         let file = |p: &std::path::Path| PlEntry::file(Track { path: p.into(), title: "t".into(), ..Default::default() });
-        station.lock().append_to_tab(0, vec![file(&tone), file(&gone)]);
+        let station = station_with(vec![file(&tone), file(&gone)]);
         let cfg = ServerCfg {
             user: "studio".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),
@@ -1071,8 +1077,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::config::set_data_dir(dir.clone());
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
-        station.lock().append_to_tab(0, vec![row("one")]);
+        let station = station_with(vec![row("one")]);
         let cfg = ServerCfg {
             user: "studio".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),

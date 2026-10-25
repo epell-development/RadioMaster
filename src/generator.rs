@@ -162,7 +162,7 @@ mod tests {
         };
         let out = generate(&t, &cats(), &lib(), &HashMap::new());
         let total: f32 = out.iter().map(|t| t.duration).sum();
-        assert!(total >= 3600.0 && total < 3600.0 + 400.0, "total {total}");
+        assert!((3600.0..3600.0 + 400.0).contains(&total), "total {total}");
         assert!(out.iter().any(|t| t.path.starts_with("/jingles")));
         // no artist repeats within the gap among music tracks
         let music: Vec<&Track> = out.iter().filter(|t| t.path.starts_with("/music")).collect();

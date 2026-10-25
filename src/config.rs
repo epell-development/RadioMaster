@@ -424,7 +424,11 @@ impl AdRule {
             Trigger::Songs => format!("after every {} song{}", self.every_songs.max(1), if self.every_songs == 1 { "" } else { "s" }),
             Trigger::Minutes => {
                 let m = self.every_mins.max(1);
-                let every = if m % 60 == 0 { format!("{} hour{}", m / 60, if m == 60 { "" } else { "s" }) } else { format!("{m} minutes") };
+                let every = if m.is_multiple_of(60) {
+                    format!("{} hour{}", m / 60, if m == 60 { "" } else { "s" })
+                } else {
+                    format!("{m} minutes")
+                };
                 format!("every {every}{}", if self.on_clock { " (on the clock)" } else { "" })
             }
             Trigger::Times => {
@@ -665,6 +669,8 @@ pub struct Config {
     pub hour_lines: bool,
     /// saved EQ curves (name, gains)
     pub eq_presets: Vec<(String, [f32; 12])>,
+    /// saved parametric EQ curves (name, bands)
+    pub peq_presets: Vec<(String, Vec<crate::dsp::PeqBand>)>,
     /// plugin folders that are switched off
     pub plugins_off: Vec<String>,
     /// interface language (a file in the lang folder); empty = English
@@ -681,6 +687,7 @@ impl Default for Config {
             check_updates: true,
             hour_lines: true,
             eq_presets: vec![],
+            peq_presets: vec![],
             plugins_off: vec![],
             language: String::new(),
             ffmpeg_path: String::new(),
