@@ -25,6 +25,8 @@ pub struct Asset {
     pub name: String,
     pub browser_download_url: String,
     pub size: u64,
+    /// "sha256:…", as GitHub works it out for each release file
+    pub digest: String,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -116,6 +118,7 @@ pub fn install(asset: &Asset, progress: &dyn Fn(String)) -> Result<(), String> {
             progress(format!("Downloading {}… {pct}%", asset.name));
         }
     }
+    check_download(asset, &data)?;
     progress("Installing…".into());
     let program = if asset.name.ends_with(".zip") { unzip(&data, program_name()) } else { untar_gz(&data, program_name()) }
         .ok_or_else(|| format!("{} has no {} in it", asset.name, program_name()))?;
@@ -124,6 +127,22 @@ pub fn install(asset: &Asset, progress: &dyn Fn(String)) -> Result<(), String> {
         return Err("the download doesn't look like RadioMaster Server".into());
     }
     replace_program(&program)
+}
+
+/// The download is the release file whole and unchanged: its size, and its SHA-256 where the
+/// release lists one.
+fn check_download(asset: &Asset, data: &[u8]) -> Result<(), String> {
+    use sha2::Digest;
+    if asset.size > 0 && data.len() as u64 != asset.size {
+        return Err(format!("the download of {} was cut short ({} of {} bytes)", asset.name, data.len(), asset.size));
+    }
+    if let Some(want) = asset.digest.strip_prefix("sha256:") {
+        let got: String = sha2::Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect();
+        if !got.eq_ignore_ascii_case(want) {
+            return Err(format!("{} isn't the file the release lists (its SHA-256 differs)", asset.name));
+        }
+    }
+    Ok(())
 }
 
 /// The file called `name` (in any folder) in a .tar.gz.
@@ -242,6 +261,17 @@ pub fn start_again() -> Result<(), String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn downloads_are_checked_against_the_release() {
+        // SHA-256 of "abc"
+        let digest = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string();
+        let asset = Asset { name: "x.tar.gz".into(), size: 3, digest, ..Default::default() };
+        assert!(check_download(&asset, b"abc").is_ok());
+        assert!(check_download(&asset, b"abd").unwrap_err().contains("SHA-256"));
+        assert!(check_download(&asset, b"ab").unwrap_err().contains("cut short"));
+        assert!(check_download(&Asset::default(), b"anything").is_ok(), "older releases list no digest");
+    }
 
     #[test]
     fn versions_compare_numerically() {
