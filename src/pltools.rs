@@ -379,7 +379,7 @@ impl App {
                         ui.horizontal_wrapped(|ui| {
                             if action_edit(ui, "item_event", &mut d.action, &mut d.text, &mut d.arg, &opts) {
                                 let a = d.action;
-                                self.dlg(move || action_file_dialog(a).pick_file().map(Dlg::EventPath));
+                                self.pick(action_pick(a), tr("Choose a file"), |_, v| Some(Dlg::EventPath(v.into_iter().next()?)));
                             }
                         });
                         ui.end_row();
@@ -428,7 +428,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut a.folder).hint_text(tr("optional folder")).desired_width(220.0));
                             if ui.button("…").clicked() {
-                                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::AnnounceFolder));
+                                self.pick(Pick::Folder, tr("Recordings folder"), |_, v| Some(Dlg::AnnounceFolder(v.into_iter().next()?)));
                             }
                         });
                         ui.end_row();
@@ -466,7 +466,7 @@ impl App {
                                 d.items.remove(k);
                             }
                             if ui.button(tr("Add files…")).clicked() {
-                                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::ContainerFiles));
+                                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::ContainerFiles(v)));
                             }
                         });
                         ui.end_row();
@@ -477,10 +477,10 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut d.text).hint_text(tr("folder or .m3u")).desired_width(200.0));
                             if ui.button(tr("Folder…")).clicked() {
-                                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::TrackListSource));
+                                self.pick(Pick::Folder, tr("Track list folder"), |_, v| Some(Dlg::TrackListSource(v.into_iter().next()?)));
                             }
                             if ui.button(tr("M3U…")).clicked() {
-                                self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::TrackListSource));
+                                self.pick(Pick::File(M3U.0, M3U.1), tr("Track list playlist"), |_, v| Some(Dlg::TrackListSource(v.into_iter().next()?)));
                             }
                         });
                         ui.end_row();
@@ -580,9 +580,7 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.add(egui::TextEdit::singleline(path).hint_text(tr("none")).desired_width(230.0));
                                 if ui.small_button("…").on_hover_text(tr("Pick a sound file")).clicked() {
-                                    self.dlg(move || {
-                                        rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::SpeechSound(outro, p))
-                                    });
+                                    self.pick(Pick::File(AUDIO.0, AUDIO.1), tr("Pick a sound file"), move |_, v| Some(Dlg::SpeechSound(outro, v.into_iter().next()?)));
                                 }
                                 if !path.is_empty() && ui.small_button("✖").on_hover_text(tr("No sound")).clicked() {
                                     path.clear();
@@ -788,6 +786,19 @@ impl App {
                 ui.small(tr("Recordings are saved as WAV in the voicetracks folder of your RadioMaster data folder."));
             },
         );
+        if let Some(f) = insert.take().filter(|_| self.srv.connected()) {
+            // the server plays it: the recording goes to a folder there first
+            self.pick(Pick::Folder, tr("Save the voice track on the server in"), move |fs, v| {
+                let dir = v.into_iter().next()?;
+                Some(match fs.upload(&f, &dir) {
+                    Ok(p) => Dlg::InsertVoice(vec![p]),
+                    Err(e) => Dlg::Say(format!("The voice track couldn't be uploaded: {e}")),
+                })
+            });
+            if let Some(v) = self.vt.as_mut() {
+                v.file = None;
+            }
+        }
         if let Some(f) = insert {
             let mut e = core.entry_for(&f);
             e.kind = ItemKind::VoiceTrack;
@@ -901,10 +912,10 @@ impl App {
         }
         ui.separator();
         if item(ui, edit, tr("Add file…"), "Alt+F") {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
+            self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::AddFiles(v)));
         }
         if item(ui, edit, tr("Add folder…"), "Alt+D") {
-            self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::add_folder));
+            self.pick(Pick::Folder, tr("Add folder"), |fs, v| Some(Dlg::add_folder(fs, v.into_iter().next()?)));
         }
         if item(ui, edit, tr("Add URL…"), "Alt+U") {
             self.open_item_dlg(DlgKind::Url);
@@ -938,7 +949,7 @@ impl App {
         }
         ui.separator();
         if item(ui, edit, tr("Insert voice track…"), "Ctrl+W") {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
+            self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Insert voice track"), |_, v| Some(Dlg::InsertVoice(v)));
         }
         if item(ui, vt, tr("🔴 Record voice track…"), "Ctrl+R") {
             self.show_vt = true;
@@ -952,10 +963,12 @@ impl App {
         }
         ui.separator();
         if item(ui, edit, tr("Insert playlist"), "") {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::insert_playlist));
+            self.pick(Pick::File(M3U.0, M3U.1), tr("Insert playlist"), |fs, v| Some(Dlg::insert_playlist(fs, v.into_iter().next()?)));
         }
         if item(ui, edit, tr("Insert tracks from playlist…"), "") {
-            self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::insert_from_playlist));
+            self.pick(Pick::File(M3U.0, M3U.1), tr("Insert tracks from playlist"), |fs, v| {
+                Some(Dlg::insert_from_playlist(fs, v.into_iter().next()?))
+            });
         }
         ui.separator();
         ui.menu_button(tr("Extra"), |ui| {
@@ -1082,10 +1095,10 @@ impl App {
         // ---- playlist editing
         if p.edit_playlists {
             if press(Modifiers::ALT, Key::F) || press(Modifiers::NONE, Key::Insert) {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
+                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::AddFiles(v)));
             }
             if press(Modifiers::ALT, Key::D) {
-                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::add_folder));
+                self.pick(Pick::Folder, tr("Add folder"), |fs, v| Some(Dlg::add_folder(fs, v.into_iter().next()?)));
             }
             if press(Modifiers::ALT, Key::U) {
                 self.open_item_dlg(DlgKind::Url);
@@ -1106,7 +1119,7 @@ impl App {
                 self.open_item_dlg(DlgKind::HourMarker);
             }
             if press(Modifiers::COMMAND, Key::W) {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
+                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Insert voice track"), |_, v| Some(Dlg::InsertVoice(v)));
             }
             if press(Modifiers::COMMAND, Key::R) && p.tool(crate::auth::tool::VOICE_TRACK) {
                 self.show_vt = true;
@@ -1115,7 +1128,7 @@ impl App {
                 self.tab_ops.push(super::plview::TabOp::New);
             }
             if press(Modifiers::COMMAND, Key::O) {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
+                self.pick(Pick::File(M3U.0, M3U.1), tr("Open playlist"), |fs, v| Some(Dlg::load_m3u(fs, v.into_iter().next()?)));
             }
             if press(Modifiers::COMMAND, Key::S) {
                 let name = format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));

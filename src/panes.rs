@@ -156,7 +156,7 @@ impl App {
                     Tab::Queue => self.tab_queue(ui, core),
                     Tab::Search => self.tab_search(ui, core),
                     Tab::Statistics => self.tab_statistics(ui, core),
-                    Tab::FileExplorer => self.tab_file_explorer(ui, pane, core),
+                    Tab::FileExplorer => self.tab_file_explorer(ui, pane.key(), core),
                     Tab::Log => self.tab_log(ui, core),
                     Tab::SongRequests => self.tab_song_requests(ui, core),
                     Tab::TrackInfo => self.tab_track_info(ui, core),
@@ -501,9 +501,14 @@ impl App {
     }
 
     // ------------------------------------------------------- file explorer
-    fn tab_file_explorer(&mut self, ui: &mut egui::Ui, pane: Pane, core: &mut Playout) {
-        let key = pane.key();
+    /// The file explorer, in a panel or its own window (`key` tells them apart). While connected to a
+    /// server it shows the server's folders.
+    pub(super) fn tab_file_explorer(&mut self, ui: &mut egui::Ui, key: String, core: &mut Playout) {
+        let fs = self.fs();
         let start = || {
+            if fs.is_server() {
+                return PathBuf::new(); // the server says where to start
+            }
             core.cfg
                 .library_folders
                 .first()
@@ -513,55 +518,66 @@ impl App {
                 .unwrap_or_else(|| PathBuf::from("/"))
         };
         let dir = self.fx_dir.entry(key.clone()).or_insert_with(start).clone();
+        let all = self.fx_all.contains(&key);
+        let listed = self.fx_list.get(&key).filter(|(d, _, _)| *d == dir).map(|(_, _, l)| l.clone());
         let mut go: Option<PathBuf> = None;
         ui.horizontal_wrapped(|ui| {
             if ui.small_button("⬆").on_hover_text(tr("Up one folder")).clicked() {
-                if let Some(p) = dir.parent() {
-                    go = Some(p.to_path_buf());
-                }
+                go = listed.as_ref().and_then(|l| l.parent.clone()).or_else(|| dir.parent().map(|p| p.to_path_buf()));
             }
-            for root in crate::library::drive_roots() {
-                if ui.small_button(root.display().to_string().trim_end_matches('\\')).clicked() {
+            let places = match &listed {
+                Some(l) => l.places.clone(),
+                None if fs.is_server() => vec![],
+                None => crate::library::drive_roots().to_vec(),
+            };
+            for root in places {
+                let label = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| root.display().to_string());
+                if ui.small_button(label.trim_end_matches('\\')).on_hover_text(root.display().to_string()).clicked() {
                     go = Some(root.clone());
                 }
             }
             if ui.add_enabled(self.perm.edit_playlists, egui::Button::new(tr("Add folder to playlist")).small()).clicked() {
                 self.add_files_later(self.view_pl, Some(usize::MAX), vec![dir.clone()]);
             }
+            let mut a = all;
+            if ui.checkbox(&mut a, tr("All files")).on_hover_text(tr("Show every file in the folder, not only audio")).changed() {
+                if a {
+                    self.fx_all.insert(key.clone());
+                } else {
+                    self.fx_all.remove(&key);
+                }
+                self.fx_list.remove(&key);
+            }
         });
-        ui.label(RichText::new(dir.display().to_string()).small().color(GRAY));
+        let where_ = if fs.is_server() { format!("{} {}", tr("Server:"), dir.display()) } else { dir.display().to_string() };
+        ui.label(RichText::new(where_).small().color(GRAY));
         ui.separator();
         // the folder is listed when it changes, on Refresh, or every few seconds — not every frame, and
-        // off the UI thread (network and cloud drives can take seconds to answer)
+        // off the UI thread (network and cloud drives, and servers, can take seconds to answer)
         let stale = self.fx_list.get(&key).is_none_or(|(d, t, _)| *d != dir || t.elapsed() > Duration::from_secs(5));
         if stale && self.fx_loading.get(&key) != Some(&dir) {
             self.fx_loading.insert(key.clone(), dir.clone());
-            let (k, d) = (key.clone(), dir.clone());
+            let (k, d, folders) = (key.clone(), dir.clone(), core.cfg.library_folders.clone());
             self.dlg(move || {
-                let mut list: Vec<(bool, PathBuf)> = std::fs::read_dir(&d)
-                    .map(|rd| {
-                        rd.filter_map(|e| e.ok())
-                            .map(|e| (e.file_type().map(|t| t.is_dir()).unwrap_or(false), e.path()))
-                            .filter(|(d, p)| *d || crate::library::is_audio(p))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                list.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.file_name().cmp(&b.1.file_name())));
+                let list = fs.list(&d, all, &folders);
                 Some(super::Dlg::FolderList(k, d, list))
             });
         }
-        let listing = self.fx_list.get(&key).is_none_or(|(d, _, _)| *d != dir);
+        let listing = listed.is_none();
         if listing {
             ui.spinner();
         }
-        let entries = self.fx_list.get(&key).filter(|(d, _, _)| *d == dir).map(|(_, _, l)| l.clone()).unwrap_or_default();
+        let list = listed.unwrap_or_default();
+        if !list.error.is_empty() {
+            ui.colored_label(RED, &list.error);
+        }
         let mut add: Vec<PathBuf> = vec![];
         // only the rows in view are drawn; the others just take their space (big folders stay smooth)
         let row_h = (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
             .max(ui.spacing().interact_size.y)
             + ui.spacing().item_spacing.y;
         let mut skipped = 0.0;
-        for (is_dir, p) in entries.iter().take(2000) {
+        for e in list.entries.iter().take(5000) {
             let row = egui::Rect::from_min_size(ui.cursor().min + egui::vec2(0.0, skipped), egui::vec2(1.0, row_h));
             if !ui.is_rect_visible(row) {
                 skipped += row_h;
@@ -571,15 +587,29 @@ impl App {
                 ui.add_space(skipped);
                 skipped = 0.0;
             }
+            let p = &e.path;
+            let audio = e.dir || crate::library::is_audio(p);
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            let r =
-                ui.selectable_label(false, if *is_dir { format!("📁 {name}") } else { format!("🎵 {name}") }).interact(egui::Sense::drag());
+            let text = if e.dir {
+                RichText::new(format!("📁 {name}"))
+            } else if audio {
+                RichText::new(format!("🎵 {name}"))
+            } else {
+                RichText::new(format!("   {name}")).color(GRAY)
+            };
+            let r = ui.selectable_label(false, text).interact(egui::Sense::drag());
+            if !e.dir {
+                r.clone().on_hover_text(format!("{} · {}", name, size_text(e.size)));
+            }
+            if !audio {
+                continue; // shown, but not something a playlist can play
+            }
             if r.drag_started() && self.perm.edit_playlists {
                 // a folder is listed when it is dropped, off the UI thread
                 r.dnd_set_drag_payload(super::plview::DragFiles(vec![p.clone()]));
             }
             if r.double_clicked() {
-                if *is_dir {
+                if e.dir {
                     go = Some(p.clone());
                 } else {
                     add.push(p.clone());
@@ -594,7 +624,7 @@ impl App {
                     add.push(p.clone());
                     ui.close_menu();
                 }
-                if !*is_dir && ui.button(tr("Insert after selected row")).clicked() {
+                if !e.dir && ui.button(tr("Insert after selected row")).clicked() {
                     let at = self.insert_pos(core);
                     let rows: Vec<PlEntry> = vec![core.entry_quick(p)];
                     core.with_tab(self.view_pl, |c| c.insert_rows(at, rows));
@@ -605,8 +635,8 @@ impl App {
         if skipped > 0.0 {
             ui.add_space(skipped);
         }
-        if entries.is_empty() && !listing {
-            ui.label(RichText::new(tr("No folders or audio files here.")).color(GRAY));
+        if list.entries.is_empty() && !listing && list.error.is_empty() {
+            ui.label(RichText::new(if all { tr("This folder is empty.") } else { tr("No folders or audio files here.") }).color(GRAY));
         }
         if !add.is_empty() && self.perm.edit_playlists {
             self.add_files_later(self.view_pl, Some(usize::MAX), add);
@@ -809,5 +839,15 @@ pub(super) fn row_background(ui: &mut egui::Ui, e: &PlEntry, is_cur: bool) {
     };
     if let Some(c) = c {
         ui.painter().rect_filled(ui.max_rect().expand2(egui::vec2(4.0, 1.0)), 0.0, c);
+    }
+}
+
+/// "3.2 MB"
+fn size_text(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
+        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
+        b if b >= 1 << 10 => format!("{} KB", b >> 10),
+        b => format!("{b} bytes"),
     }
 }

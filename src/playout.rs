@@ -215,6 +215,7 @@ pub fn marker_target(hour: u32, minute: u32, reference: DateTime<Local>) -> Date
 }
 
 /// A line of an M3U: a RadioMaster special row, or a file that exists (and whether it is a voice track).
+#[derive(Serialize, Deserialize)]
 pub enum M3uRow {
     Row(PlEntry),
     File(PathBuf, bool),

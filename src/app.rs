@@ -5,7 +5,7 @@ use crate::dsp::EQ_FREQS;
 use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
-use crate::playout::{parse_m3u, M3uRow, PlayState, Playout};
+use crate::playout::{M3uRow, PlayState, Playout};
 use crate::scheduler::{ActionKind, Event};
 use crate::stream::EncState;
 use crate::workzones::{Tab, WorkzoneSet};
@@ -116,29 +116,70 @@ enum Dlg {
     /// files (folders already listed) for playlist tab, at row (None: after the selection when
     /// that tab is viewed, otherwise the end)
     Files(usize, Option<usize>, Vec<PathBuf>),
-    /// file explorer listing: (panel key, folder, entries)
-    FolderList(String, PathBuf, Vec<(bool, PathBuf)>),
+    /// file explorer listing: (panel key, folder asked for, listing)
+    FolderList(String, PathBuf, crate::playout::sync::FsList),
     /// sound card outputs, inputs, and the default output
     Devices(Vec<String>, Vec<String>, Option<String>),
     /// the play history for Reports
     History(Vec<crate::report::Play>),
+    /// a message for the status bar and log
+    Say(String),
+    /// a profile file was copied into the profiles folder
+    ProfileImported(String),
+    /// a server folder for a profile mapping row
+    MapTo(usize, PathBuf),
 }
 
 /// Dialog results that read the disk do it here, on the dialog's thread, not on the UI thread.
+/// `fs` is where the picked file is: this computer or the connected server.
 impl Dlg {
-    fn add_folder(p: PathBuf) -> Dlg {
-        Dlg::AddFolder(crate::library::audio_files_in(&p))
+    fn add_folder(fs: &crate::link::Fs, p: PathBuf) -> Dlg {
+        Dlg::AddFolder(fs.audio_files_in(&p))
     }
-    fn load_m3u(p: PathBuf) -> Dlg {
-        Dlg::LoadM3u(parse_m3u(&p))
+    fn load_m3u(fs: &crate::link::Fs, p: PathBuf) -> Dlg {
+        Dlg::LoadM3u(fs.m3u(&p))
     }
-    fn insert_playlist(p: PathBuf) -> Dlg {
-        Dlg::InsertPlaylist(parse_m3u(&p))
+    fn insert_playlist(fs: &crate::link::Fs, p: PathBuf) -> Dlg {
+        Dlg::InsertPlaylist(fs.m3u(&p))
     }
-    fn insert_from_playlist(p: PathBuf) -> Dlg {
-        let rows = parse_m3u(&p);
+    fn insert_from_playlist(fs: &crate::link::Fs, p: PathBuf) -> Dlg {
+        let rows = fs.m3u(&p);
         Dlg::InsertFromPlaylist(p, rows)
     }
+}
+
+/// A station profile on its way to the server, with its folders mapped to the server's.
+struct ProfileMap {
+    name: String,
+    value: serde_json::Value,
+    /// (folder in the profile, folder on the server)
+    maps: Vec<(String, String)>,
+    has_playlists: bool,
+    playlists: bool,
+}
+
+impl ProfileMap {
+    fn new(name: String, value: serde_json::Value) -> Self {
+        let maps = crate::playout::sync::path_roots(&value).into_iter().map(|r| (r, String::new())).collect();
+        let has_playlists = value.get("_session").is_some();
+        ProfileMap { name, value, maps, has_playlists, playlists: false }
+    }
+}
+
+/// An account as the users grid shows it.
+pub(super) struct UserRow {
+    pub name: String,
+    pub admin: bool,
+    pub perms: crate::auth::Perms,
+    pub disabled: bool,
+}
+
+/// What was done in the users grid.
+pub(super) enum UserAct {
+    Add { name: String, password: String, admin: bool, perms: crate::auth::Perms },
+    Change { name: String, admin: bool, perms: crate::auth::Perms, disabled: bool },
+    Password { name: String, password: String },
+    Delete { name: String },
 }
 
 enum PlAct {
@@ -162,6 +203,9 @@ mod adsui;
 mod aztool;
 #[path = "cleanupui.rs"]
 mod cleanupui;
+#[path = "fileui.rs"]
+mod fileui;
+use fileui::{Pick, AUDIO, M3U};
 #[path = "panes.rs"]
 mod panes;
 #[path = "pltools.rs"]
@@ -170,6 +214,8 @@ mod pltools;
 mod plview;
 #[path = "reportui.rs"]
 mod reportui;
+#[path = "serveradmin.rs"]
+mod serveradmin;
 #[path = "serverui.rs"]
 mod serverui;
 
@@ -253,7 +299,9 @@ pub struct App {
     browsers: Browsers,
     web_state: HashMap<String, panes::WebState>,
     fx_dir: HashMap<String, PathBuf>,
-    fx_list: HashMap<String, (PathBuf, std::time::Instant, Arc<Vec<(bool, PathBuf)>>)>,
+    fx_list: HashMap<String, (PathBuf, std::time::Instant, Arc<crate::playout::sync::FsList>)>,
+    /// explorers that show every file, not only audio (by panel key)
+    fx_all: std::collections::HashSet<String>,
     /// explorer folders being listed in the background (panel key → folder)
     fx_loading: HashMap<String, PathBuf>,
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
@@ -298,6 +346,8 @@ pub struct App {
     profile_name: String,
     profile_list: Vec<String>,
     show_profiles: bool,
+    /// a profile being loaded onto the server
+    profile_map: Option<ProfileMap>,
     accounts: crate::auth::Accounts,
     logged_in: Option<crate::auth::Operator>,
     login_name: String,
@@ -319,6 +369,7 @@ pub struct App {
     art_rx: Option<mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>>,
     /// File → Connect to Server
     srv: serverui::ServerUi,
+    files: fileui::FileUi,
 }
 
 /// The one delete button used everywhere: 🗑, then "Delete!" / "Keep" so nothing goes by accident.
@@ -467,13 +518,12 @@ pub(super) fn action_edit(
     browse
 }
 
-/// File dialog for an action that takes a file: a playlist for "Load playlist", audio otherwise.
-pub(super) fn action_file_dialog(action: ActionKind) -> rfd::FileDialog {
-    let d = rfd::FileDialog::new();
+/// What an action that takes a file picks: a playlist for "Load playlist", audio otherwise.
+fn action_pick(action: ActionKind) -> Pick {
     if action == ActionKind::LoadPlaylistAndPlay {
-        d.add_filter("Playlist", &["m3u", "m3u8"])
+        Pick::File(M3U.0, M3U.1)
     } else {
-        d.add_filter("Audio", &crate::library::EXTS)
+        Pick::File(AUDIO.0, AUDIO.1)
     }
 }
 
@@ -572,6 +622,7 @@ impl App {
             right_w: 400.0,
             art_rx: None,
             srv: Default::default(),
+            files: Default::default(),
             seek_drag: None,
             mic_stream: None,
             mic_on: false,
@@ -588,6 +639,7 @@ impl App {
             fx_dir: HashMap::new(),
             fx_list: HashMap::new(),
             fx_loading: HashMap::new(),
+            fx_all: Default::default(),
             aux_spawn: HashMap::new(),
             layout_checked: std::time::Instant::now(),
             perf: None,
@@ -634,6 +686,7 @@ impl App {
                 .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
                 .collect(),
             show_profiles: false,
+            profile_map: None,
             accounts: crate::auth::Accounts::load(),
             logged_in: None,
             login_name: String::new(),
@@ -674,7 +727,8 @@ impl App {
     /// Add files and folders to playlist `tab` (see `Dlg::Files`) once the folders have been listed
     /// off the UI thread.
     pub(super) fn add_files_later(&self, tab: usize, at: Option<usize>, paths: Vec<PathBuf>) {
-        self.dlg(move || Some(Dlg::Files(tab, at, crate::library::expand_paths(paths))));
+        let fs = self.fs();
+        self.dlg(move || Some(Dlg::Files(tab, at, fs.expand(paths))));
     }
 
     fn handle_dialogs(&mut self, core: &mut Playout) {
@@ -756,8 +810,13 @@ impl App {
                     }
                     self.insert_rows_at(core, tab, at, rows);
                 }
-                Dlg::FolderList(key, dir, list) => {
+                Dlg::FolderList(key, mut dir, list) => {
                     self.fx_loading.remove(&key);
+                    // the server's starting folder: shown as itself from now on
+                    if dir.as_os_str().is_empty() && self.fx_dir.get(&key).is_some_and(|d| d.as_os_str().is_empty()) {
+                        dir = list.path.clone();
+                        self.fx_dir.insert(key.clone(), dir.clone());
+                    }
                     self.fx_list.insert(key, (dir, std::time::Instant::now(), Arc::new(list)));
                 }
                 Dlg::Devices(outs, ins, default) => {
@@ -777,6 +836,18 @@ impl App {
                     }
                 }
                 Dlg::History(all) => self.rep.set_history(all),
+                Dlg::Say(m) => core.say(m),
+                Dlg::ProfileImported(name) => {
+                    core.say(format!("Imported the profile {name}"));
+                    if !self.profile_list.contains(&name) {
+                        self.profile_list.push(name);
+                    }
+                }
+                Dlg::MapTo(i, p) => {
+                    if let Some(row) = self.profile_map.as_mut().and_then(|m| m.maps.get_mut(i)) {
+                        row.1 = p.to_string_lossy().to_string();
+                    }
+                }
                 Dlg::SaveM3u(p) => core.with_tab(self.view_pl, |c| c.save_m3u(&p)),
                 Dlg::RenderWav(p) => core.with_tab(self.view_pl, |c| c.render_playlist(p)),
                 Dlg::ExportCsv(p) => match core.with_tab(self.view_pl, |c| c.export_csv(&p)) {
@@ -804,7 +875,10 @@ impl App {
                 }
                 Dlg::CleanupFolder(p) => self.clean.extra = Some(p),
                 Dlg::LibFolder(p) => {
-                    core.cfg.library_folders.push(p.to_string_lossy().to_string());
+                    let f = p.to_string_lossy().to_string();
+                    if !core.cfg.library_folders.contains(&f) {
+                        core.cfg.library_folders.push(f);
+                    }
                     core.start_scan();
                 }
                 Dlg::Cart(i, p) => {
@@ -882,7 +956,7 @@ impl App {
                         ui.close_menu();
                     }
                     if ui.button(tr("Open playlist…")).clicked() {
-                        self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
+                        self.pick(Pick::File(M3U.0, M3U.1), tr("Open playlist"), |fs, v| Some(Dlg::load_m3u(fs, v.into_iter().next()?)));
                         ui.close_menu();
                     }
                     if ui.button(tr("Save playlist as…")).clicked() {
@@ -984,6 +1058,7 @@ impl App {
                         ToolWin::AzuraCast,
                         ToolWin::Reports,
                         ToolWin::History,
+                        ToolWin::FileExplorer,
                         ToolWin::Cleanup,
                         ToolWin::Notepad,
                         ToolWin::Plugins,
@@ -1122,6 +1197,7 @@ impl App {
                         ui.add(egui::Image::new((t.id(), egui::vec2(18.0, 18.0))));
                     }
                     self.server_chip(ui);
+                    self.server_update_button(ui);
                     if let Some(v) = &new_version {
                         let b = egui::Button::new(RichText::new(format!("⬆ Update available: v{v}")).strong().color(Color32::WHITE))
                             .fill(Color32::from_rgb(20, 150, 235));
@@ -1519,7 +1595,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.strong(tr("PLAYBACK QUEUE"));
             if ui.button(tr("Add files…")).clicked() {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
+                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::AddFiles(v)));
             }
         });
         let start = core.current.map(|i| i + 1).unwrap_or(0);
@@ -1941,101 +2017,17 @@ impl App {
         if !self.show_users || !self.logged_in.as_ref().map(|u| u.admin).unwrap_or(false) {
             return;
         }
-        use crate::auth::Perms;
         let mut open = self.show_users;
         let me = self.logged_in.as_ref().map(|u| u.name.clone()).unwrap_or_default();
-        let mut changes: Vec<(String, bool, Perms, bool)> = vec![];
-        let mut reset: Option<(String, String)> = None;
-        let mut delete: Option<String> = None;
+        let rows: Vec<UserRow> = self
+            .accounts
+            .users
+            .iter()
+            .map(|u| UserRow { name: u.name.clone(), admin: u.admin, perms: u.perms, disabled: u.disabled })
+            .collect();
+        let mut acts = vec![];
         Self::window_for(ctx, "Users and permissions", [1000.0, 520.0]).id(egui::Id::new("users_window")).open(&mut open).show(ctx, |ui| {
-            ui.label(
-                RichText::new(tr(
-                    "Administrators can do everything, including managing users. Other operators only get the ticked permissions.",
-                ))
-                .small()
-                .color(GRAY),
-            );
-            ui.add_space(4.0);
-            egui::ScrollArea::both().max_height(300.0).show(ui, |ui| {
-                egui::Grid::new("users_grid").striped(true).num_columns(11).spacing([10.0, 6.0]).show(ui, |ui| {
-                    ui.strong(tr("User"));
-                    ui.strong(tr("Admin"));
-                    for (name, help) in Perms::LIST {
-                        ui.strong(tr(name)).on_hover_text(tr(help));
-                    }
-                    ui.strong(tr("Tools")).on_hover_text(tr("Which tools this user can open"));
-                    ui.strong(tr("Disabled"));
-                    ui.strong(tr("New password"));
-                    ui.label("");
-                    ui.end_row();
-                    for u in &self.accounts.users {
-                        let (mut admin, mut perms, mut disabled) = (u.admin, u.perms, u.disabled);
-                        ui.label(if u.name == me { RichText::new(format!("{} (you)", u.name)).strong() } else { RichText::new(&u.name) });
-                        ui.checkbox(&mut admin, "");
-                        for k in 0..Perms::LIST.len() {
-                            ui.add_enabled(!admin, egui::Checkbox::without_text(perms.get_mut(k)));
-                        }
-                        ui.add_enabled_ui(!admin, |ui| Self::tools_picker(ui, &u.name, &mut perms));
-                        ui.add_enabled(u.name != me, egui::Checkbox::without_text(&mut disabled))
-                            .on_disabled_hover_text(tr("You can't disable your own account"));
-                        let pw = self.user_pw.entry(u.name.clone()).or_default();
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(pw).password(true).hint_text(tr("12+ characters")).desired_width(120.0));
-                            if ui.add_enabled(pw.len() >= 12, egui::Button::new(tr("Set"))).clicked() {
-                                reset = Some((u.name.clone(), pw.clone()));
-                            }
-                        });
-                        if self.user_delete.as_deref() == Some(&u.name) {
-                            ui.horizontal(|ui| {
-                                if ui.button(RichText::new(tr("Delete!")).color(RED)).clicked() {
-                                    delete = Some(u.name.clone());
-                                }
-                                if ui.button(tr("Keep")).clicked() {
-                                    self.user_delete = None;
-                                }
-                            });
-                        } else if ui.add_enabled(u.name != me, egui::Button::new("🗑")).on_hover_text(tr("Delete this user")).clicked() {
-                            self.user_delete = Some(u.name.clone());
-                        }
-                        ui.end_row();
-                        if (admin, perms, disabled) != (u.admin, u.perms, u.disabled) {
-                            changes.push((u.name.clone(), admin, perms, disabled));
-                        }
-                    }
-                });
-            });
-            ui.separator();
-            ui.strong(tr("Add a user"));
-            ui.horizontal_wrapped(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("username")).desired_width(150.0));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.login_password)
-                        .password(true)
-                        .hint_text(tr("password (12+ characters)"))
-                        .desired_width(190.0),
-                );
-                ui.checkbox(&mut self.new_user_admin, tr("Administrator"));
-            });
-            if !self.new_user_admin {
-                ui.horizontal_wrapped(|ui| {
-                    for (k, (name, help)) in Perms::LIST.iter().enumerate() {
-                        ui.checkbox(self.new_user_perms.get_mut(k), tr(name)).on_hover_text(tr(help));
-                    }
-                    ui.label(tr("Tools:"));
-                    Self::tools_picker(ui, "\u{0}new", &mut self.new_user_perms);
-                });
-            }
-            if ui.button(RichText::new(tr("Create user")).strong()).clicked() {
-                let perms = if self.new_user_admin { Perms::default() } else { self.new_user_perms };
-                match self.accounts.add_with(&self.login_name, &self.login_password, self.new_user_admin, perms) {
-                    Ok(()) => {
-                        self.auth_error = format!("Created {}", self.login_name.trim());
-                        self.login_name.clear();
-                    }
-                    Err(e) => self.auth_error = e,
-                }
-                self.login_password.clear();
-            }
+            acts = self.users_editor(ui, "users_grid", &rows, &me);
             if !self.auth_error.is_empty() {
                 ui.colored_label(
                     if self.auth_error.starts_with("Created") || self.auth_error.starts_with("Saved") { GREEN } else { RED },
@@ -2043,25 +2035,20 @@ impl App {
                 );
             }
         });
-        for (name, admin, perms, disabled) in changes {
-            self.auth_error = match self.accounts.update(&name, admin, perms, disabled) {
-                Ok(()) => format!("Saved {name}"),
-                Err(e) => e,
-            };
-        }
-        if let Some((name, pw)) = reset {
-            self.auth_error = match self.accounts.set_password(&name, &pw) {
-                Ok(()) => format!("Saved a new password for {name}"),
-                Err(e) => e,
-            };
-            self.user_pw.remove(&name);
-        }
-        if let Some(name) = delete {
-            self.auth_error = match self.accounts.delete(&name) {
-                Ok(()) => format!("Saved: {name} deleted"),
-                Err(e) => e,
-            };
-            self.user_delete = None;
+        for a in acts {
+            self.auth_error = match a {
+                UserAct::Add { name, password, admin, perms } => {
+                    self.accounts.add_with(&name, &password, admin, perms).map(|_| format!("Created {}", name.trim()))
+                }
+                UserAct::Change { name, admin, perms, disabled } => {
+                    self.accounts.update(&name, admin, perms, disabled).map(|_| format!("Saved {name}"))
+                }
+                UserAct::Password { name, password } => {
+                    self.accounts.set_password(&name, &password).map(|_| format!("Saved a new password for {name}"))
+                }
+                UserAct::Delete { name } => self.accounts.delete(&name).map(|_| format!("Saved: {name} deleted")),
+            }
+            .unwrap_or_else(|e| e);
         }
         // keep the signed-in snapshot in step with edits to your own account
         if let Some(u) = self.logged_in.as_ref().and_then(|me| self.accounts.users.iter().find(|x| x.name == me.name)).cloned() {
@@ -2070,13 +2057,120 @@ impl App {
         self.show_users = open;
     }
 
+    /// The accounts grid and the "Add a user" form, for this computer's accounts and a server's.
+    /// `me` is the account signed in (it can't be disabled or deleted from here).
+    pub(super) fn users_editor(&mut self, ui: &mut egui::Ui, grid: &str, users: &[UserRow], me: &str) -> Vec<UserAct> {
+        use crate::auth::Perms;
+        let mut acts = vec![];
+        ui.label(
+            RichText::new(tr(
+                "Administrators can do everything, including managing users. Other operators only get the ticked permissions.",
+            ))
+            .small()
+            .color(GRAY),
+        );
+        ui.add_space(4.0);
+        egui::ScrollArea::both().id_salt(grid).max_height(300.0).show(ui, |ui| {
+            egui::Grid::new(grid).striped(true).num_columns(11).spacing([10.0, 6.0]).show(ui, |ui| {
+                ui.strong(tr("User"));
+                ui.strong(tr("Admin"));
+                for (name, help) in Perms::LIST {
+                    ui.strong(tr(name)).on_hover_text(tr(help));
+                }
+                ui.strong(tr("Tools")).on_hover_text(tr("Which tools this user can open"));
+                ui.strong(tr("Disabled"));
+                ui.strong(tr("New password"));
+                ui.label("");
+                ui.end_row();
+                for u in users {
+                    let key = format!("{grid}\u{0}{}", u.name);
+                    let (mut admin, mut perms, mut disabled) = (u.admin, u.perms, u.disabled);
+                    ui.label(if u.name == me { RichText::new(format!("{} (you)", u.name)).strong() } else { RichText::new(&u.name) });
+                    ui.add_enabled(u.name != me, egui::Checkbox::without_text(&mut admin))
+                        .on_disabled_hover_text(tr("You can't take away your own administrator access"));
+                    for k in 0..Perms::LIST.len() {
+                        ui.add_enabled(!admin, egui::Checkbox::without_text(perms.get_mut(k)));
+                    }
+                    ui.add_enabled_ui(!admin, |ui| Self::tools_picker(ui, &key, &mut perms));
+                    ui.add_enabled(u.name != me, egui::Checkbox::without_text(&mut disabled))
+                        .on_disabled_hover_text(tr("You can't disable your own account"));
+                    let pw = self.user_pw.entry(key.clone()).or_default();
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(pw).password(true).hint_text(tr("12+ characters")).desired_width(120.0));
+                        if ui.add_enabled(pw.len() >= 12, egui::Button::new(tr("Set"))).clicked() {
+                            acts.push(UserAct::Password { name: u.name.clone(), password: std::mem::take(pw) });
+                        }
+                    });
+                    if self.user_delete.as_deref() == Some(&key) {
+                        ui.horizontal(|ui| {
+                            if ui.button(RichText::new(tr("Delete!")).color(RED)).clicked() {
+                                acts.push(UserAct::Delete { name: u.name.clone() });
+                                self.user_delete = None;
+                            }
+                            if ui.button(tr("Keep")).clicked() {
+                                self.user_delete = None;
+                            }
+                        });
+                    } else if ui.add_enabled(u.name != me, egui::Button::new("🗑")).on_hover_text(tr("Delete this user")).clicked() {
+                        self.user_delete = Some(key.clone());
+                    }
+                    ui.end_row();
+                    if (admin, perms, disabled) != (u.admin, u.perms, u.disabled) {
+                        acts.push(UserAct::Change { name: u.name.clone(), admin, perms, disabled });
+                    }
+                }
+            });
+        });
+        ui.separator();
+        ui.strong(tr("Add a user"));
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("username")).desired_width(150.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.login_password)
+                    .password(true)
+                    .hint_text(tr("password (12+ characters)"))
+                    .desired_width(190.0),
+            );
+            ui.checkbox(&mut self.new_user_admin, tr("Administrator"));
+        });
+        if !self.new_user_admin {
+            ui.horizontal_wrapped(|ui| {
+                for (k, (name, help)) in Perms::LIST.iter().enumerate() {
+                    ui.checkbox(self.new_user_perms.get_mut(k), tr(name)).on_hover_text(tr(help));
+                }
+                ui.label(tr("Tools:"));
+                Self::tools_picker(ui, &format!("{grid}\u{0}new"), &mut self.new_user_perms);
+            });
+        }
+        if ui.button(RichText::new(tr("Create user")).strong()).clicked() {
+            let perms = if self.new_user_admin { Perms::default() } else { self.new_user_perms };
+            acts.push(UserAct::Add {
+                name: std::mem::take(&mut self.login_name),
+                password: std::mem::take(&mut self.login_password),
+                admin: self.new_user_admin,
+                perms,
+            });
+        }
+        acts
+    }
+
     fn profiles_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        self.profile_map_window(ctx, core);
         if !self.show_profiles {
             return;
         }
+        let connected = self.srv.connected();
         let mut open = self.show_profiles;
+        let mut import = false;
         Self::window_for(ctx, "Station profiles", [460.0, 380.0]).open(&mut open).show(ctx, |ui| {
             ui.label(tr("Save or load individual station settings (including encoder passwords). Keep the profile directory private."));
+            if connected {
+                ui.label(
+                    RichText::new(tr("Connected: Load puts a profile's settings (and, if you like, its playlists) on the server, with its folders mapped to the server's."))
+                        .small()
+                        .color(AMBER),
+                );
+            }
             ui.horizontal(|ui| {
                 ui.label(tr("Profile:"));
                 ui.add(egui::TextEdit::singleline(&mut self.profile_name).desired_width(220.0));
@@ -2091,24 +2185,148 @@ impl App {
                         }
                     }
                 }
+                if ui.button(tr("Import…")).on_hover_text(tr("Add a profile file (.json) from this computer")).clicked() {
+                    import = true;
+                }
             });
             for name in self.profile_list.clone() {
                 ui.horizontal(|ui| {
                     ui.label(&name);
                     if ui.button(format!("Load##{name}")).clicked() {
                         let path = data_dir().join("profiles").join(format!("{name}.json"));
-                        if let Ok(data) = std::fs::read_to_string(path) {
-                            if let Ok(cfg) = serde_json::from_str::<crate::config::Config>(&data) {
-                                core.cfg = cfg;
-                                core.save_all();
-                                core.say(format!("Profile {name} loaded. Restart to apply all engine/network changes."));
+                        let value = std::fs::read_to_string(path).ok().and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok());
+                        match value {
+                            None => core.say(format!("Profile {name} couldn't be read")),
+                            Some(v) if connected => self.profile_map = Some(ProfileMap::new(name.clone(), v)),
+                            Some(mut v) => {
+                                if let Some(o) = v.as_object_mut() {
+                                    o.remove("_session");
+                                }
+                                if let Ok(cfg) = serde_json::from_value::<crate::config::Config>(v) {
+                                    core.cfg = cfg;
+                                    core.save_all();
+                                    core.say(format!("Profile {name} loaded. Restart to apply all engine/network changes."));
+                                }
                             }
                         }
                     }
                 });
             }
         });
+        if import {
+            // a profile is a file on this computer, connected or not
+            self.dlg(|| {
+                let f = rfd::FileDialog::new().add_filter("Station profile", &["json"]).pick_file()?;
+                let name: String =
+                    f.file_stem()?.to_string_lossy().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+                let dir = data_dir().join("profiles");
+                let ok = std::fs::read_to_string(&f).ok().and_then(|d| serde_json::from_str::<crate::config::Config>(&d).ok()).is_some();
+                Some(if !ok || name.is_empty() {
+                    Dlg::Say(format!("{} isn't a RadioMaster station profile", f.display()))
+                } else {
+                    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(&f, dir.join(format!("{name}.json")))) {
+                        Ok(_) => Dlg::ProfileImported(name),
+                        Err(e) => Dlg::Say(format!("Couldn't import {}: {e}", f.display())),
+                    }
+                })
+            });
+        }
         self.show_profiles = open;
+    }
+
+    /// "Load onto the server": a profile's folders mapped to the server's, then its settings (and
+    /// playlists) put on the server.
+    fn profile_map_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        let Some(mut m) = self.profile_map.take() else { return };
+        if !self.srv.connected() {
+            return;
+        }
+        let mut open = true;
+        let (mut load, mut cancel, mut browse) = (false, false, None);
+        Self::window_for(ctx, "Load a profile onto the server", [640.0, 460.0]).id(egui::Id::new("profile_map")).collapsible(false).open(&mut open).show(
+            ctx,
+            |ui| {
+                egui::ScrollArea::vertical().max_height(ui.available_height() - 40.0).show(ui, |ui| {
+                    ui.label(RichText::new(format!("Profile \"{}\"", m.name)).strong());
+                    ui.label(tr("Its files are where they were on the computer it was saved on. Tell RadioMaster where those folders are on the server; paths under them are changed to match."));
+                    ui.add_space(4.0);
+                    egui::Grid::new("profile_map_grid").num_columns(4).spacing([8.0, 4.0]).show(ui, |ui| {
+                        ui.strong(tr("Folder in the profile"));
+                        ui.strong(tr("Folder on the server"));
+                        ui.label("");
+                        ui.label("");
+                        ui.end_row();
+                        let mut del = None;
+                        for (i, (from, to)) in m.maps.iter_mut().enumerate() {
+                            ui.add(egui::TextEdit::singleline(from).desired_width(230.0));
+                            ui.add(egui::TextEdit::singleline(to).desired_width(230.0).hint_text(tr("leave empty to keep")));
+                            if ui.button("…").on_hover_text(tr("Choose the folder on the server")).clicked() {
+                                browse = Some(i);
+                            }
+                            if ui.small_button("✖").on_hover_text(tr("Remove")).clicked() {
+                                del = Some(i);
+                            }
+                            ui.end_row();
+                        }
+                        if let Some(i) = del {
+                            m.maps.remove(i);
+                        }
+                    });
+                    if ui.button(tr("➕ Add a folder")).clicked() {
+                        m.maps.push((String::new(), String::new()));
+                    }
+                    if m.maps.is_empty() {
+                        ui.label(RichText::new(tr("This profile has no file paths.")).color(GRAY));
+                    }
+                    ui.add_space(4.0);
+                    if m.has_playlists {
+                        ui.checkbox(&mut m.playlists, tr("Also load its playlists (they replace the server's)"));
+                    }
+                    ui.label(
+                        RichText::new(tr("The server keeps its own sound cards, remote control and plugin settings. Paths left unmapped stay as they are."))
+                            .small()
+                            .color(GRAY),
+                    );
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new(tr("Load onto the server")).strong()).clicked() {
+                        load = true;
+                    }
+                    if ui.button(tr("Cancel")).clicked() {
+                        cancel = true;
+                    }
+                });
+            },
+        );
+        if let Some(i) = browse {
+            self.pick(Pick::Folder, tr("Folder on the server"), move |_, v| Some(Dlg::MapTo(i, v.into_iter().next()?)));
+        }
+        if load {
+            let mut v = m.value.clone();
+            let changed = crate::playout::sync::map_paths(&mut v, &m.maps);
+            let session = v.as_object_mut().and_then(|o| o.remove("_session"));
+            match serde_json::from_value::<crate::config::Config>(v) {
+                Ok(cfg) => {
+                    core.set_station_cfg(cfg);
+                    let tabs =
+                        session.filter(|_| m.playlists).and_then(|s| serde_json::from_value::<crate::playout::sync::TabsWire>(s).ok());
+                    let with = if let Some(t) = tabs {
+                        core.set_tabs(t);
+                        self.view_pl = usize::MAX;
+                        " and playlists"
+                    } else {
+                        ""
+                    };
+                    core.say(format!("Profile {}'s settings{with} sent to the server ({changed} file paths mapped)", m.name));
+                }
+                Err(e) => core.say(format!("Profile {} couldn't be loaded: {e}", m.name)),
+            }
+            return;
+        }
+        if open && !cancel {
+            self.profile_map = Some(m);
+        }
     }
 
     /// Keep the filtered library list (library tab, track editor list) in step with the search text.
@@ -2340,9 +2558,7 @@ impl App {
                     }
                     b.context_menu(|ui| {
                         if ui.button(tr("Assign audio file…")).clicked() {
-                            self.dlg(move || {
-                                rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::Cart(i, p))
-                            });
+                            self.pick(Pick::File(AUDIO.0, AUDIO.1), tr("Assign audio file"), move |_, v| Some(Dlg::Cart(i, v.into_iter().next()?)));
                             ui.close_menu();
                         }
                         ui.label(tr("Label:"));
@@ -2425,7 +2641,7 @@ impl App {
                         ui.label(RichText::new(tr("Do")).strong());
                         if action_edit(ui, ("sched", i), &mut e.action, &mut e.path, &mut e.arg, &opts) {
                             let a = e.action;
-                            self.dlg(move || action_file_dialog(a).pick_file().map(|p| Dlg::SchedPath(i, p)));
+                            self.pick(action_pick(a), tr("Choose a file"), move |_, v| Some(Dlg::SchedPath(i, v.into_iter().next()?)));
                         }
                     });
                 });
@@ -2982,7 +3198,7 @@ impl App {
                     ui.label(tr("folder"));
                     ui.add(egui::TextEdit::singleline(&mut c.folder).desired_width(260.0).hint_text(tr("any")));
                     if ui.button("…").clicked() {
-                        self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::CatFolder(i, p)));
+                        self.pick(Pick::Folder, tr("Category folder"), move |_, v| Some(Dlg::CatFolder(i, v.into_iter().next()?)));
                     }
                     ui.label(tr("genre"));
                     ui.add(egui::TextEdit::singleline(&mut c.genre).desired_width(90.0).hint_text(tr("any")));
@@ -3468,6 +3684,7 @@ impl eframe::App for App {
             return;
         }
         let t0 = std::time::Instant::now();
+        let server_perms = self.srv.session().map(|s| if s.admin { crate::auth::Perms::default() } else { s.perms });
         self.perm = match &self.logged_in {
             Some(u) if u.admin => crate::auth::Perms::default(),
             Some(u) => u.perms,
@@ -3483,6 +3700,10 @@ impl eframe::App for App {
                 v: 1,
             },
         };
+        if let Some(sp) = server_perms {
+            // connected: what this computer's account and the server's account both allow
+            self.perm = self.perm.and(sp);
+        }
         let arc = self.core.clone();
         let mut core = arc.lock();
         let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -3495,7 +3716,26 @@ impl eframe::App for App {
         self.handle_dialogs(&mut core);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && self.perm.edit_playlists {
-            self.add_files_later(self.view_pl, None, dropped);
+            if self.srv.connected() {
+                // files from this computer: copied to a folder on the server first, then added
+                let tab = self.view_pl;
+                self.pick(Pick::Folder, tr("Upload the dropped files to"), move |fs, v| {
+                    let dir = v.into_iter().next()?;
+                    let (mut up, mut failed) = (vec![], vec![]);
+                    for f in crate::library::expand_paths(dropped) {
+                        match fs.upload(&f, &dir) {
+                            Ok(p) => up.push(p),
+                            Err(e) => failed.push(e),
+                        }
+                    }
+                    if up.is_empty() && !failed.is_empty() {
+                        return Some(Dlg::Say(format!("Not uploaded: {}", failed.join("; "))));
+                    }
+                    Some(Dlg::Files(tab, None, up))
+                });
+            } else {
+                self.add_files_later(self.view_pl, None, dropped);
+            }
         }
         if !self.show_settings {
             self.shortcuts(ctx, &mut core);
@@ -3558,10 +3798,12 @@ impl eframe::App for App {
         let force = self.show_settings
             || self.show_users
             || self.show_profiles
+            || self.profile_map.is_some()
             || self.show_about
             || self.show_update
             || self.tag_edit.is_some()
-            || self.srv.window_open();
+            || self.srv.window_open()
+            || self.files.window_open();
         self.guard_web_views(ctx, "", force);
         self.browsers.finish();
         // save the layout when it changed, at most every 2 seconds (never while a window is being dragged)

@@ -124,6 +124,20 @@ impl Perms {
             self.denied |= 1 << t;
         }
     }
+    /// What both allow.
+    pub fn and(self, o: Perms) -> Perms {
+        Perms {
+            playback: self.playback && o.playback,
+            jingles: self.jingles && o.jingles,
+            edit_playlists: self.edit_playlists && o.edit_playlists,
+            tools: self.tools && o.tools,
+            streaming: self.streaming && o.streaming,
+            azuracast: self.azuracast && o.azuracast,
+            settings: self.settings && o.settings,
+            denied: self.denied | o.denied,
+            v: self.v.max(o.v),
+        }
+    }
     pub fn tools_allowed(&self) -> usize {
         (0..TOOLS.len()).filter(|&t| self.tool(t)).count()
     }
@@ -161,7 +175,7 @@ impl Perms {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Operator {
     pub name: String,
     pub password_hash: String,
@@ -171,6 +185,18 @@ pub struct Operator {
     /// a disabled account can't sign in
     #[serde(default)]
     pub disabled: bool,
+}
+
+impl Operator {
+    /// What this account may do: everything for an administrator, else its permissions.
+    #[allow(dead_code)] // (RadioMaster Server's)
+    pub fn effective(&self) -> Perms {
+        if self.admin {
+            Perms::default()
+        } else {
+            self.perms
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -255,6 +281,16 @@ impl Accounts {
         }
         self.users.remove(i);
         self.save()
+    }
+    /// An active (not disabled) account by name.
+    #[allow(dead_code)] // (RadioMaster Server's)
+    pub fn active(&self, name: &str) -> Option<&Operator> {
+        self.users.iter().find(|u| !u.disabled && u.name == name)
+    }
+    /// At least one administrator can sign in.
+    #[allow(dead_code)] // (RadioMaster Server's)
+    pub fn has_admin(&self) -> bool {
+        self.admins() > 0
     }
     pub fn login(&self, name: &str, password: &str) -> Option<Operator> {
         self.users.iter().find(|u| !u.disabled && u.name == name && verify(&u.password_hash, password)).cloned()

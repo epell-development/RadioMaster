@@ -28,6 +28,10 @@ pub struct Session {
     pub version: String,
     /// SHA-256 of the self-signed certificate the user trusted for this server (empty: none needed)
     pub pin: String,
+    /// the account is one of the server's administrators
+    pub admin: bool,
+    /// what the account may do on the server (it checks every call too)
+    pub perms: crate::auth::Perms,
 }
 
 /// The address was typed without http:// or https://.
@@ -54,6 +58,8 @@ pub fn normalize(addr: &str) -> String {
 enum Fail {
     /// not signed in (any more)
     Auth(String),
+    /// the account may not do that
+    Denied(String),
     /// the server's copy changed first
     Conflict,
     Other(String),
@@ -65,7 +71,7 @@ impl Fail {
             Fail::Other(e) if e == crate::tls::UNTRUSTED || e == crate::tls::CHANGED => {
                 "the server's HTTPS certificate isn't the one trusted: disconnect and connect again to check it".into()
             }
-            Fail::Auth(e) | Fail::Other(e) => e.clone(),
+            Fail::Auth(e) | Fail::Denied(e) | Fail::Other(e) => e.clone(),
             Fail::Conflict => "the server's copy changed first".into(),
         }
     }
@@ -103,6 +109,7 @@ fn call<T: DeserializeOwned>(agent: &ureq::Agent, base: &str, token: &str, path:
                 .unwrap_or_else(|| format!("HTTP {code}"));
             Err(match code {
                 401 => Fail::Auth(msg),
+                403 => Fail::Denied(msg),
                 409 => Fail::Conflict,
                 _ => Fail::Other(msg),
             })
@@ -146,6 +153,11 @@ struct LoginReply {
     version: String,
     #[serde(default)]
     protocol: u32,
+    #[serde(default)]
+    admin: bool,
+    /// (servers before v0.2.9 had one account, which could do everything)
+    #[serde(default)]
+    perms: crate::auth::Perms,
 }
 
 /// Why signing in didn't work.
@@ -216,6 +228,8 @@ fn login_at(base: &str, user: &str, password: &str, pin: &str) -> Result<Session
         name: r.name,
         version: r.version,
         pin,
+        admin: r.admin,
+        perms: r.perms,
     })
 }
 
@@ -307,11 +321,117 @@ impl Link {
         call(&agent(&s.pin), &s.base, &s.token, "server", Some(serde_json::to_value(u).unwrap_or_default())).map_err(|e| e.text())
     }
 
+    /// The server's accounts (administrators only; blocks).
+    pub fn users(s: &Session) -> Result<Vec<sync::UserWire>, String> {
+        call(&agent(&s.pin), &s.base, &s.token, "users", None).map_err(|e| e.text())
+    }
+
+    /// Change the server's accounts (administrators only; blocks). Returns them as they are now.
+    pub fn user_op(s: &Session, op: &sync::UserOp) -> Result<Vec<sync::UserWire>, String> {
+        call(&agent(&s.pin), &s.base, &s.token, "users", Some(serde_json::to_value(op).unwrap_or_default())).map_err(|e| e.text())
+    }
+
+    /// Update, restart or stop the server: `what` is "update", "restart" or "stop" (administrators only; blocks).
+    pub fn server_control(s: &Session, what: &str) -> Result<sync::ServerInfo, String> {
+        call(&agent(&s.pin), &s.base, &s.token, &format!("server/{what}"), Some(serde_json::json!({}))).map_err(|e| e.text())
+    }
+
+    /// The server's play history (history.csv) for Reports (blocks).
+    pub fn plays(s: &Session) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct Plays {
+            csv: String,
+        }
+        call::<Plays>(&agent(&s.pin), &s.base, &s.token, "plays", None).map(|p| p.csv).map_err(|e| e.text())
+    }
+
     /// End a sign-in on the server (in the background).
     pub fn sign_out(s: Session) {
         thread::spawn(move || {
             let _ = call::<serde_json::Value>(&agent(&s.pin), &s.base, &s.token, "logout", Some(serde_json::json!({})));
         });
+    }
+}
+
+// ------------------------------------------------------------ files
+
+/// Where the files a dialog picks live: this computer, or the server the app is connected to
+/// (its paths are the server's own). Every call reads the disk or the network: use it off the UI thread.
+#[derive(Clone)]
+pub enum Fs {
+    Local,
+    Server(Session),
+}
+
+impl Fs {
+    pub fn is_server(&self) -> bool {
+        matches!(self, Fs::Server(_))
+    }
+
+    /// A folder's folders and audio files (`all`: every file). An empty path: where browsing starts.
+    pub fn list(&self, path: &std::path::Path, all: bool, library_folders: &[String]) -> sync::FsList {
+        match self {
+            Fs::Local => sync::list_folder(path.to_path_buf(), all, library_folders),
+            Fs::Server(s) => {
+                let body = serde_json::json!({ "path": path, "all": all });
+                call(&agent(&s.pin), &s.base, &s.token, "fs/list", Some(body)).unwrap_or_else(|e| sync::FsList {
+                    path: path.to_path_buf(),
+                    error: e.text(),
+                    ..Default::default()
+                })
+            }
+        }
+    }
+
+    /// Audio files as they are, and the audio files in folders (sorted, sub-folders included).
+    pub fn expand(&self, paths: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+        match self {
+            Fs::Local => crate::library::expand_paths(paths),
+            Fs::Server(s) => call(&agent(&s.pin), &s.base, &s.token, "fs/expand", Some(serde_json::to_value(paths).unwrap_or_default()))
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn audio_files_in(&self, dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        self.expand(vec![dir.to_path_buf()])
+    }
+
+    /// An M3U's rows (see `playout::parse_m3u`).
+    pub fn m3u(&self, path: &std::path::Path) -> Vec<crate::playout::M3uRow> {
+        match self {
+            Fs::Local => crate::playout::parse_m3u(path),
+            Fs::Server(s) => {
+                call(&agent(&s.pin), &s.base, &s.token, "fs/m3u", Some(serde_json::json!({ "path": path }))).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Copy a file from this computer into `dir` on the server; returns where it went there.
+    pub fn upload(&self, file: &std::path::Path, dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+        let Fs::Server(s) = self else { return Err("not connected to a server".into()) };
+        let data = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let url =
+            format!("{}/api/v1/fs/upload?dir={}&name={}", s.base, urlencoding::encode(&dir.to_string_lossy()), urlencoding::encode(&name));
+        // big files take a while on a slow line
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(5))
+            .timeout(Duration::from_secs(600))
+            .tls_config(crate::tls::client_config(&s.pin, Default::default()))
+            .build();
+        #[derive(Deserialize)]
+        struct Put {
+            path: std::path::PathBuf,
+        }
+        match agent.post(&url).set("Authorization", &format!("Bearer {}", s.token)).send_bytes(&data) {
+            Ok(r) => r.into_json::<Put>().map(|p| p.path).map_err(|e| e.to_string()),
+            Err(ureq::Error::Status(code, r)) => Err(r
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v["error"].as_str().map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {code}"))),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
@@ -568,6 +688,12 @@ impl Syncer {
                             self.rev = 0;
                             self.clash("A playlist");
                         }
+                        Err(Fail::Denied(m)) => {
+                            // not allowed: the server's copy comes back
+                            self.tabs_hash = None;
+                            self.rev = 0;
+                            self.core.lock().say(format!("Not changed on the server: {m}"));
+                        }
                         Err(e) => return Err(e),
                     }
                 }
@@ -585,6 +711,11 @@ impl Syncer {
                             self.cfg_rev = 0;
                             self.clash("The settings");
                         }
+                        Err(Fail::Denied(m)) => {
+                            self.cfg_hash = None;
+                            self.cfg_rev = 0;
+                            self.core.lock().say(format!("Not changed on the server: {m}"));
+                        }
                         Err(e) => return Err(e),
                     }
                 }
@@ -594,14 +725,21 @@ impl Syncer {
         self.queued.extend(self.cmds.try_iter());
         if !self.queued.is_empty() {
             let cmds = std::mem::take(&mut self.queued);
-            if let Err(e) = self.post::<serde_json::Value>("cmd", serde_json::to_value(&cmds).unwrap_or_default()) {
-                match e {
-                    // signed out: they go once the app has signed in again
-                    Fail::Auth(_) => self.queued = cmds,
-                    // an action that couldn't be sent now is dropped (pressing Next a minute late would surprise)
-                    _ => self.core.lock().say(format!("Not sent to the server: {} action(s)", cmds.len())),
+            match self.post::<serde_json::Value>("cmd", serde_json::to_value(&cmds).unwrap_or_default()) {
+                Ok(r) => {
+                    if r["refused"].as_u64().is_some_and(|n| n > 0) {
+                        self.core.lock().say("Your server account may not do that");
+                    }
                 }
-                return Err(e);
+                Err(e) => {
+                    match e {
+                        // signed out: they go once the app has signed in again
+                        Fail::Auth(_) => self.queued = cmds,
+                        // an action that couldn't be sent now is dropped (pressing Next a minute late would surprise)
+                        _ => self.core.lock().say(format!("Not sent to the server: {} action(s)", cmds.len())),
+                    }
+                    return Err(e);
+                }
             }
         }
         // 3. what the server has now

@@ -21,10 +21,12 @@ mod playout;
 mod plugins;
 mod remote;
 mod scheduler;
+mod selfupdate;
 mod server;
 mod stream;
 mod tls;
 
+use auth::Accounts;
 use parking_lot::Mutex;
 use server::ServerCfg;
 use std::{
@@ -39,8 +41,9 @@ const HELP: &str = "RadioMaster Server — radio automation without a window
 
 Usage: RadioMaster-Server [options]
 
-  --setup               set the station name, username, password and port, then exit
-  --user NAME           username for --setup (asked for when left out)
+  --setup               set the station name, an administrator's username and password, and the port, then exit
+  --user NAME           administrator's username for --setup (asked for when left out); more accounts
+                        are added in the app (File → Server users) by an administrator
   --password PASSWORD   password for --setup (or set RADIOMASTER_PASSWORD; asked for when left out)
   --name NAME           station name shown in the app (with --setup)
   --port N              port to listen on (default 9259; saved with --setup)
@@ -52,15 +55,22 @@ Usage: RadioMaster-Server [options]
   --portal-port N       port for the web portal (default 9260)
   --data FOLDER         data folder (default: the RadioMaster-Server folder in your settings folder)
   --no-audio            don't use a sound card: stream only
+  --no-update-check     don't look for newer releases on GitHub (saved with --setup)
   --list-devices        list the sound cards and exit
   --version             print the version and exit
 
 Desktop apps connect with File → Connect to Server, using this machine's address and port.
-Options given without --setup apply to this run only.";
+Options given without --setup apply to this run only.
+
+Administrators can update, restart and stop the server from the app. Under systemd it is started again
+by the service (Restart=on-failure); under another service manager, set RADIOMASTER_SUPERVISED=1 so
+it leaves restarting to that manager instead of starting a new copy itself.";
 
 /// Work for the main thread (which owns the sound cards).
 enum Ctl {
     Quit,
+    /// stop and start again (an administrator asked, or an update was installed)
+    Restart,
     /// the sound card settings changed
     Audio,
 }
@@ -74,6 +84,7 @@ struct Args {
     bind: Option<String>,
     data: Option<PathBuf>,
     no_audio: bool,
+    no_update_check: bool,
     list_devices: bool,
     https: Option<bool>,
     cert: Option<String>,
@@ -92,6 +103,7 @@ fn parse_args() -> Result<Args, String> {
         bind: None,
         data: None,
         no_audio: false,
+        no_update_check: false,
         list_devices: false,
         https: None,
         cert: None,
@@ -111,6 +123,7 @@ fn parse_args() -> Result<Args, String> {
             "--bind" => a.bind = Some(value("an address")?),
             "--data" => a.data = Some(PathBuf::from(value("a folder")?)),
             "--no-audio" => a.no_audio = true,
+            "--no-update-check" => a.no_update_check = true,
             "--https" => a.https = Some(true),
             "--no-https" => a.https = Some(false),
             "--cert" => a.cert = Some(value("a file")?),
@@ -155,9 +168,11 @@ fn ask(prompt: &str, default: &str) -> String {
     }
 }
 
-/// Station name, username, password and port: from the options, else asked for at the terminal.
-fn setup(args: &Args, old: Option<ServerCfg>) -> Result<ServerCfg, String> {
+/// Station name, an administrator's username and password, and the port: from the options, else
+/// asked for at the terminal.
+fn setup(args: &Args, old: Option<ServerCfg>, accounts: &mut Accounts) -> Result<ServerCfg, String> {
     let mut cfg = old.unwrap_or_default();
+    cfg.move_user(accounts);
     let tty = std::io::stdin().is_terminal();
     if tty {
         println!("RadioMaster Server setup — desktop apps sign in with this username and password.");
@@ -167,15 +182,16 @@ fn setup(args: &Args, old: Option<ServerCfg>) -> Result<ServerCfg, String> {
         None if tty => ask("Station name", &cfg.name),
         None => cfg.name,
     };
-    cfg.user = match &args.user {
+    let admin = accounts.users.iter().find(|u| u.admin && !u.disabled).map(|u| u.name.clone()).unwrap_or_default();
+    let user = match &args.user {
         Some(u) => u.clone(),
-        None if tty => ask("Username", &cfg.user),
-        None => cfg.user,
+        None if tty => ask("Administrator username", &admin),
+        None => admin,
     };
-    if cfg.user.trim().is_empty() {
-        return Err("a username is needed (--user NAME)".into());
+    let user = user.trim().to_string();
+    if user.chars().count() < 2 {
+        return Err("a username of at least 2 characters is needed (--user NAME)".into());
     }
-    cfg.user = cfg.user.trim().to_string();
     let password = match &args.password {
         Some(p) => p.clone(),
         None if tty => loop {
@@ -191,7 +207,15 @@ fn setup(args: &Args, old: Option<ServerCfg>) -> Result<ServerCfg, String> {
         },
         None => return Err("a password is needed (--password, or set RADIOMASTER_PASSWORD)".into()),
     };
-    cfg.password_hash = auth::hash(&password)?;
+    let password_hash = auth::hash(&password)?;
+    match accounts.users.iter_mut().find(|u| u.name == user) {
+        Some(u) => {
+            u.password_hash = password_hash;
+            u.admin = true;
+            u.disabled = false;
+        }
+        None => accounts.users.push(auth::Operator { name: user, password_hash, admin: true, perms: Default::default(), disabled: false }),
+    }
     cfg.port = match args.port {
         Some(p) => p,
         None if tty => ask("Port", &cfg.port.to_string()).parse().map_err(|_| "the port must be a number from 1 to 65535".to_string())?,
@@ -217,6 +241,9 @@ fn setup(args: &Args, old: Option<ServerCfg>) -> Result<ServerCfg, String> {
             .map_err(|_| "the port must be a number from 1 to 65535".to_string())?,
         None => cfg.portal_port,
     };
+    if args.no_update_check {
+        cfg.check_updates = false;
+    }
     apply_tls_args(args, &mut cfg);
     Ok(cfg)
 }
@@ -265,10 +292,11 @@ fn main() {
 
     let saved = ServerCfg::load();
     let mut scfg = if args.setup || !saved.as_ref().is_some_and(|s| s.ready()) {
-        match setup(&args, saved) {
+        let mut accounts = Accounts::load();
+        match setup(&args, saved, &mut accounts) {
             Ok(c) => {
-                if let Err(e) = c.save() {
-                    eprintln!("Could not save {}: {e}", ServerCfg::path().display());
+                if let Err(e) = accounts.save().map_err(std::io::Error::other).and_then(|_| c.save()) {
+                    eprintln!("Could not save the settings in {}: {e}", config::data_dir().display());
                     std::process::exit(1);
                 }
                 println!("Saved {}", ServerCfg::path().display());
@@ -283,8 +311,20 @@ fn main() {
             }
         }
     } else {
-        saved.unwrap_or_default()
+        let mut c = saved.unwrap_or_default();
+        // a server set up before v0.2.9: its one account becomes the first administrator
+        let mut accounts = Accounts::load();
+        if c.move_user(&mut accounts) {
+            match accounts.save().map_err(std::io::Error::other).and_then(|_| c.save()) {
+                Ok(()) => println!("Moved the server's account to {}", config::data_dir().join("operators.json").display()),
+                Err(e) => eprintln!("Could not move the server's account to operators.json: {e}"),
+            }
+        }
+        c
     };
+    if args.no_update_check {
+        scfg.check_updates = false;
+    }
     if let Some(p) = args.port {
         scfg.port = p;
     }
@@ -346,9 +386,16 @@ fn main() {
         });
     }
     let (ctl_tx, ctl_rx) = std::sync::mpsc::channel::<Ctl>();
-    let host = {
+    let host = || {
         let tx = Mutex::new(ctl_tx.clone());
+        let control = Mutex::new(ctl_tx.clone());
         server::Host {
+            control: Box::new(move |c| {
+                let _ = control.lock().send(match c {
+                    server::Control::Stop => Ctl::Quit,
+                    server::Control::Restart => Ctl::Restart,
+                });
+            }),
             reapply_audio: Box::new(move || {
                 let _ = tx.lock().send(Ctl::Audio);
             }),
@@ -356,10 +403,19 @@ fn main() {
             forced_silent: args.no_audio,
         }
     };
-    match server::spawn(core.clone(), scfg.clone(), host) {
+    // a copy started by a restart waits for the old one to let go of the ports
+    let restarted = std::env::var_os(selfupdate::RESTARTED_ENV).is_some();
+    let started = std::time::Instant::now();
+    let listening = loop {
+        match server::spawn(core.clone(), scfg.clone(), host()) {
+            Err(_) if restarted && started.elapsed() < Duration::from_secs(30) => thread::sleep(Duration::from_millis(500)),
+            r => break r,
+        }
+    };
+    match listening {
         Ok(l) => {
             let scheme = if l.fingerprint.is_some() { "https" } else { "http" };
-            println!("Listening on {scheme}://{} — sign in as '{}' from File → Connect to Server", l.addr, scfg.user);
+            println!("Listening on {scheme}://{} — sign in from File → Connect to Server", l.addr);
             if let Some(fp) = &l.fingerprint {
                 if l.self_signed {
                     println!("HTTPS: self-signed certificate. The app asks once whether to trust it; check that it shows");
@@ -392,9 +448,14 @@ fn main() {
     }
     // the station log goes to the console (and to journald / the service log)
     let mut printed = core.lock().log_total;
+    let mut restart = false;
     loop {
         let quit = match ctl_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Ctl::Quit) => true,
+            Ok(Ctl::Restart) => {
+                restart = true;
+                true
+            }
             Ok(Ctl::Audio) => {
                 open_audio(&mut audio, ServerCfg::load().is_none_or(|c| c.audio));
                 false
@@ -427,4 +488,14 @@ fn main() {
     c.plugins.stop_services();
     drop(c);
     playout::flush_writes();
+    if restart {
+        if selfupdate::supervised() {
+            println!("Restarting (the service manager starts it again)…");
+            std::process::exit(selfupdate::RESTART_EXIT);
+        }
+        match selfupdate::start_again() {
+            Ok(()) => println!("Restarting…"),
+            Err(e) => eprintln!("Could not start again: {e}"),
+        }
+    }
 }

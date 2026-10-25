@@ -69,8 +69,8 @@ pub(super) struct ServerUi {
     pw_current: String,
     pw_new: String,
     pw_again: String,
-    /// "Add library folder" while connected: a folder on the server, typed in
-    lib_folder: Option<String>,
+    /// accounts, updates, restart and stop (administrators)
+    pub(super) admin: super::serveradmin::ServerAdmin,
     conn: Option<Connected>,
 }
 
@@ -99,7 +99,7 @@ impl Default for ServerUi {
             pw_current: String::new(),
             pw_new: String::new(),
             pw_again: String::new(),
-            lib_folder: None,
+            admin: Default::default(),
             conn: None,
         }
     }
@@ -110,6 +110,11 @@ impl ServerUi {
         self.conn.is_some()
     }
 
+    /// The sign-in as it stands (None when not connected).
+    pub(super) fn session(&self) -> Option<Session> {
+        self.conn.as_ref().map(|c| c.link.current())
+    }
+
     /// Connected with Connect to Remote Server on the login screen (no local account).
     pub(super) fn signed_in_remotely(&self) -> bool {
         self.remote_login
@@ -117,7 +122,7 @@ impl ServerUi {
 
     /// A window of this tool is open (web views must hide under it).
     pub(super) fn window_open(&self) -> bool {
-        self.show_connect || self.ask.is_some() || self.show_status || self.show_settings || self.lib_folder.is_some()
+        self.show_connect || self.ask.is_some() || self.show_status || self.show_settings || self.admin.window_open()
     }
 }
 
@@ -125,9 +130,15 @@ impl App {
     /// File menu entries.
     pub(super) fn server_menu(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         if self.srv.connected() {
-            if ui.button(tr("Server settings…")).clicked() {
-                self.open_server_settings();
-                ui.close_menu();
+            if self.server_admin() {
+                if ui.button(tr("Server settings…")).clicked() {
+                    self.open_server_settings();
+                    ui.close_menu();
+                }
+                if ui.button(tr("Server users…")).clicked() {
+                    self.open_server_users();
+                    ui.close_menu();
+                }
             }
             if ui.button(tr("Server info…")).clicked() {
                 self.srv.show_status = true;
@@ -176,13 +187,9 @@ impl App {
         self.auth_error.clear();
     }
 
-    /// "Add library folder…": a folder picker here, or while connected a folder on the server, typed in.
+    /// "Add library folder…": a folder here, or while connected a folder on the server.
     pub(super) fn pick_library_folder(&mut self) {
-        if self.srv.connected() {
-            self.srv.lib_folder = Some(String::new());
-        } else {
-            self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::LibFolder));
-        }
+        self.pick(Pick::Folder, tr("Add library folder"), |_, v| Some(Dlg::LibFolder(v.into_iter().next()?)));
     }
 
     /// The engine the sound cards belong to: the local one, also while a server is mirrored.
@@ -237,8 +244,9 @@ impl App {
         self.connect_window(ctx);
         self.save_session_window(ctx, core);
         self.server_status_window(ctx, core);
-        self.server_folder_window(ctx, core);
         self.server_settings_window(ctx);
+        self.server_picker_window(ctx);
+        self.server_admin_windows(ctx);
     }
 
     pub(super) fn connect_window(&mut self, ctx: &egui::Context) {
@@ -500,6 +508,13 @@ impl App {
     }
 
     fn reset_playlist_view(&mut self) {
+        // file browsers start again on this computer's or the server's folders
+        self.files.reset();
+        self.srv.admin = Default::default();
+        self.rep.forget();
+        self.fx_dir.clear();
+        self.fx_list.clear();
+        self.fx_loading.clear();
         self.view_pl = usize::MAX;
         self.sel.clear();
         self.anchor = None;
@@ -541,7 +556,11 @@ impl App {
                     }
                     ui.end_row();
                     ui.label(tr("Signed in as"));
-                    ui.label(&s.user);
+                    if s.admin {
+                        ui.label(format!("{} ({})", s.user, tr("administrator")));
+                    } else {
+                        ui.label(&s.user).on_hover_text(tr("What this account may do is set by the server's administrators"));
+                    }
                     ui.end_row();
                     ui.label(tr("Version"));
                     ui.label(&s.version);
@@ -566,14 +585,17 @@ impl App {
                 });
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(tr("Files, folders and the library are the server's. Previews and waveforms need the files on this computer, so they don't work while connected. The Mic button sends this computer's microphone to the server, which puts it on air."))
+                    RichText::new(tr("Files, folders and the library are the server's: file pickers and the file explorer show the server's folders, and Upload copies files from this computer to it. The Mic button sends this computer's microphone to the server, which puts it on air."))
                         .small()
                         .color(GRAY),
                 );
+                ui.separator();
+                ui.label(RichText::new(tr("Server program")).strong());
+                self.server_program_section(ui);
             });
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tr("Server settings…")).clicked() {
+                if self.server_admin() && ui.button(tr("Server settings…")).clicked() {
                     self.open_server_settings();
                 }
                 if ui.button(RichText::new(tr("Disconnect")).strong()).clicked() {
@@ -589,33 +611,6 @@ impl App {
         }
         if off {
             self.disconnect(core);
-        }
-    }
-
-    fn server_folder_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
-        let Some(mut folder) = self.srv.lib_folder.take() else { return };
-        let mut open = true;
-        let mut done = false;
-        Self::window_for(ctx, "Add a library folder on the server", [440.0, 200.0]).collapsible(false).open(&mut open).show(ctx, |ui| {
-            ui.label(tr("Type the folder as the server sees it, e.g. /srv/music or D:\\Music."));
-            ui.add(egui::TextEdit::singleline(&mut folder).desired_width(380.0));
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!folder.trim().is_empty(), egui::Button::new(tr("Add and rescan"))).clicked() {
-                    let f = folder.trim().to_string();
-                    if !core.cfg.library_folders.contains(&f) {
-                        core.cfg.library_folders.push(f);
-                    }
-                    core.start_scan();
-                    done = true;
-                }
-                if ui.button(tr("Cancel")).clicked() {
-                    done = true;
-                }
-            });
-        });
-        if open && !done {
-            self.srv.lib_folder = Some(folder);
         }
     }
 }
@@ -683,6 +678,7 @@ impl App {
         let mut open = true;
         let mut save = false;
         let mut reload = false;
+        let mut users = false;
         Self::window_for(ctx, "Server settings", [500.0, 520.0]).collapsible(false).open(&mut open).show(ctx, |ui| {
             let srv = &mut self.srv;
             let Some(info) = srv.settings.as_mut() else {
@@ -769,7 +765,16 @@ impl App {
                     ui.colored_label(AMBER, tr("Saved: restart RadioMaster Server to use them."));
                 }
                 ui.separator();
-                ui.label(RichText::new(tr("Change the server password")).strong());
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(tr("Server users…")).clicked() {
+                        users = true;
+                    }
+                    if ui.button(tr("Update, restart or stop…")).clicked() {
+                        srv.admin.show_update = true;
+                    }
+                });
+                ui.separator();
+                ui.label(RichText::new(tr("Change your password")).strong());
                 egui::Grid::new("srv_pw").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                     ui.label(tr("Current password"));
                     ui.add(egui::TextEdit::singleline(&mut srv.pw_current).password(true).desired_width(240.0));
@@ -808,6 +813,9 @@ impl App {
         }
         if reload {
             self.open_server_settings();
+        }
+        if users {
+            self.open_server_users();
         }
         if save {
             let Some(info) = &self.srv.settings else { return };
