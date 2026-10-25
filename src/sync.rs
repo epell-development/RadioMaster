@@ -17,6 +17,9 @@ pub const PROTOCOL: u32 = 1;
 /// The server's default TCP port (the remote-control API uses 9258).
 pub const DEFAULT_PORT: u16 = 9259;
 
+/// The web portal's default port.
+pub const DEFAULT_PORTAL_PORT: u16 = 9260;
+
 /// An action forwarded from a desktop app to the server. `tab` is the playlist tab it applies to.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -148,6 +151,14 @@ pub struct ServerInfo {
     pub report: Vec<(String, String)>,
     /// the server was started with --no-audio, which wins over `audio`
     pub forced_silent: bool,
+    /// HTTPS, the web portal and its port as saved (they take effect when the server restarts)
+    pub https: bool,
+    /// SHA-256 of the certificate in use (empty without HTTPS)
+    pub fingerprint: String,
+    pub portal: bool,
+    pub portal_port: u16,
+    /// the saved HTTPS / portal settings differ from what is running
+    pub restart_needed: bool,
 }
 
 /// Changes from the Server settings window.
@@ -160,6 +171,10 @@ pub struct ServerUpdate {
     pub outputs: Vec<crate::config::OutputSel>,
     /// to change the password: the current one and the new one
     pub password: Option<(String, String)>,
+    /// saved for the next start of the server
+    pub https: bool,
+    pub portal: bool,
+    pub portal_port: u16,
 }
 
 /// How many log lines and history items a client is sent.

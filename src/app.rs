@@ -910,6 +910,9 @@ impl App {
                         ui.close_menu();
                     }
                     if ui.button(tr("Log out")).clicked() {
+                        if self.srv.signed_in_remotely() {
+                            self.disconnect(core);
+                        }
                         self.logged_in = None;
                         self.login_password.clear();
                         self.auth_error.clear();
@@ -1816,6 +1819,7 @@ impl App {
 
     fn authentication(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(70.0);
                 if let Some(t) = self.logo_texture(ui.ctx()) {
@@ -1858,6 +1862,18 @@ impl App {
                     }
                 }
                 ui.colored_label(RED, &self.auth_error);
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(6.0);
+                if ui
+                    .add_sized([300.0, 26.0], egui::Button::new(tr("Connect to Remote Server…")))
+                    .on_hover_text(tr("Run a station on a RadioMaster Server, signing in with the server's username and password instead of a local account"))
+                    .clicked()
+                {
+                    self.open_connect(true);
+                }
+                ui.add_space(20.0);
+            });
             });
         });
     }
@@ -3397,6 +3413,16 @@ impl eframe::App for App {
             self.browsers.block("");
             self.browsers.finish();
             self.authentication(ctx);
+            self.connect_window(ctx);
+            if self.srv.ask.is_some() {
+                let arc = self.core.clone();
+                let mut core = arc.lock();
+                if self.srv.from_login {
+                    self.remote_sign_in(&mut core);
+                } else {
+                    self.save_session_window(ctx, &mut core);
+                }
+            }
             return;
         }
         let t0 = std::time::Instant::now();

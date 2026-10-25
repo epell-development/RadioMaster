@@ -193,7 +193,9 @@ RadioMaster Server runs the station without a window on Linux or Windows Server:
 adverts, streaming and, if you want, its own sound cards. Presenters run it from the desktop app with
 **File → Connect to Server**. RadioMaster offers to save your local session as a station profile first and
 brings it back when you disconnect; while connected, a green button with the station's name sits next to
-the logo, and **File → Server settings…** changes the server's name, sound output and password.
+the logo, and **File → Server settings…** changes the server's name, sound output, password, HTTPS and web
+portal. **Connect to Remote Server…** on the login screen signs straight in to a server, without a local
+account. The optional **web portal** runs the station from a browser on a port you choose.
 
 ### Installing RadioMaster Server
 **Linux** (Debian/Ubuntu shown; any x64 distribution with glibc 2.35 or later works):
@@ -218,7 +220,8 @@ journalctl -u radiomaster-server -f         # the station log
 or not*) or a service wrapper such as NSSM. Allow the port (9259) through Windows Firewall.
 
 `--setup` asks for the station name, the **username and password** the desktop apps sign in with (at least 12
-characters) and the port. To script it, use `--user`, `--name`, `--port` and the `RADIOMASTER_PASSWORD`
+characters), the port, whether to use HTTPS and whether to turn on the web portal (and its port). To script it,
+use `--user`, `--name`, `--port`, `--https`, `--portal`, `--portal-port` and the `RADIOMASTER_PASSWORD`
 environment variable.
 
 **Sound:** the server plays through its default sound card, or the ones ticked in **File → Server settings…**
@@ -226,8 +229,12 @@ in the app. Switch "Play through the server's sound cards" off (or start it with
 that only streams. With no sound card at all it runs on a silent clock, and streaming works as normal.
 
 **Connect:** in the desktop app, **File → Connect to Server…**, type the server's address (e.g.
-`192.168.1.20:9259`), the username and the password. Over the internet, put the server behind an HTTPS
-reverse proxy or a VPN and connect to its `https://` address.
+`192.168.1.20:9259`), the username and the password. Over the internet, turn on **HTTPS**: give the server
+your certificate with `--cert` and `--key` (e.g. from Let's Encrypt), or let it make its own, whose fingerprint
+the app asks you to trust once.
+
+**Web portal:** start the server with `--setup --portal` (port 9260 unless you set `--portal-port`), then open
+`http://<server>:9260` (or `https://`) in a browser and sign in with the server's username and password.
 
 More detail (options, moving an existing station to a server, security): [docs/SERVER.md](docs/SERVER.md).
 

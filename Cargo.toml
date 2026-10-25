@@ -46,6 +46,11 @@ urlencoding = "2"
 # RadioMaster-Server: stop cleanly on Ctrl+C / service stop, read the password without showing it
 ctrlc = { version = "3", features = ["termination"] }
 rpassword = "7"
+# HTTPS for RadioMaster Server and Connect to Server (the same rustls that ureq uses)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "0.26"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+sha2 = "0.10"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wry = "=0.50.5"

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>RadioMaster Web Portal</title>
+<link rel="stylesheet" href="/portal.css">
+<script src="/portal.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="lamp" id="lamp"></span><span>RadioMaster</span> <span class="muted" id="station"></span></div>
+  <button id="signout" class="ghost" hidden>Sign out</button>
+</header>
+
+<main>
+  <section id="login" class="card narrow">
+    <h1>Sign in</h1>
+    <p class="muted">Use the username and password set up on RadioMaster Server.</p>
+    <form id="loginform">
+      <label>Username <input id="user" autocomplete="username" required></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" id="loginbtn">Sign in</button>
+      <p class="error" id="loginerr"></p>
+    </form>
+  </section>
+
+  <div id="desk" hidden>
+    <section class="card onair">
+      <div class="row between">
+        <span class="badge" id="state">stopped</span>
+        <span class="muted" id="wait"></span>
+      </div>
+      <div class="title" id="title">Nothing playing</div>
+      <div class="bar"><div id="progress"></div></div>
+      <div class="row between mono"><span id="pos">0:00</span><span id="remain">0:00</span></div>
+      <div class="meters"><div id="vul"></div><div id="vur"></div></div>
+      <div class="controls">
+        <button data-cmd="prev" title="Previous">⏮</button>
+        <button data-cmd="play" class="primary" title="Play">▶</button>
+        <button data-cmd="pause" title="Pause / resume">⏸</button>
+        <button data-cmd="stop" title="Stop">⏹</button>
+        <button data-cmd="next" title="Next">⏭</button>
+      </div>
+      <label class="row volume">Volume <input type="range" id="volume" min="0" max="1" step="0.01"></label>
+      <p class="muted small" id="notify"></p>
+    </section>
+
+    <section class="card playlist">
+      <div class="row between">
+        <h2>Playlist</h2>
+        <select id="tab" aria-label="Playlist tab"></select>
+      </div>
+      <p class="muted small">Double-click a row (or tap ▶) to play it now.</p>
+      <ol id="rows"></ol>
+    </section>
+
+    <section class="card">
+      <h2>Streams</h2>
+      <ul id="encoders" class="plain"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Recently played</h2>
+      <ul id="history" class="plain small"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Station log</h2>
+      <ul id="log" class="plain small mono"></ul>
+    </section>
+  </div>
+  <p class="error center" id="neterr"></p>
+</main>
+</body>
+</html>

@@ -26,6 +26,14 @@ pub struct Session {
     /// the station name the server was set up with
     pub name: String,
     pub version: String,
+    /// SHA-256 of the self-signed certificate the user trusted for this server (empty: none needed)
+    pub pin: String,
+}
+
+/// The address was typed without http:// or https://.
+fn no_scheme(addr: &str) -> bool {
+    let a = addr.trim();
+    !a.starts_with("http://") && !a.starts_with("https://")
 }
 
 /// "radio.local" → "http://radio.local:9259"; an address with http:// or https:// is kept as typed.
@@ -54,14 +62,27 @@ enum Fail {
 impl Fail {
     fn text(&self) -> String {
         match self {
+            Fail::Other(e) if e == crate::tls::UNTRUSTED || e == crate::tls::CHANGED => {
+                "the server's HTTPS certificate isn't the one trusted: disconnect and connect again to check it".into()
+            }
             Fail::Auth(e) | Fail::Other(e) => e.clone(),
             Fail::Conflict => "the server's copy changed first".into(),
         }
     }
 }
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout(Duration::from_secs(20)).build()
+/// An HTTP(S) client that trusts public certificates and the one pinned for this server.
+fn agent(pin: &str) -> ureq::Agent {
+    agent_seen(pin, Default::default())
+}
+
+/// …also noting in `seen` the certificate the server showed.
+fn agent_seen(pin: &str, seen: crate::tls::Seen) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout(Duration::from_secs(20))
+        .tls_config(crate::tls::client_config(pin, seen))
+        .build()
 }
 
 fn call<T: DeserializeOwned>(agent: &ureq::Agent, base: &str, token: &str, path: &str, body: Option<serde_json::Value>) -> Result<T, Fail> {
@@ -87,10 +108,19 @@ fn call<T: DeserializeOwned>(agent: &ureq::Agent, base: &str, token: &str, path:
             })
         }
         // (without the URL, which the app shows already)
-        Err(ureq::Error::Transport(t)) => Err(Fail::Other(match t.message() {
-            Some(m) => format!("{} ({m})", t.kind()),
-            None => t.kind().to_string(),
-        })),
+        Err(ureq::Error::Transport(t)) => {
+            let full = format!("{t:?}");
+            Err(Fail::Other(if full.contains(crate::tls::UNTRUSTED) {
+                crate::tls::UNTRUSTED.into()
+            } else if full.contains(crate::tls::CHANGED) {
+                crate::tls::CHANGED.into()
+            } else {
+                match t.message() {
+                    Some(m) => format!("{} ({m})", t.kind()),
+                    None => t.kind().to_string(),
+                }
+            }))
+        }
     }
 }
 
@@ -105,24 +135,72 @@ struct LoginReply {
     protocol: u32,
 }
 
-/// Sign in (blocks; run it off the UI thread).
-pub fn login(addr: &str, user: &str, password: &str) -> Result<Session, String> {
-    let base = normalize(addr);
-    let r: LoginReply =
-        call(&agent(), &base, "", "login", Some(serde_json::json!({ "user": user, "password": password }))).map_err(|e| match e {
-            Fail::Other(m) if ["Connection Failed", "Dns Failed", "timed out", "Network Error"].iter().any(|k| m.contains(k)) => {
-                format!("Can't reach {base} — check the address and that RadioMaster Server is running ({m})")
-            }
-            e => e.text(),
-        })?;
+/// Why signing in didn't work.
+#[derive(Debug, Clone)]
+pub enum LoginError {
+    Failed(String),
+    /// The server's HTTPS certificate isn't signed by a public authority (a self-signed one), or isn't
+    /// the one trusted before (`changed`). Signing in again with `fingerprint` as the pin trusts it.
+    Untrusted {
+        base: String,
+        fingerprint: String,
+        changed: bool,
+    },
+}
+
+impl std::fmt::Display for LoginError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoginError::Failed(m) => f.write_str(m),
+            LoginError::Untrusted { base, changed: false, .. } => write!(f, "{base} uses a certificate this app doesn't know yet"),
+            LoginError::Untrusted { base, changed: true, .. } => write!(f, "The certificate of {base} changed since you trusted it"),
+        }
+    }
+}
+
+/// Sign in (blocks; run it off the UI thread). `pin` is the certificate fingerprint trusted for this
+/// server, if any. Without http:// or https:// in the address, http is tried first, then https when
+/// the server says it uses HTTPS.
+pub fn login(addr: &str, user: &str, password: &str, pin: &str) -> Result<Session, LoginError> {
+    match login_at(&normalize(addr), user, password, pin) {
+        Err(LoginError::Failed(m)) if no_scheme(addr) && m.starts_with(crate::tls::HTTPS_ONLY) => {
+            let base = normalize(addr).replacen("http://", "https://", 1);
+            login_at(&base, user, password, pin)
+        }
+        r => r,
+    }
+}
+
+fn login_at(base: &str, user: &str, password: &str, pin: &str) -> Result<Session, LoginError> {
+    let seen = crate::tls::Seen::default();
+    let body = serde_json::json!({ "user": user, "password": password });
+    let r: LoginReply = call(&agent_seen(pin, seen.clone()), base, "", "login", Some(body)).map_err(|e| match e {
+        Fail::Other(m) if m == crate::tls::UNTRUSTED || m == crate::tls::CHANGED => {
+            LoginError::Untrusted { base: base.to_string(), fingerprint: seen.lock().clone(), changed: m == crate::tls::CHANGED }
+        }
+        Fail::Other(m) if ["Connection Failed", "Dns Failed", "timed out", "Network Error"].iter().any(|k| m.contains(k)) => {
+            LoginError::Failed(format!("Can't reach {base} — check the address and that RadioMaster Server is running ({m})"))
+        }
+        e => LoginError::Failed(e.text()),
+    })?;
     if r.protocol != sync::PROTOCOL {
-        return Err(format!(
+        return Err(LoginError::Failed(format!(
             "The server runs RadioMaster {} and this app is {}: update both to the same version",
             r.version,
             env!("CARGO_PKG_VERSION")
-        ));
+        )));
     }
-    Ok(Session { base, user: user.to_string(), password: password.to_string(), token: r.token, name: r.name, version: r.version })
+    // a pin is kept only for a certificate that needed one
+    let pin = if base.starts_with("https://") { pin.to_string() } else { String::new() };
+    Ok(Session {
+        base: base.to_string(),
+        user: user.to_string(),
+        password: password.to_string(),
+        token: r.token,
+        name: r.name,
+        version: r.version,
+        pin,
+    })
 }
 
 /// How the connection is doing (shown next to the logo).
@@ -161,7 +239,7 @@ impl Link {
             session: session.clone(),
             token: token.clone(),
             new_password: new_password.clone(),
-            agent: agent(),
+            agent: agent(&session.pin),
             cmds,
             state: state.clone(),
             rev: 0,
@@ -200,18 +278,18 @@ impl Link {
 
     /// The server's own settings (blocks; run it off the UI thread).
     pub fn server_info(s: &Session) -> Result<sync::ServerInfo, String> {
-        call(&agent(), &s.base, &s.token, "server", None).map_err(|e| e.text())
+        call(&agent(&s.pin), &s.base, &s.token, "server", None).map_err(|e| e.text())
     }
 
     /// Change the server's own settings (blocks; run it off the UI thread).
     pub fn server_update(s: &Session, u: &sync::ServerUpdate) -> Result<sync::ServerInfo, String> {
-        call(&agent(), &s.base, &s.token, "server", Some(serde_json::to_value(u).unwrap_or_default())).map_err(|e| e.text())
+        call(&agent(&s.pin), &s.base, &s.token, "server", Some(serde_json::to_value(u).unwrap_or_default())).map_err(|e| e.text())
     }
 
     /// End a sign-in on the server (in the background).
     pub fn sign_out(s: Session) {
         thread::spawn(move || {
-            let _ = call::<serde_json::Value>(&agent(), &s.base, &s.token, "logout", Some(serde_json::json!({})));
+            let _ = call::<serde_json::Value>(&agent(&s.pin), &s.base, &s.token, "logout", Some(serde_json::json!({})));
         });
     }
 }
@@ -271,12 +349,12 @@ impl Syncer {
                         self.session.password = p;
                     }
                     let s = &self.session;
-                    match login(&s.base, &s.user, &s.password) {
+                    match login(&s.base, &s.user, &s.password, &s.pin) {
                         Ok(n) => {
                             *self.token.lock() = n.token.clone();
                             self.session = n;
                         }
-                        Err(e) => self.offline(e, &mut backoff),
+                        Err(e) => self.offline(e.to_string(), &mut backoff),
                     }
                 }
                 Err(e) => self.offline(e.text(), &mut backoff),

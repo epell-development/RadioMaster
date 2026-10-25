@@ -24,6 +24,7 @@ mod report;
 mod scheduler;
 mod stream;
 mod theme;
+mod tls;
 mod updater;
 mod workzones;
 

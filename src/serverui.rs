@@ -2,7 +2,7 @@
 //! The local session (playlists, settings, encoders) is put aside while connected, optionally saved
 //! as a station profile first, and comes back on disconnect.
 use super::*;
-use crate::link::{Link, Session};
+use crate::link::{Link, LoginError, Session};
 use crate::playout::sync;
 
 /// The last server used (server_link.json; the password is never kept).
@@ -11,6 +11,8 @@ use crate::playout::sync;
 struct Remembered {
     address: String,
     user: String,
+    /// host:port → SHA-256 of the self-signed HTTPS certificate trusted for it
+    pins: std::collections::BTreeMap<String, String>,
 }
 
 impl Remembered {
@@ -18,6 +20,14 @@ impl Remembered {
         data_dir().join("server_link.json")
     }
 }
+
+/// The key a trusted certificate is kept under: the address without http:// or https://.
+fn pin_key(base: &str) -> String {
+    base.trim_start_matches("https://").trim_start_matches("http://").to_lowercase()
+}
+
+/// Where the local session is kept while someone signed in from the login screen runs a server.
+const REMOTE_PROFILE: &str = "Local session before remote sign-in";
 
 struct Connected {
     link: Link,
@@ -34,10 +44,18 @@ pub(super) struct ServerUi {
     address: String,
     user: String,
     password: String,
-    busy: Option<mpsc::Receiver<Result<Session, String>>>,
+    busy: Option<mpsc::Receiver<Result<Session, LoginError>>>,
     error: String,
+    /// "Trust this certificate?": (address, fingerprint, it changed since it was trusted)
+    trust: Option<(String, String, bool)>,
+    pins: std::collections::BTreeMap<String, String>,
+    /// Connect to Remote Server was pressed on the login screen: no local sign-in, and the local
+    /// session is saved and comes back on disconnect without asking
+    pub(super) from_login: bool,
+    /// signed in that way: disconnecting goes back to the login screen
+    remote_login: bool,
     /// signed in, waiting for the answer to "save your local session?"
-    ask: Option<Session>,
+    pub(super) ask: Option<Session>,
     profile: String,
     show_status: bool,
     /// Server settings window: the server's settings being edited (None while they load)
@@ -65,6 +83,10 @@ impl Default for ServerUi {
             password: String::new(),
             busy: None,
             error: String::new(),
+            trust: None,
+            pins: r.pins,
+            from_login: false,
+            remote_login: false,
             ask: None,
             profile: String::new(),
             show_status: false,
@@ -84,6 +106,11 @@ impl Default for ServerUi {
 impl ServerUi {
     pub(super) fn connected(&self) -> bool {
         self.conn.is_some()
+    }
+
+    /// Connected with Connect to Remote Server on the login screen (no local account).
+    pub(super) fn signed_in_remotely(&self) -> bool {
+        self.remote_login
     }
 
     /// A window of this tool is open (web views must hide under it).
@@ -109,10 +136,42 @@ impl App {
                 ui.close_menu();
             }
         } else if ui.button(tr("Connect to Server…")).clicked() {
-            self.srv.show_connect = true;
-            self.srv.error.clear();
+            self.open_connect(false);
             ui.close_menu();
         }
+    }
+
+    /// The Connect to Server window; `from_login`: opened from the login screen.
+    pub(super) fn open_connect(&mut self, from_login: bool) {
+        self.srv.show_connect = true;
+        self.srv.from_login = from_login;
+        self.srv.error.clear();
+        self.srv.trust = None;
+    }
+
+    /// Signed in from the login screen: keep the local session as a profile and run the server's
+    /// station, with the permissions the server account gives (everything but local user accounts).
+    pub(super) fn remote_sign_in(&mut self, core: &mut Playout) {
+        let Some(s) = self.srv.ask.take() else { return };
+        self.srv.profile = REMOTE_PROFILE.into();
+        let Some(profile) = self.save_session_profile(core) else {
+            self.srv.error = "The local session could not be saved, so it can't be put aside".into();
+            self.srv.show_connect = true;
+            Link::sign_out(s);
+            return;
+        };
+        let name = format!("{} @ {}", s.user, s.name);
+        self.connect(core, s, Some(profile));
+        self.srv.remote_login = true;
+        self.srv.from_login = false;
+        self.logged_in = Some(crate::auth::Operator {
+            name,
+            password_hash: String::new(),
+            admin: false,
+            perms: crate::auth::Perms::default(),
+            disabled: false,
+        });
+        self.auth_error.clear();
     }
 
     /// "Add library folder…": a folder picker here, or while connected a folder on the server, typed in.
@@ -155,7 +214,7 @@ impl App {
         self.server_settings_window(ctx);
     }
 
-    fn connect_window(&mut self, ctx: &egui::Context) {
+    pub(super) fn connect_window(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.srv.busy {
             match rx.try_recv() {
                 Ok(Ok(s)) => {
@@ -165,7 +224,11 @@ impl App {
                     self.srv.profile = format!("Local session {}", Local::now().format("%Y-%m-%d %H%M"));
                     self.srv.ask = Some(s);
                 }
-                Ok(Err(e)) => {
+                Ok(Err(LoginError::Untrusted { base, fingerprint, changed })) => {
+                    self.srv.busy = None;
+                    self.srv.trust = Some((base, fingerprint, changed));
+                }
+                Ok(Err(LoginError::Failed(e))) => {
                     self.srv.busy = None;
                     self.srv.error = e;
                 }
@@ -197,10 +260,30 @@ impl App {
                     ui.end_row();
                 });
                 ui.label(
-                    RichText::new(tr("Without a port, 9259 is used. For a server on the internet, put it behind HTTPS and type its https:// address."))
+                    RichText::new(tr("Without a port, 9259 is used. A server with HTTPS on is found either way; type https:// to never try without it."))
                         .small()
                         .color(GRAY),
                 );
+                if self.srv.from_login {
+                    ui.label(
+                        RichText::new(tr("Signing in here skips the local login. Your local session is put aside and comes back when you disconnect."))
+                            .small()
+                            .color(GRAY),
+                    );
+                }
+                if let Some((base, fp, changed)) = &self.srv.trust {
+                    ui.add_space(6.0);
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        if *changed {
+                            ui.colored_label(RED, format!("The HTTPS certificate of {base} is not the one you trusted before."));
+                            ui.label(tr("If nobody changed the server's certificate, someone may be listening in. Don't trust it unless you're sure."));
+                        } else {
+                            ui.label(RichText::new(format!("{base} uses its own (self-signed) HTTPS certificate.")).strong());
+                            ui.label(tr("Check that this fingerprint is the one RadioMaster Server printed when it started (also in its Server settings). It is remembered for this server."));
+                        }
+                        ui.add(egui::Label::new(RichText::new(fp).monospace().small()).wrap());
+                    });
+                }
                 if !self.srv.error.is_empty() {
                     ui.colored_label(RED, &self.srv.error);
                 }
@@ -208,7 +291,16 @@ impl App {
             ui.separator();
             ui.horizontal(|ui| {
                 let ready = self.srv.busy.is_none() && !self.srv.address.trim().is_empty() && !self.srv.user.trim().is_empty() && !self.srv.password.is_empty();
-                if ui.add_enabled(ready, egui::Button::new(tr("Connect"))).clicked() {
+                if self.srv.trust.is_some() {
+                    if ui.add_enabled(ready, egui::Button::new(RichText::new(tr("Trust and connect")).strong())).clicked() {
+                        if let Some((base, fp, _)) = self.srv.trust.take() {
+                            self.srv.pins.insert(pin_key(&base), fp);
+                            // https:// from now on, so the pinned certificate is always asked for
+                            self.srv.address = base;
+                        }
+                        go = true;
+                    }
+                } else if ui.add_enabled(ready, egui::Button::new(tr("Connect"))).clicked() {
                     go = true;
                 }
                 if self.srv.busy.is_some() {
@@ -217,18 +309,22 @@ impl App {
                 }
                 if ui.button(tr("Cancel")).clicked() {
                     self.srv.show_connect = false;
+                    self.srv.trust = None;
                 }
             });
         });
         if !open {
             self.srv.show_connect = false;
+            self.srv.trust = None;
         }
         if go && self.srv.busy.is_none() && !self.srv.password.is_empty() {
             let (tx, rx) = mpsc::channel();
             let (a, u, p, ctx) =
                 (self.srv.address.trim().to_string(), self.srv.user.trim().to_string(), self.srv.password.clone(), ctx.clone());
+            let pin = self.srv.pins.get(&pin_key(&crate::link::normalize(&a))).cloned().unwrap_or_default();
+            self.srv.trust = None;
             thread::spawn(move || {
-                let _ = tx.send(crate::link::login(&a, &u, &p));
+                let _ = tx.send(crate::link::login(&a, &u, &p, &pin));
                 ctx.request_repaint();
             });
             self.srv.busy = Some(rx);
@@ -236,7 +332,7 @@ impl App {
         }
     }
 
-    fn save_session_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
+    pub(super) fn save_session_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         let Some(s) = &self.srv.ask else { return };
         let name = s.name.clone();
         let mut choice: Option<bool> = None;
@@ -323,7 +419,10 @@ impl App {
         std::mem::swap(core, &mut local);
         let ctx = self.ctx.clone();
         let link = Link::start(self.core.clone(), s.clone(), rx, Box::new(move || ctx.request_repaint()));
-        let r = Remembered { address: self.srv.address.trim().to_string(), user: s.user.clone() };
+        if !s.pin.is_empty() {
+            self.srv.pins.insert(pin_key(&s.base), s.pin.clone());
+        }
+        let r = Remembered { address: self.srv.address.trim().to_string(), user: s.user.clone(), pins: self.srv.pins.clone() };
         let _ = std::fs::write(Remembered::path(), serde_json::to_string_pretty(&r).unwrap_or_default());
         core.say(format!("Connected to {} ({}) as {}", s.name, s.base, s.user));
         self.srv.conn = Some(Connected { link, local, profile, encoders });
@@ -356,6 +455,12 @@ impl App {
         drop(mirror);
         self.srv.show_status = false;
         self.reset_playlist_view();
+        if std::mem::take(&mut self.srv.remote_login) {
+            // signed in from the login screen: back to it
+            self.logged_in = None;
+            self.login_password.clear();
+            self.srv.show_settings = false;
+        }
     }
 
     fn reset_playlist_view(&mut self) {
@@ -388,6 +493,16 @@ impl App {
                     ui.end_row();
                     ui.label(tr("Address"));
                     ui.label(&s.base);
+                    ui.end_row();
+                    ui.label(tr("Security"));
+                    if !s.base.starts_with("https://") {
+                        ui.colored_label(AMBER, tr("Not encrypted (http). Turn on HTTPS in Server settings for a server on the internet."));
+                    } else if s.pin.is_empty() {
+                        ui.colored_label(GREEN, tr("HTTPS, certificate from a public authority"));
+                    } else {
+                        ui.colored_label(GREEN, tr("HTTPS, the server's own certificate that you trusted"))
+                            .on_hover_text(format!("SHA-256 {}", s.pin));
+                    }
                     ui.end_row();
                     ui.label(tr("Signed in as"));
                     ui.label(&s.user);
@@ -589,6 +704,31 @@ impl App {
                     ui.label(RichText::new(format!("{dev}: {st}")).small());
                 }
                 ui.separator();
+                ui.label(RichText::new(tr("Security and web portal")).strong());
+                ui.checkbox(&mut info.https, tr("Use HTTPS"))
+                    .on_hover_text(tr("Encrypts everything between the apps and the server. Without a certificate given to the server (--cert/--key) it makes its own, which each app trusts once."));
+                if !info.fingerprint.is_empty() {
+                    ui.label(RichText::new(format!("{} {}", tr("Certificate SHA-256:"), info.fingerprint)).small().monospace());
+                }
+                ui.checkbox(&mut info.portal, tr("Web portal: run the station from a browser"));
+                ui.add_enabled_ui(info.portal, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Portal port"));
+                        ui.add(egui::DragValue::new(&mut info.portal_port).range(1..=65535));
+                    });
+                    if info.portal && info.portal_port == info.port {
+                        ui.colored_label(RED, tr("The portal needs a port of its own."));
+                    }
+                });
+                ui.label(
+                    RichText::new(tr("The portal signs in with the server's username and password. These change when the server starts again."))
+                        .small()
+                        .color(GRAY),
+                );
+                if info.restart_needed {
+                    ui.colored_label(AMBER, tr("Saved: restart RadioMaster Server to use them."));
+                }
+                ui.separator();
                 ui.label(RichText::new(tr("Change the server password")).strong());
                 egui::Grid::new("srv_pw").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                     ui.label(tr("Current password"));
@@ -645,6 +785,9 @@ impl App {
                 audio: info.audio,
                 outputs: info.outputs.clone(),
                 password,
+                https: info.https,
+                portal: info.portal,
+                portal_port: if info.portal_port == info.port { 0 } else { info.portal_port },
             };
             self.srv.settings_msg = (false, String::new());
             self.server_request(Some(u));

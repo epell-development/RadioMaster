@@ -40,8 +40,13 @@ encoders. Run `RadioMaster-Server --help` for every option.
 | `--user`, `--password`, `--name` | answers for `--setup` |
 | `--port N`, `--bind ADDRESS` | where to listen (default `0.0.0.0:9259`) |
 | `--data FOLDER` | the data folder (default `~/.config/RadioMaster-Server`, or `%APPDATA%\RadioMaster-Server` on Windows) |
+| `--https`, `--no-https` | serve over HTTPS (see [HTTPS](#https)) |
+| `--cert FILE`, `--key FILE` | a PEM certificate (chain) and its private key for HTTPS; without them the server makes its own |
+| `--portal`, `--no-portal`, `--portal-port N` | the [web portal](#web-portal) and its port (default 9260) |
 | `--no-audio` | don't use a sound card: stream only |
 | `--list-devices` | list the sound cards |
+
+With `--setup` these options are saved in `server.json`; without it they apply to that run only.
 
 The server keeps its own data folder, so it never mixes with a desktop RadioMaster on the same machine. To
 move an existing station to the server, copy `config.json`, `playlists.json`, `library.json`, `cues.json` and
@@ -64,7 +69,40 @@ and the server password (you type the current one first).
 example with Task Scheduler (*At startup*, *Run whether user is logged on or not*) or a service wrapper such as
 NSSM. Allow the port through Windows Firewall.
 
+## HTTPS
+Turn HTTPS on with `--setup --https` (setup also asks), or in the app with **File → Server settings… → Use
+HTTPS** (it takes effect when the server restarts). Everything between the apps, browsers and the server is
+then encrypted, and the port answers plain `http://` only with a pointer to `https://`.
+
+- **Your own certificate** (for example Let's Encrypt's): `--cert /etc/letsencrypt/live/radio.example.com/fullchain.pem --key /etc/letsencrypt/live/radio.example.com/privkey.pem`. The
+  app and browsers trust it like any website. The server account must be able to read both files; restart the
+  server after the certificate is renewed.
+- **No certificate:** the server makes a self-signed one the first time (`tls-cert.pem` and `tls-key.pem` in
+  its data folder) and prints its SHA-256 fingerprint at start-up. The first time an app connects, it shows
+  the fingerprint and asks you to trust it; check it against the one the server printed (it is also in
+  **Server settings**). The app remembers it for that server and refuses a different certificate later, warning
+  that it changed. Browsers show a warning for a self-signed certificate; use your own certificate to avoid it.
+
+An address typed without `https://` still finds a server that uses HTTPS.
+
+## Web portal
+The web portal runs the station from a browser on any computer, tablet or phone, with nothing to install.
+Turn it on with `--setup --portal` (choose the port with `--portal-port`, default 9260), or in the app with
+**File → Server settings… → Web portal** (after a restart). Open `http://<server>:9260` (or `https://` with
+HTTPS on) and sign in with the server's username and password.
+
+It shows what's on air with its progress and levels, play / pause / stop / next / previous, the volume, the
+playlists (double-click a row to play it), the streams with start and stop, recently played and the station
+log. The portal needs a port of its own; allow it through the firewall like the main port.
+
 ## Connect from the desktop app
+**From the login screen:** **Connect to Remote Server…** below the sign-in box connects without a local
+account: you sign in with the server's username and password. Your local session is saved as the profile
+"Local session before remote sign-in" and comes back when you disconnect, which (like **Log out**) returns to
+the login screen. Managing local user accounts isn't available this way.
+
+**From the app:**
+
 1. **File → Connect to Server…**, type the server's address (e.g. `192.168.1.20:9259`), the username and the
    password.
 2. RadioMaster asks whether to **save your local session** as a station profile. If you save it, your own
@@ -88,6 +126,7 @@ files on your own computer and don't work while connected.
 The username and password are checked with Argon2 (only the hash is stored, in `server.json`), sign-ins
 expire after a day without use, and repeated wrong passwords are slowed down. Whoever signs in can do everything the station can, including playlist
 `RUN` commands that start programs on the server, so use a strong password and run the server under its own
-unprivileged account (the systemd unit does). The server speaks plain HTTP:
-on a network you don't trust, or over the internet, put it behind an HTTPS reverse proxy (Caddy, nginx) or a
-VPN, and connect to its `https://` address.
+unprivileged account (the systemd unit does). On a network you don't trust, or over the internet, turn on
+[HTTPS](#https) (or put the server behind an HTTPS reverse proxy such as Caddy or nginx, or a VPN). Without it
+the password and everything else go over the network unencrypted. The web portal uses the same sign-in, and
+its pages refuse to be shown inside other sites.

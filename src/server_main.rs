@@ -23,6 +23,7 @@ mod remote;
 mod scheduler;
 mod server;
 mod stream;
+mod tls;
 
 use parking_lot::Mutex;
 use server::ServerCfg;
@@ -44,12 +45,18 @@ Usage: RadioMaster-Server [options]
   --name NAME           station name shown in the app (with --setup)
   --port N              port to listen on (default 9259; saved with --setup)
   --bind ADDRESS        address to listen on (default 0.0.0.0, every network)
+  --https / --no-https  serve over HTTPS (saved with --setup)
+  --cert FILE           PEM certificate (chain) for HTTPS, e.g. Let's Encrypt's fullchain.pem
+  --key FILE            its PEM private key (without --cert/--key a self-signed certificate is made)
+  --portal / --no-portal  the web portal: run the station from a browser (saved with --setup)
+  --portal-port N       port for the web portal (default 9260)
   --data FOLDER         data folder (default: the RadioMaster-Server folder in your settings folder)
   --no-audio            don't use a sound card: stream only
   --list-devices        list the sound cards and exit
   --version             print the version and exit
 
-Desktop apps connect with File → Connect to Server, using this machine's address and port.";
+Desktop apps connect with File → Connect to Server, using this machine's address and port.
+Options given without --setup apply to this run only.";
 
 /// Work for the main thread (which owns the sound cards).
 enum Ctl {
@@ -68,6 +75,11 @@ struct Args {
     data: Option<PathBuf>,
     no_audio: bool,
     list_devices: bool,
+    https: Option<bool>,
+    cert: Option<String>,
+    key: Option<String>,
+    portal: Option<bool>,
+    portal_port: Option<u16>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -81,6 +93,11 @@ fn parse_args() -> Result<Args, String> {
         data: None,
         no_audio: false,
         list_devices: false,
+        https: None,
+        cert: None,
+        key: None,
+        portal: None,
+        portal_port: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -94,6 +111,15 @@ fn parse_args() -> Result<Args, String> {
             "--bind" => a.bind = Some(value("an address")?),
             "--data" => a.data = Some(PathBuf::from(value("a folder")?)),
             "--no-audio" => a.no_audio = true,
+            "--https" => a.https = Some(true),
+            "--no-https" => a.https = Some(false),
+            "--cert" => a.cert = Some(value("a file")?),
+            "--key" => a.key = Some(value("a file")?),
+            "--portal" => a.portal = Some(true),
+            "--no-portal" => a.portal = Some(false),
+            "--portal-port" => {
+                a.portal_port = Some(value("a number")?.parse().map_err(|_| "--portal-port needs a number from 1 to 65535".to_string())?)
+            }
             "--list-devices" => a.list_devices = true,
             "--version" | "-V" => {
                 println!("RadioMaster Server {}", env!("CARGO_PKG_VERSION"));
@@ -174,7 +200,41 @@ fn setup(args: &Args, old: Option<ServerCfg>) -> Result<ServerCfg, String> {
     if let Some(b) = &args.bind {
         cfg.bind = b.clone();
     }
+    cfg.https = match args.https {
+        Some(h) => h,
+        None if tty => yes_no("Serve over HTTPS (a self-signed certificate is made unless you give --cert and --key)", cfg.https),
+        None => cfg.https,
+    };
+    cfg.portal = match args.portal {
+        Some(p) => p,
+        None if tty => yes_no("Turn on the web portal (run the station from a browser)", cfg.portal),
+        None => cfg.portal,
+    };
+    cfg.portal_port = match args.portal_port {
+        Some(p) => p,
+        None if tty && cfg.portal => ask("Web portal port", &cfg.portal_port.to_string())
+            .parse()
+            .map_err(|_| "the port must be a number from 1 to 65535".to_string())?,
+        None => cfg.portal_port,
+    };
+    apply_tls_args(args, &mut cfg);
     Ok(cfg)
+}
+
+fn yes_no(prompt: &str, default: bool) -> bool {
+    let a = ask(&format!("{prompt} (y/n)"), if default { "y" } else { "n" });
+    a.to_lowercase().starts_with('y')
+}
+
+/// --cert and --key: a given certificate turns HTTPS on.
+fn apply_tls_args(args: &Args, cfg: &mut ServerCfg) {
+    if let Some(c) = &args.cert {
+        cfg.cert_file = c.clone();
+        cfg.https = args.https.unwrap_or(true);
+    }
+    if let Some(k) = &args.key {
+        cfg.key_file = k.clone();
+    }
 }
 
 fn main() {
@@ -231,6 +291,20 @@ fn main() {
     if let Some(b) = &args.bind {
         scfg.bind = b.clone();
     }
+    if let Some(h) = args.https {
+        scfg.https = h;
+    }
+    if let Some(p) = args.portal {
+        scfg.portal = p;
+    }
+    if let Some(p) = args.portal_port {
+        scfg.portal_port = p;
+    }
+    apply_tls_args(&args, &mut scfg);
+    if scfg.portal && scfg.portal_port == scfg.port {
+        eprintln!("The web portal needs a port of its own (--portal-port), not {}", scfg.port);
+        std::process::exit(2);
+    }
 
     println!("RadioMaster Server {} — data folder {}", env!("CARGO_PKG_VERSION"), config::data_dir().display());
     let engine = engine::Engine::new_detached();
@@ -283,7 +357,21 @@ fn main() {
         }
     };
     match server::spawn(core.clone(), scfg.clone(), host) {
-        Ok(addr) => println!("Listening on {addr} — sign in as '{}' from File → Connect to Server", scfg.user),
+        Ok(l) => {
+            let scheme = if l.fingerprint.is_some() { "https" } else { "http" };
+            println!("Listening on {scheme}://{} — sign in as '{}' from File → Connect to Server", l.addr, scfg.user);
+            if let Some(fp) = &l.fingerprint {
+                if l.self_signed {
+                    println!("HTTPS: self-signed certificate. The app asks once whether to trust it; check that it shows");
+                    println!("       SHA-256 {fp}");
+                } else {
+                    println!("HTTPS: certificate {fp}");
+                }
+            }
+            if let Some(p) = l.portal {
+                println!("Web portal: {scheme}://{p} (sign in with the same username and password)");
+            }
+        }
         Err(e) => {
             eprintln!("Could not listen on {}:{}: {e}", scfg.bind, scfg.port);
             std::process::exit(1);
