@@ -317,7 +317,7 @@ impl Dsp {
         let preamp = 10f32.powf(c.eq_preamp_db / 20.0);
         let rms_a = 1.0 / sr;
         let agc_a = 1.0 / (sr * 4.0);
-        for f in buf.chunks_exact_mut(2) {
+        for f in buf.as_chunks_mut::<2>().0 {
             let (mut l, mut r) = (f[0], f[1]);
             if c.eq_enabled {
                 l *= preamp;

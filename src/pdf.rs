@@ -209,7 +209,7 @@ impl Pdf {
     pub fn add_image(&mut self, w: u32, h: u32, rgba: &[u8]) -> usize {
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
         let mut alpha = Vec::with_capacity((w * h) as usize);
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             rgb.extend_from_slice(&px[..3]);
             alpha.push(px[3]);
         }

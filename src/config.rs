@@ -424,7 +424,11 @@ impl AdRule {
             Trigger::Songs => format!("after every {} song{}", self.every_songs.max(1), if self.every_songs == 1 { "" } else { "s" }),
             Trigger::Minutes => {
                 let m = self.every_mins.max(1);
-                let every = if m % 60 == 0 { format!("{} hour{}", m / 60, if m == 60 { "" } else { "s" }) } else { format!("{m} minutes") };
+                let every = if m.is_multiple_of(60) {
+                    format!("{} hour{}", m / 60, if m == 60 { "" } else { "s" })
+                } else {
+                    format!("{m} minutes")
+                };
                 format!("every {every}{}", if self.on_clock { " (on the clock)" } else { "" })
             }
             Trigger::Times => {

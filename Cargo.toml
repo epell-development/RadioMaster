@@ -18,6 +18,15 @@ path = "src/main.rs"
 name = "RadioMaster-Server"
 path = "src/server_main.rs"
 
+# `cargo clippy` runs in CI with warnings as errors. These lints are style calls that don't fit an
+# egui app (index loops over parallel arrays, big state enums, nested UI types), so they stay off.
+[lints.clippy]
+type_complexity = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"
+result_large_err = "allow"
+field_reassign_with_default = "allow"
+
 [dependencies]
 ab_glyph = "0.2.32"
 flate2 = "1"
