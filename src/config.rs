@@ -665,6 +665,8 @@ pub struct Config {
     pub hour_lines: bool,
     /// saved EQ curves (name, gains)
     pub eq_presets: Vec<(String, [f32; 12])>,
+    /// saved parametric EQ curves (name, bands)
+    pub peq_presets: Vec<(String, Vec<crate::dsp::PeqBand>)>,
     /// plugin folders that are switched off
     pub plugins_off: Vec<String>,
     /// interface language (a file in the lang folder); empty = English
@@ -681,6 +683,7 @@ impl Default for Config {
             check_updates: true,
             hour_lines: true,
             eq_presets: vec![],
+            peq_presets: vec![],
             plugins_off: vec![],
             language: String::new(),
             ffmpeg_path: String::new(),
