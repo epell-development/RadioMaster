@@ -1,7 +1,6 @@
 use crate::azuracast::Client;
 use crate::browser::Browsers;
 use crate::config::{data_dir, CartPad, Category, Marker, PatternItem, ServerKind, Template};
-use crate::dsp::EQ_FREQS;
 use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
@@ -27,20 +26,6 @@ const AMBER: Color32 = Color32::from_rgb(235, 190, 60);
 const RED: Color32 = Color32::from_rgb(230, 70, 70);
 const GRAY: Color32 = Color32::from_rgb(98, 106, 120);
 const ACCENT: Color32 = Color32::from_rgb(30, 110, 205);
-
-/// Built-in EQ curves (31 Hz … 16 kHz, dB).
-const EQ_PRESETS: &[(&str, [f32; 12])] = &[
-    ("Flat", [0.0; 12]),
-    ("Broadcast (FM warmth)", [2.0, 2.5, 1.5, 0.0, -1.0, -0.5, 0.5, 1.5, 2.0, 2.5, 2.0, 1.0]),
-    ("Bass boost", [5.0, 4.5, 3.5, 2.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-    ("Voice clarity", [-4.0, -3.0, -1.5, 0.0, 1.0, 2.0, 3.0, 3.0, 2.0, 0.5, 0.0, -1.0]),
-    ("Loudness", [4.0, 3.0, 1.5, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 3.5, 3.0]),
-    ("Treble boost", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.5, 4.5]),
-    ("Dance", [4.5, 4.0, 2.0, 0.0, -1.0, -1.5, 0.0, 1.0, 2.0, 3.0, 2.5, 1.5]),
-    ("Rock", [3.0, 2.5, 1.0, -0.5, -1.0, 0.0, 1.5, 2.5, 3.0, 3.0, 2.5, 2.0]),
-    ("Talk / podcast", [-6.0, -4.0, -2.0, 0.0, 1.0, 2.0, 2.5, 2.0, 1.0, 0.0, -1.0, -2.0]),
-    ("Small speakers", [-3.0, -1.0, 2.0, 3.0, 2.0, 1.0, 0.0, 0.5, 1.0, 1.5, 1.0, 0.0]),
-];
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum SettingsPage {
@@ -162,6 +147,8 @@ mod adsui;
 mod aztool;
 #[path = "cleanupui.rs"]
 mod cleanupui;
+#[path = "equi.rs"]
+mod equi;
 #[path = "panes.rs"]
 mod panes;
 #[path = "pltools.rs"]
@@ -260,6 +247,8 @@ pub struct App {
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
     eq_name: String,
+    /// the parametric EQ band picked on the curve
+    peq_sel: usize,
     notes: TrackNotes,
     notes_dirty: bool,
     info_pick: usize,
@@ -592,6 +581,7 @@ impl App {
             layout_checked: std::time::Instant::now(),
             perf: None,
             eq_name: String::new(),
+            peq_sel: 0,
             notes: TrackNotes::load(),
             notes_dirty: false,
             info_pick: 1,
@@ -3197,70 +3187,7 @@ impl App {
 
     fn tab_dsp(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // ---- equalizer: sliders, exact values under them, presets
-            let mut save_preset = false;
-            let mut delete_preset: Option<usize> = None;
-            {
-                let custom = core.cfg.eq_presets.clone();
-                let d = &mut core.cfg.dsp;
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut d.eq_enabled, tr("12-band equalizer"));
-                    egui::ComboBox::from_id_salt("eq_preset").selected_text("Presets…").width(150.0).show_ui(ui, |ui| {
-                        for (name, g) in EQ_PRESETS {
-                            if ui.selectable_label(false, *name).clicked() {
-                                d.eq_gains = *g;
-                                d.eq_enabled = true;
-                            }
-                        }
-                        if !custom.is_empty() {
-                            ui.separator();
-                            for (k, (name, g)) in custom.iter().enumerate() {
-                                ui.horizontal(|ui| {
-                                    if ui.selectable_label(false, name).clicked() {
-                                        d.eq_gains = *g;
-                                        d.eq_enabled = true;
-                                    }
-                                    if ui.small_button("🗑").on_hover_text(tr("Delete this preset")).clicked() {
-                                        delete_preset = Some(k);
-                                    }
-                                });
-                            }
-                        }
-                    });
-                    ui.add(egui::TextEdit::singleline(&mut self.eq_name).hint_text(tr("preset name")).desired_width(110.0));
-                    save_preset = ui.add_enabled(!self.eq_name.trim().is_empty(), egui::Button::new(tr("Save preset"))).clicked();
-                    if ui.button(tr("Flat")).clicked() {
-                        d.eq_gains = [0.0; 12];
-                    }
-                });
-                ui.horizontal(|ui| {
-                    for i in 0..12 {
-                        ui.vertical(|ui| {
-                            ui.set_width(46.0);
-                            ui.add(egui::Slider::new(&mut d.eq_gains[i], -12.0..=12.0).vertical().show_value(false));
-                            // exact value in dB: drag it, or double-click to type
-                            ui.add_sized(
-                                [46.0, 20.0],
-                                egui::DragValue::new(&mut d.eq_gains[i]).range(-12.0..=12.0).speed(0.05).fixed_decimals(1),
-                            )
-                            .on_hover_text(tr("Drag, or double-click to type an exact value"));
-                            let f = EQ_FREQS[i];
-                            ui.label(RichText::new(if f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") }).small());
-                        });
-                    }
-                });
-            }
-            if save_preset {
-                let name = self.eq_name.trim().to_string();
-                let g = core.cfg.dsp.eq_gains;
-                core.cfg.eq_presets.retain(|(n, _)| *n != name);
-                core.cfg.eq_presets.push((name.clone(), g));
-                core.say(format!("EQ preset \"{name}\" saved"));
-                self.eq_name.clear();
-            }
-            if let Some(k) = delete_preset {
-                core.cfg.eq_presets.remove(k);
-            }
+            self.eq_ui(ui, core);
             let d = &mut core.cfg.dsp;
             ui.separator();
             ui.checkbox(&mut d.comp_enabled, tr("Compressor"));
