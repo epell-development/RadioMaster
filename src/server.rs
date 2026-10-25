@@ -145,6 +145,9 @@ struct Api {
     running: (bool, bool, u16),
     /// of the certificate in use (empty without HTTPS)
     fingerprint: String,
+    /// HTTPS with a certificate browsers trust: the portal tells them to use only HTTPS. (Not with a
+    /// self-signed one, where HSTS would stop browsers from letting the user past their warning.)
+    hsts: bool,
 }
 
 /// Where the server is listening.
@@ -206,6 +209,7 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
         failures: Mutex::new((0, Instant::now())),
         running,
         fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()).unwrap_or_default(),
+        hsts: tls.as_ref().is_some_and(|t| !t.self_signed),
     });
     {
         let api = api.clone();
@@ -284,7 +288,7 @@ impl Api {
                 _ => None,
             };
             if let Some((text, ct)) = file {
-                return respond_file(req, text, ct);
+                return respond_file(req, text, ct, self.hsts);
             }
         }
         let param = |k: &str| -> u64 {
@@ -515,8 +519,8 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
 }
 
 /// One of the portal's own files, with headers that keep it from being framed or mixed with other sites.
-fn respond_file(req: tiny_http::Request, text: &'static str, content_type: &str) {
-    let r = tiny_http::Response::from_string(text)
+fn respond_file(req: tiny_http::Request, text: &'static str, content_type: &str, hsts: bool) {
+    let mut r = tiny_http::Response::from_string(text)
         .with_header(header("Content-Type", content_type))
         .with_header(header("Cache-Control", "no-cache"))
         .with_header(header("X-Content-Type-Options", "nosniff"))
@@ -526,6 +530,9 @@ fn respond_file(req: tiny_http::Request, text: &'static str, content_type: &str)
             "Content-Security-Policy",
             "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
         ));
+    if hsts {
+        r.add_header(header("Strict-Transport-Security", "max-age=31536000"));
+    }
     let _ = req.respond(r);
 }
 
@@ -684,6 +691,8 @@ mod tests {
         let agent = ureq::AgentBuilder::new().tls_config(crate::tls::client_config(&fp, Default::default())).build();
         let page = agent.get(&format!("{portal}/")).call().unwrap();
         assert!(page.header("Content-Security-Policy").is_some());
+        // no HSTS with a self-signed certificate: browsers would no longer let the user past their warning
+        assert!(page.header("Strict-Transport-Security").is_none());
         assert!(page.into_string().unwrap().contains("RadioMaster Web Portal"));
         assert!(agent.get(&format!("{portal}/portal.js")).call().unwrap().into_string().unwrap().contains("api/v1"));
         let ping: serde_json::Value = agent.get(&format!("{portal}/api/v1/ping")).call().unwrap().into_json().unwrap();
