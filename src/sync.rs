@@ -200,7 +200,7 @@ impl Playout {
     pub(super) fn forward(&self, cmd: impl FnOnce(usize) -> Cmd) -> bool {
         match &self.link {
             Some(tx) => {
-                let _ = tx.send(cmd(self.in_tab.unwrap_or(self.playing_tab)));
+                let _ = tx.send(cmd(self.swapped.unwrap_or(self.playing_tab)));
                 true
             }
             None => false,

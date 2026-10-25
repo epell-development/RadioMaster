@@ -75,6 +75,8 @@ pub enum MicMode {
     Mute,
     /// pause it, and carry on when the mic goes off
     Pause,
+    /// leave it at full level (only the studio monitors go quiet)
+    Keep,
 }
 
 /// Track list repeat protection.
@@ -595,10 +597,13 @@ pub struct OutputSel {
     pub name: String,
     pub enabled: bool,
     pub gain: f32,
+    /// Studio monitor speakers: muted while the mic is on so the mic doesn't pick them up.
+    /// The stream and the other outputs keep playing.
+    pub studio: bool,
 }
 impl Default for OutputSel {
     fn default() -> Self {
-        Self { name: String::new(), enabled: false, gain: 1.0 }
+        Self { name: String::new(), enabled: false, gain: 1.0, studio: false }
     }
 }
 
