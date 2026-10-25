@@ -192,6 +192,11 @@ impl Link {
         s
     }
 
+    /// The sign-in as it changes (for the audio connections, which outlive a server restart).
+    pub fn token(&self) -> Arc<Mutex<String>> {
+        self.token.clone()
+    }
+
     /// The password was changed: sign in with the new one from now on.
     pub fn password_changed(&mut self, password: String) {
         self.session.password = password.clone();
@@ -214,6 +219,110 @@ impl Link {
             let _ = call::<serde_json::Value>(&agent(), &s.base, &s.token, "logout", Some(serde_json::json!({})));
         });
     }
+}
+
+// ------------------------------------------------------------ audio
+
+/// How much of the server's mix is buffered before it plays (decoded MP3 frames of about 26 ms).
+const LISTEN_PREBUFFER: usize = 12;
+/// MP3 bitrate of the mic sent to the server.
+const MIC_KBPS: u32 = 128;
+/// The mic goes up in slices this long.
+const MIC_SLICE: Duration = Duration::from_millis(100);
+
+/// Plays the station (the server's on-air mix) on this machine's sound cards while connected,
+/// through `engine`, the engine those sound cards play. Stops when dropped.
+pub struct Listener {
+    stop: Arc<AtomicBool>,
+    engine: crate::engine::Engine,
+}
+
+impl Listener {
+    /// `say` reports trouble in the station log.
+    pub fn start(engine: crate::engine::Engine, base: String, token: Arc<Mutex<String>>, say: Box<dyn Fn(String) + Send>) -> Listener {
+        let (feed, src) = crate::engine::net_feed(LISTEN_PREBUFFER);
+        engine.set_feed(Some(src));
+        let stop = Arc::new(AtomicBool::new(false));
+        let st = stop.clone();
+        thread::spawn(move || {
+            // (no overall time limit: the answer never ends)
+            let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout_read(Duration::from_secs(10)).build();
+            let mut told = false;
+            while !st.load(Ordering::Relaxed) {
+                let t = token.lock().clone();
+                match agent.get(&format!("{base}/api/v1/listen")).set("Authorization", &format!("Bearer {t}")).call() {
+                    Ok(r) => {
+                        told = false;
+                        let mime = r.content_type().to_string();
+                        let _ = crate::live::decode_stream(r.into_reader(), &mime, Some("mp3"), &mut |s| {
+                            let _ = feed.try_send(s.to_vec());
+                            !st.load(Ordering::Relaxed)
+                        });
+                    }
+                    Err(ureq::Error::Status(404, _)) if !told => {
+                        told = true;
+                        say("This server doesn't send its audio to the app: update RadioMaster Server to this app's version".into());
+                    }
+                    // offline or signed out: the syncer signs in again, then this tries again
+                    Err(_) => {}
+                }
+                for _ in 0..20 {
+                    if st.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        });
+        Listener { stop, engine }
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.engine.set_feed(None);
+    }
+}
+
+/// The mic while connected: captured here and sent to the server, which mixes it on air (with the
+/// station's mic settings). Dropping the returned stream turns it off.
+pub fn mic_uplink(base: String, token: Arc<Mutex<String>>, device: &str) -> anyhow::Result<rodio::cpal::Stream> {
+    let mut enc = crate::stream::mp3_encoder(MIC_KBPS)?;
+    let (tx, rx) = crossbeam_channel::bounded::<Vec<f32>>(256);
+    let stream = crate::mic::capture(device, move |s| {
+        let _ = tx.try_send(s.to_vec());
+    })?;
+    thread::spawn(move || {
+        let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(3)).timeout(Duration::from_secs(5)).build();
+        let post = |path: &str, body: &[u8]| {
+            agent
+                .post(&format!("{base}/api/v1/{path}"))
+                .set("Authorization", &format!("Bearer {}", token.lock()))
+                .set("Content-Type", "audio/mpeg")
+                .send_bytes(body)
+        };
+        let (mut pcm, mut out) = (Vec::<i16>::new(), Vec::new());
+        let mut sent = Instant::now();
+        loop {
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(b) => pcm.extend(b.iter().map(|x| (x.clamp(-1.0, 1.0) * 32767.0) as i16)),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+            // a slow answer makes the next slice longer, so nothing piles up
+            if sent.elapsed() >= MIC_SLICE && !pcm.is_empty() {
+                sent = Instant::now();
+                out.clear();
+                if crate::stream::mp3_encode(&mut enc, &pcm, &mut out).is_ok() && !out.is_empty() {
+                    let _ = post("mic", &out);
+                }
+                pcm.clear();
+            }
+        }
+        let _ = post("mic/off", b"{}");
+    });
+    Ok(stream)
 }
 
 #[derive(Serialize)]

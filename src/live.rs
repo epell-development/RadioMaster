@@ -149,6 +149,24 @@ pub fn url_source(url: &str, sink: LogSink) -> FeedSource {
 }
 
 fn run_stream(url: &str, feeder: &Feeder) -> Result<()> {
+    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(8)).timeout_read(Duration::from_secs(20)).build();
+    let resp = agent.get(url).set("User-Agent", "RadioMaster/1.0").call().map_err(|e| anyhow!("could not connect ({e})"))?;
+    let mime = resp.content_type().to_string();
+    let ext = url.split('?').next().and_then(|u| u.rsplit('.').next()).filter(|e| e.len() <= 4);
+    let mut chunk = Chunker { buf: Vec::new() };
+    decode_stream(resp.into_reader(), &mime, ext, &mut |s| chunk.push(s, feeder))?;
+    chunk.flush(feeder);
+    Ok(())
+}
+
+/// Decode an audio stream as it arrives (MP3, AAC (ADTS), Ogg Vorbis, FLAC, WAV) and hand `out`
+/// stereo `SR` Hz samples, one packet at a time, until the stream ends or `out` returns false.
+pub fn decode_stream(
+    reader: Box<dyn std::io::Read + Send + Sync>,
+    mime: &str,
+    ext: Option<&str>,
+    out: &mut dyn FnMut(&[f32]) -> bool,
+) -> Result<()> {
     use symphonia::core::{
         audio::SampleBuffer,
         codecs::{DecoderOptions, CODEC_TYPE_NULL},
@@ -158,13 +176,9 @@ fn run_stream(url: &str, feeder: &Feeder) -> Result<()> {
         meta::MetadataOptions,
         probe::Hint,
     };
-    let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(8)).timeout_read(Duration::from_secs(20)).build();
-    let resp = agent.get(url).set("User-Agent", "RadioMaster/1.0").call().map_err(|e| anyhow!("could not connect ({e})"))?;
-    let mime = resp.content_type().to_string();
-    let reader = resp.into_reader();
     let mss = MediaSourceStream::new(Box::new(ReadOnlySource::new(reader)), Default::default());
     let mut hint = Hint::new();
-    hint.mime_type(&mime);
+    hint.mime_type(mime);
     if mime.contains("aac") {
         hint.with_extension("aac");
     } else if mime.contains("mpeg") || mime.contains("mp3") {
@@ -172,7 +186,7 @@ fn run_stream(url: &str, feeder: &Feeder) -> Result<()> {
     } else if mime.contains("ogg") {
         hint.with_extension("ogg");
     }
-    if let Some(ext) = url.split('?').next().and_then(|u| u.rsplit('.').next()).filter(|e| e.len() <= 4) {
+    if let Some(ext) = ext {
         hint.with_extension(ext);
     }
     let probed = symphonia::default::get_probe()
@@ -183,8 +197,7 @@ fn run_stream(url: &str, feeder: &Feeder) -> Result<()> {
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
     let mut rs: Option<(u32, Resampler)> = None;
-    let mut out = Vec::with_capacity(BLOCK * 2);
-    let mut chunk = Chunker { buf: Vec::new() };
+    let mut buf = Vec::with_capacity(BLOCK * 2);
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
@@ -205,13 +218,12 @@ fn run_stream(url: &str, feeder: &Feeder) -> Result<()> {
         if rs.as_ref().map(|(r, _)| *r) != Some(spec.rate) {
             rs = Some((spec.rate, Resampler::new(spec.rate as f32)));
         }
-        out.clear();
-        rs.as_mut().unwrap().1.feed_interleaved(sb.samples(), spec.channels.count(), &mut out);
-        if !chunk.push(&out, feeder) {
+        buf.clear();
+        rs.as_mut().unwrap().1.feed_interleaved(sb.samples(), spec.channels.count(), &mut buf);
+        if !out(&buf) {
             return Ok(()); // the item was stopped
         }
     }
-    chunk.flush(feeder);
     Ok(())
 }
 

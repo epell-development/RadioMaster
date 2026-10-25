@@ -668,6 +668,8 @@ pub struct Config {
     pub language: String,
     /// ffmpeg program for AAC / Opus / Vorbis / FLAC streams (empty = look for it)
     pub ffmpeg_path: String,
+    /// while connected to RadioMaster Server: play the station's mix on this machine's sound cards
+    pub hear_server: bool,
 }
 
 impl Default for Config {
@@ -679,6 +681,7 @@ impl Default for Config {
             plugins_off: vec![],
             language: String::new(),
             ffmpeg_path: String::new(),
+            hear_server: true,
             audio_devices: AudioDevices::default(),
             announce: AnnounceCfg::default(),
             repeat: RepeatCfg::default(),
@@ -714,6 +717,15 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The music level while the mic is on, from the mic mode (Pause is handled by the app).
+    pub fn mic_duck_level(&self) -> f32 {
+        match self.mic_mode {
+            MicMode::Duck => self.mic_duck,
+            MicMode::Keep => 1.0,
+            MicMode::Mute | MicMode::Pause => 0.0,
+        }
+    }
+
     fn path() -> PathBuf {
         data_dir().join("config.json")
     }
