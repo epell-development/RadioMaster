@@ -5,7 +5,7 @@ use crate::dsp::EQ_FREQS;
 use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
-use crate::playout::{PlayState, Playout};
+use crate::playout::{parse_m3u, M3uRow, PlayState, Playout};
 use crate::scheduler::{ActionKind, Event};
 use crate::stream::EncState;
 use crate::workzones::{Tab, WorkzoneSet};
@@ -86,8 +86,9 @@ impl SettingsPage {
 
 enum Dlg {
     AddFiles(Vec<PathBuf>),
-    AddFolder(PathBuf),
-    LoadM3u(PathBuf),
+    /// the audio files in the chosen folder
+    AddFolder(Vec<PathBuf>),
+    LoadM3u(Vec<M3uRow>),
     SaveM3u(PathBuf),
     LibFolder(PathBuf),
     Cart(usize, PathBuf),
@@ -106,12 +107,38 @@ enum Dlg {
     SpeechSound(bool, PathBuf),
     TrackListSource(PathBuf),
     InsertVoice(Vec<PathBuf>),
-    InsertPlaylist(PathBuf),
-    InsertFromPlaylist(PathBuf),
+    InsertPlaylist(Vec<M3uRow>),
+    InsertFromPlaylist(PathBuf, Vec<M3uRow>),
     ExportCsv(PathBuf),
     AzUpload(Vec<PathBuf>),
     RotFiles(usize, Vec<PathBuf>),
     CleanupFolder(PathBuf),
+    /// files (folders already listed) for playlist tab, at row (None: after the selection when
+    /// that tab is viewed, otherwise the end)
+    Files(usize, Option<usize>, Vec<PathBuf>),
+    /// file explorer listing: (panel key, folder, entries)
+    FolderList(String, PathBuf, Vec<(bool, PathBuf)>),
+    /// sound card outputs, inputs, and the default output
+    Devices(Vec<String>, Vec<String>, Option<String>),
+    /// the play history for Reports
+    History(Vec<crate::report::Play>),
+}
+
+/// Dialog results that read the disk do it here, on the dialog's thread, not on the UI thread.
+impl Dlg {
+    fn add_folder(p: PathBuf) -> Dlg {
+        Dlg::AddFolder(crate::library::audio_files_in(&p))
+    }
+    fn load_m3u(p: PathBuf) -> Dlg {
+        Dlg::LoadM3u(parse_m3u(&p))
+    }
+    fn insert_playlist(p: PathBuf) -> Dlg {
+        Dlg::InsertPlaylist(parse_m3u(&p))
+    }
+    fn insert_from_playlist(p: PathBuf) -> Dlg {
+        let rows = parse_m3u(&p);
+        Dlg::InsertFromPlaylist(p, rows)
+    }
 }
 
 enum PlAct {
@@ -160,7 +187,7 @@ impl TrackNotes {
     }
     fn save(&self) {
         if let Ok(j) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(data_dir().join("notes.json"), j);
+            crate::playout::write_in_background(data_dir().join("notes.json"), j);
         }
     }
 }
@@ -183,6 +210,9 @@ pub struct App {
     notify: Arc<Mutex<String>>,
     pub audio: crate::audio::AudioManager,
     dev_outputs: Vec<String>,
+    /// sound cards listed once / being listed in the background
+    dev_listed: bool,
+    dev_listing: bool,
     dev_inputs: Vec<String>,
     ctx: egui::Context,
     sel: BTreeSet<usize>,
@@ -220,6 +250,8 @@ pub struct App {
     web_state: HashMap<String, panes::WebState>,
     fx_dir: HashMap<String, PathBuf>,
     fx_list: HashMap<String, (PathBuf, std::time::Instant, Vec<(bool, PathBuf)>)>,
+    /// explorer folders being listed in the background (panel key → folder)
+    fx_loading: HashMap<String, PathBuf>,
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
@@ -506,6 +538,8 @@ impl App {
             core,
             audio,
             dev_outputs: vec![],
+            dev_listed: false,
+            dev_listing: false,
             dev_inputs: vec![],
             ctx: cc.egui_ctx.clone(),
             sel: BTreeSet::new(),
@@ -545,6 +579,7 @@ impl App {
             web_state: HashMap::new(),
             fx_dir: HashMap::new(),
             fx_list: HashMap::new(),
+            fx_loading: HashMap::new(),
             aux_spawn: HashMap::new(),
             layout_checked: std::time::Instant::now(),
             perf: None,
@@ -628,15 +663,21 @@ impl App {
         });
     }
 
+    /// Add files and folders to playlist `tab` (see `Dlg::Files`) once the folders have been listed
+    /// off the UI thread.
+    pub(super) fn add_files_later(&self, tab: usize, at: Option<usize>, paths: Vec<PathBuf>) {
+        self.dlg(move || Some(Dlg::Files(tab, at, crate::library::expand_paths(paths))));
+    }
+
     fn handle_dialogs(&mut self, core: &mut Playout) {
         while let Ok(d) = self.dlg_rx.try_recv() {
             match d {
                 Dlg::AddFiles(v) => {
-                    let rows: Vec<PlEntry> = v.iter().map(|p| core.entry_for(p)).collect();
+                    let rows: Vec<PlEntry> = v.iter().map(|p| core.entry_quick(p)).collect();
                     self.insert_rows_here(core, rows);
                 }
-                Dlg::AddFolder(p) => {
-                    let rows: Vec<PlEntry> = crate::library::audio_files_in(&p).iter().map(|f| core.entry_for(f)).collect();
+                Dlg::AddFolder(files) => {
+                    let rows: Vec<PlEntry> = files.iter().map(|f| core.entry_quick(f)).collect();
                     if rows.is_empty() {
                         core.say("No audio files in that folder");
                     }
@@ -646,22 +687,22 @@ impl App {
                     let rows: Vec<PlEntry> = v
                         .iter()
                         .map(|p| {
-                            let mut e = core.entry_for(p);
+                            let mut e = core.entry_quick(p);
                             e.kind = crate::items::ItemKind::VoiceTrack;
                             e
                         })
                         .collect();
                     self.insert_rows_here(core, rows);
                 }
-                Dlg::InsertPlaylist(p) => {
-                    let rows = core.read_m3u(&p);
+                Dlg::InsertPlaylist(m3u) => {
+                    let rows = core.m3u_rows(m3u);
                     if rows.is_empty() {
                         core.say("That playlist is empty or could not be read");
                     }
                     self.insert_rows_here(core, rows);
                 }
-                Dlg::InsertFromPlaylist(p) => {
-                    let rows = core.read_m3u(&p);
+                Dlg::InsertFromPlaylist(p, m3u) => {
+                    let rows = core.m3u_rows(m3u);
                     let n = rows.len();
                     self.ins_from_pl = Some((p, rows, vec![true; n]));
                 }
@@ -692,7 +733,42 @@ impl App {
                         r.files.extend(v.iter().map(|p| p.to_string_lossy().to_string()));
                     }
                 }
-                Dlg::LoadM3u(p) => core.with_tab(self.view_pl, |c| c.load_m3u(&p)),
+                Dlg::LoadM3u(m3u) => {
+                    let rows = core.m3u_rows(m3u);
+                    if rows.is_empty() {
+                        core.say("That playlist is empty or could not be read");
+                    } else {
+                        core.with_tab(self.view_pl, |c| c.replace_rows(rows));
+                    }
+                }
+                Dlg::Files(tab, at, files) => {
+                    let rows: Vec<PlEntry> = files.iter().map(|p| core.entry_quick(p)).collect();
+                    if rows.is_empty() {
+                        core.say("No audio files in that folder");
+                    }
+                    self.insert_rows_at(core, tab, at, rows);
+                }
+                Dlg::FolderList(key, dir, list) => {
+                    self.fx_loading.remove(&key);
+                    self.fx_list.insert(key, (dir, std::time::Instant::now(), list));
+                }
+                Dlg::Devices(outs, ins, default) => {
+                    self.dev_outputs = outs;
+                    self.dev_inputs = ins;
+                    self.dev_listing = false;
+                    let sel = &mut core.cfg.audio_devices.outputs;
+                    for n in &self.dev_outputs {
+                        if !sel.iter().any(|o| &o.name == n) {
+                            sel.push(crate::config::OutputSel { name: n.clone(), enabled: false, gain: 1.0 });
+                        }
+                    }
+                    if !sel.iter().any(|o| o.enabled) {
+                        if let Some(o) = default.and_then(|d| sel.iter_mut().find(|o| o.name == d)) {
+                            o.enabled = true;
+                        }
+                    }
+                }
+                Dlg::History(all) => self.rep.set_history(all),
                 Dlg::SaveM3u(p) => core.with_tab(self.view_pl, |c| c.save_m3u(&p)),
                 Dlg::RenderWav(p) => core.with_tab(self.view_pl, |c| c.render_playlist(p)),
                 Dlg::ExportCsv(p) => match core.with_tab(self.view_pl, |c| c.export_csv(&p)) {
@@ -798,7 +874,7 @@ impl App {
                         ui.close_menu();
                     }
                     if ui.button(tr("Open playlist…")).clicked() {
-                        self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::LoadM3u));
+                        self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
                         ui.close_menu();
                     }
                     if ui.button(tr("Save playlist as…")).clicked() {
@@ -2326,31 +2402,26 @@ impl App {
         }
     }
 
-    fn refresh_devices(&mut self, core: &mut Playout) {
-        self.dev_outputs = crate::audio::list_outputs();
-        self.dev_inputs = crate::audio::list_inputs();
-        let outs = &mut core.cfg.audio_devices.outputs;
-        for n in &self.dev_outputs {
-            if !outs.iter().any(|o| &o.name == n) {
-                outs.push(crate::config::OutputSel { name: n.clone(), enabled: false, gain: 1.0 });
-            }
+    /// List the sound cards in the background (asking the drivers can take a while).
+    fn refresh_devices(&mut self) {
+        if self.dev_listing {
+            return;
         }
-        if !outs.iter().any(|o| o.enabled) {
-            if let Some(d) = crate::audio::default_output_name() {
-                if let Some(o) = outs.iter_mut().find(|o| o.name == d) {
-                    o.enabled = true;
-                }
-            }
-        }
+        self.dev_listing = true;
+        self.dev_listed = true;
+        self.dlg(|| Some(Dlg::Devices(crate::audio::list_outputs(), crate::audio::list_inputs(), crate::audio::default_output_name())));
     }
 
     fn tab_devices(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        if self.dev_outputs.is_empty() && self.dev_inputs.is_empty() {
-            self.refresh_devices(core);
+        if !self.dev_listed {
+            self.refresh_devices();
         }
         ui.horizontal(|ui| {
             if ui.button(tr("⟳ Refresh devices")).clicked() {
-                self.refresh_devices(core);
+                self.refresh_devices();
+            }
+            if self.dev_listing {
+                ui.spinner();
             }
             if ui.button(tr("Apply outputs")).clicked() {
                 self.audio.apply(&core.engine, &core.cfg.audio_devices);
@@ -2365,7 +2436,7 @@ impl App {
         let n = core.cfg.audio_devices.outputs.len();
         for i in 0..n {
             let name = core.cfg.audio_devices.outputs[i].name.clone();
-            let present = self.dev_outputs.contains(&name);
+            let present = self.dev_listing || self.dev_outputs.contains(&name);
             let role = self.audio.role_of(&name);
             ui.horizontal(|ui| {
                 let o = &mut core.cfg.audio_devices.outputs[i];
@@ -3330,12 +3401,7 @@ impl eframe::App for App {
         self.handle_dialogs(&mut core);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && self.perm.edit_playlists {
-            let rows: Vec<PlEntry> = dropped
-                .iter()
-                .flat_map(|p| if p.is_dir() { crate::library::audio_files_in(p) } else { vec![p.clone()] })
-                .map(|p| core.entry_for(&p))
-                .collect();
-            self.insert_rows_here(&mut core, rows);
+            self.add_files_later(self.view_pl, None, dropped);
         }
         if !self.show_settings {
             self.shortcuts(ctx, &mut core);

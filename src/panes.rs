@@ -526,35 +526,43 @@ impl App {
                 }
             }
             if ui.add_enabled(self.perm.edit_playlists, egui::Button::new(tr("Add folder to playlist")).small()).clicked() {
-                let p = dir.clone();
-                core.with_tab(self.view_pl, |c| c.add_paths(vec![p]));
+                self.add_files_later(self.view_pl, Some(usize::MAX), vec![dir.clone()]);
             }
         });
         ui.label(RichText::new(dir.display().to_string()).small().color(GRAY));
         ui.separator();
-        // the folder is listed when it changes, on Refresh, or every few seconds — not every frame
+        // the folder is listed when it changes, on Refresh, or every few seconds — not every frame, and
+        // off the UI thread (network and cloud drives can take seconds to answer)
         let stale = self.fx_list.get(&key).is_none_or(|(d, t, _)| *d != dir || t.elapsed() > Duration::from_secs(5));
-        if stale {
-            let mut list: Vec<(bool, PathBuf)> = std::fs::read_dir(&dir)
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .map(|e| (e.file_type().map(|t| t.is_dir()).unwrap_or(false), e.path()))
-                        .filter(|(d, p)| *d || crate::library::is_audio(p))
-                        .collect()
-                })
-                .unwrap_or_default();
-            list.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.file_name().cmp(&b.1.file_name())));
-            self.fx_list.insert(key.clone(), (dir.clone(), std::time::Instant::now(), list));
+        if stale && self.fx_loading.get(&key) != Some(&dir) {
+            self.fx_loading.insert(key.clone(), dir.clone());
+            let (k, d) = (key.clone(), dir.clone());
+            self.dlg(move || {
+                let mut list: Vec<(bool, PathBuf)> = std::fs::read_dir(&d)
+                    .map(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .map(|e| (e.file_type().map(|t| t.is_dir()).unwrap_or(false), e.path()))
+                            .filter(|(d, p)| *d || crate::library::is_audio(p))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                list.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.file_name().cmp(&b.1.file_name())));
+                Some(super::Dlg::FolderList(k, d, list))
+            });
         }
-        let entries = self.fx_list.get(&key).map(|(_, _, l)| l.clone()).unwrap_or_default();
+        let listing = self.fx_list.get(&key).is_none_or(|(d, _, _)| *d != dir);
+        if listing {
+            ui.spinner();
+        }
+        let entries = self.fx_list.get(&key).filter(|(d, _, _)| *d == dir).map(|(_, _, l)| l.clone()).unwrap_or_default();
         let mut add: Vec<PathBuf> = vec![];
         for (is_dir, p) in entries.iter().take(2000) {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let r =
                 ui.selectable_label(false, if *is_dir { format!("📁 {name}") } else { format!("🎵 {name}") }).interact(egui::Sense::drag());
             if r.drag_started() && self.perm.edit_playlists {
-                let files = if *is_dir { crate::library::audio_files_in(p) } else { vec![p.clone()] };
-                r.dnd_set_drag_payload(super::plview::DragFiles(files));
+                // a folder is listed when it is dropped, off the UI thread
+                r.dnd_set_drag_payload(super::plview::DragFiles(vec![p.clone()]));
             }
             if r.double_clicked() {
                 if *is_dir {
@@ -574,17 +582,17 @@ impl App {
                 }
                 if !*is_dir && ui.button(tr("Insert after selected row")).clicked() {
                     let at = self.insert_pos(core);
-                    let rows: Vec<PlEntry> = vec![core.entry_for(p)];
+                    let rows: Vec<PlEntry> = vec![core.entry_quick(p)];
                     core.with_tab(self.view_pl, |c| c.insert_rows(at, rows));
                     ui.close_menu();
                 }
             });
         }
-        if entries.is_empty() {
+        if entries.is_empty() && !listing {
             ui.label(RichText::new(tr("No folders or audio files here.")).color(GRAY));
         }
         if !add.is_empty() && self.perm.edit_playlists {
-            core.with_tab(self.view_pl, |c| c.add_paths(add));
+            self.add_files_later(self.view_pl, Some(usize::MAX), add);
         }
         if let Some(p) = go {
             self.fx_dir.insert(key, p);
