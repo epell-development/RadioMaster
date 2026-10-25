@@ -173,10 +173,12 @@ fn connection(tcp: TcpStream, backend: SocketAddr, config: Arc<rustls::ServerCon
         back.write_all(&early)?;
     }
     let conn = Arc::new(Mutex::new(conn));
+    // when the server last sent something: a quiet client is fine while its answer still flows
+    let sent = Arc::new(Mutex::new(std::time::Instant::now()));
 
     // the server's answers → the client
     let writer = {
-        let (conn, mut back, mut out, tcp) = (conn.clone(), back.try_clone()?, tcp.try_clone()?, tcp.try_clone()?);
+        let (conn, mut back, mut out, tcp, sent) = (conn.clone(), back.try_clone()?, tcp.try_clone()?, tcp.try_clone()?, sent.clone());
         thread::spawn(move || {
             let mut buf = vec![0u8; 16 * 1024];
             loop {
@@ -184,6 +186,7 @@ fn connection(tcp: TcpStream, backend: SocketAddr, config: Arc<rustls::ServerCon
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
+                *sent.lock() = std::time::Instant::now();
                 let mut c = conn.lock();
                 if c.writer().write_all(&buf[..n]).is_err() || flush(&mut c, &mut out).is_err() {
                     break;
@@ -203,8 +206,10 @@ fn connection(tcp: TcpStream, backend: SocketAddr, config: Arc<rustls::ServerCon
     let mut plain = Vec::with_capacity(16 * 1024);
     'outer: loop {
         let n = match raw.read(&mut buf) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(n) => n,
+            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) && sent.lock().elapsed() < IDLE => continue,
+            Err(_) => break,
         };
         let mut rest = &buf[..n];
         {

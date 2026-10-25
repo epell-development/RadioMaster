@@ -117,10 +117,17 @@ encoders, the scheduler, adverts, the generator and settings. Your own playback 
 connected (one station on air at a time) and come back on disconnect. Several apps can be connected at once;
 if two people change the same playlist at the same moment, the server's version wins and the app says so.
 
+**Hearing the station and going live:** while connected, the app plays the server's on-air mix on your own
+outputs (Settings → Audio, including Studio monitor outputs), about half a second behind the server. Untick
+**Hear the station here** in the server connection window (click the green button) when you're in the same room
+as the server's speakers. The **Mic** button sends your microphone to the server, which puts it on air with the
+station's mic settings (lower, mute or pause the music); Studio monitor outputs on both machines go quiet while
+it is on. Wear headphones rather than speakers, and expect to hear your own voice come back slightly late.
+
 Things that stay on your computer: the interface language, sound cards, the remote-control API, plugins,
 update checks and ffmpeg. The music files, folders and library are the server's, so a library folder is typed
-as the server sees it (e.g. `/srv/music`). Previews, waveforms in the fade editor and the microphone need the
-files on your own computer and don't work while connected.
+as the server sees it (e.g. `/srv/music`). Previews and waveforms in the fade editor need the files on your own
+computer and don't work while connected.
 
 ## Security
 The username and password are checked with Argon2 (only the hash is stored, in `server.json`), sign-ins
@@ -129,4 +136,5 @@ expire after a day without use, and repeated wrong passwords are slowed down. Wh
 unprivileged account (the systemd unit does). On a network you don't trust, or over the internet, turn on
 [HTTPS](#https) (or put the server behind an HTTPS reverse proxy such as Caddy or nginx, or a VPN). Without it
 the password and everything else go over the network unencrypted. The web portal uses the same sign-in, and
-its pages refuse to be shown inside other sites.
+its pages refuse to be shown inside other sites. With nginx, switch response buffering off
+(`proxy_buffering off;`) so the station's sound reaches the app straight away.

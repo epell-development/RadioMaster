@@ -10,6 +10,9 @@
 //!   POST /api/v1/config  {base, cfg}       → {rev}, or 409
 //!   GET  /api/v1/server                    → sync::ServerInfo (name, sound cards, …)
 //!   POST /api/v1/server  sync::ServerUpdate → sync::ServerInfo
+//!   GET  /api/v1/listen                    → the on-air mix as an endless MP3 stream (what the app hears)
+//!   POST /api/v1/mic     MP3 bytes         the app's mic, a slice at a time; heard on air until mic/off
+//!   POST /api/v1/mic/off
 //!
 //! Every call but ping and login needs `Authorization: Bearer <token>`.
 //!
@@ -19,11 +22,12 @@
 use crate::config::data_dir;
 use crate::playout::sync::{self, digest, Cmd, ServerInfo, ServerUpdate, Snapshot, TabsWire};
 use crate::playout::Playout;
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io::Read,
+    io::{Read, Write},
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -148,6 +152,8 @@ struct Api {
     /// HTTPS with a certificate browsers trust: the portal tells them to use only HTTPS. (Not with a
     /// self-signed one, where HSTS would stop browsers from letting the user past their warning.)
     hsts: bool,
+    /// token → the mic audio of that app, while its mic is on
+    mics: Mutex<HashMap<String, Sender<Vec<u8>>>>,
 }
 
 /// Where the server is listening.
@@ -183,6 +189,13 @@ fn listen(bind: &str, port: u16, tls: Option<&crate::tls::ServerTls>) -> Result<
 /// Sign-ins expire after this long without a call.
 const TOKEN_IDLE: Duration = Duration::from_secs(24 * 3600);
 
+/// MP3 bitrate of the mix sent to the apps.
+const LISTEN_KBPS: u32 = 192;
+/// An app's mic goes off when nothing arrives for this long (the app quit or lost the network).
+const MIC_IDLE: Duration = Duration::from_secs(3);
+/// Mic audio waits for this many decoded MP3 frames (about 26 ms each) before it plays.
+const MIC_PREBUFFER: usize = 6;
+
 /// Start listening. Returns the addresses actually bound (port 0 picks a free one).
 pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Listening, String> {
     let tls = if cfg.https { Some(crate::tls::server_tls(&cfg.cert_file, &cfg.key_file, &data_dir())?) } else { None };
@@ -210,6 +223,7 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
         running,
         fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()).unwrap_or_default(),
         hsts: tls.as_ref().is_some_and(|t| !t.self_signed),
+        mics: Mutex::new(HashMap::new()),
     });
     {
         let api = api.clone();
@@ -277,7 +291,7 @@ struct CfgPush {
 
 impl Api {
     /// `portal`: the request came to the web portal's port, which also serves the page itself.
-    fn handle(&self, mut req: tiny_http::Request, portal: bool) {
+    fn handle(self: &Arc<Self>, mut req: tiny_http::Request, portal: bool) {
         let url = req.url().to_string();
         let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
         if portal && *req.method() == tiny_http::Method::Get {
@@ -299,11 +313,18 @@ impl Api {
         };
         let gzip_ok = header("Accept-Encoding").is_some_and(|v| v.contains("gzip"));
         let token = header("Authorization").and_then(|v| v.strip_prefix("Bearer ").map(|t| t.trim().to_string()));
-        let mut body = String::new();
-        if req.as_reader().take(256 * 1024 * 1024).read_to_string(&mut body).is_err() {
+        let post = *req.method() == tiny_http::Method::Post;
+        if path == "/api/v1/listen" && !post {
+            match token.filter(|t| self.check(t)) {
+                Some(t) => self.listen(req, t),
+                None => respond(req, error(401, "sign in first"), false),
+            }
+            return;
+        }
+        let mut body = Vec::new();
+        if req.as_reader().take(256 * 1024 * 1024).read_to_end(&mut body).is_err() {
             return respond(req, error(400, "unreadable request"), false);
         }
-        let post = *req.method() == tiny_http::Method::Post;
         let reply = match (path, post) {
             ("/api/v1/ping", _) => json(
                 200,
@@ -318,8 +339,8 @@ impl Api {
         respond(req, reply, gzip_ok);
     }
 
-    fn login(&self, body: &str) -> Reply {
-        let Ok(l) = serde_json::from_str::<Login>(body) else { return error(400, "bad request") };
+    fn login(&self, body: &[u8]) -> Reply {
+        let Ok(l) = serde_json::from_slice::<Login>(body) else { return error(400, "bad request") };
         // slow down password guessing: one second per recent failure, up to ten
         let wait = {
             let f = self.failures.lock();
@@ -369,7 +390,7 @@ impl Api {
         }
     }
 
-    fn call(&self, path: &str, post: bool, body: &str, param: &dyn Fn(&str) -> u64, token: &str) -> Reply {
+    fn call(self: &Arc<Self>, path: &str, post: bool, body: &[u8], param: &dyn Fn(&str) -> u64, token: &str) -> Reply {
         match (path, post) {
             ("/api/v1/logout", true) => {
                 if let Some((user, _)) = self.tokens.lock().remove(token) {
@@ -403,7 +424,7 @@ impl Api {
                 json(200, lib)
             }
             ("/api/v1/cmd", true) => {
-                let Ok(cmds) = serde_json::from_str::<Vec<Cmd>>(body) else { return error(400, "bad command") };
+                let Ok(cmds) = serde_json::from_slice::<Vec<Cmd>>(body) else { return error(400, "bad command") };
                 let mut c = self.core.lock();
                 for cmd in cmds {
                     c.run_cmd(cmd);
@@ -411,7 +432,7 @@ impl Api {
                 json(200, serde_json::json!({ "ok": true }))
             }
             ("/api/v1/tabs", true) => {
-                let Ok(p) = serde_json::from_str::<TabsPush>(body) else { return error(400, "bad playlists") };
+                let Ok(p) = serde_json::from_slice::<TabsPush>(body) else { return error(400, "bad playlists") };
                 let mut r = self.revs.lock();
                 if p.base != r.rev {
                     return error(409, "the playlists changed on the server");
@@ -427,7 +448,7 @@ impl Api {
                 json(200, serde_json::json!({ "ok": true, "rev": r.rev }))
             }
             ("/api/v1/config", true) => {
-                let Ok(p) = serde_json::from_str::<CfgPush>(body) else { return error(400, "bad settings") };
+                let Ok(p) = serde_json::from_slice::<CfgPush>(body) else { return error(400, "bad settings") };
                 let mut r = self.revs.lock();
                 if p.base != r.cfg_rev {
                     return error(409, "the settings changed on the server");
@@ -442,12 +463,122 @@ impl Api {
                 r.refresh(&self.core);
                 json(200, serde_json::json!({ "ok": true, "rev": r.cfg_rev }))
             }
+            ("/api/v1/mic", true) => self.mic(token, body.to_vec()),
+            ("/api/v1/mic/off", true) => {
+                // the mic's thread ends once its audio runs out
+                self.mics.lock().remove(token);
+                json(200, serde_json::json!({ "ok": true }))
+            }
             ("/api/v1/server", false) => json(200, self.info()),
             ("/api/v1/server", true) => {
-                let Ok(u) = serde_json::from_str::<ServerUpdate>(body) else { return error(400, "bad server settings") };
+                let Ok(u) = serde_json::from_slice::<ServerUpdate>(body) else { return error(400, "bad server settings") };
                 self.update(u)
             }
             _ => error(404, "unknown call"),
+        }
+    }
+
+    fn user_of(&self, token: &str) -> String {
+        self.tokens.lock().get(token).map(|(u, _)| u.clone()).unwrap_or_default()
+    }
+
+    /// Send the on-air mix to an app for as long as it listens (on a thread of its own, so the
+    /// API's workers stay free).
+    fn listen(self: &Arc<Self>, req: tiny_http::Request, token: String) {
+        let api = self.clone();
+        thread::spawn(move || {
+            let mut enc = match crate::stream::mp3_encoder(LISTEN_KBPS) {
+                Ok(e) => e,
+                Err(e) => return respond(req, error(500, &format!("no MP3 encoder: {e}")), false),
+            };
+            let engine = api.core.lock().engine.clone();
+            let mut w = req.into_writer();
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nCache-Control: no-cache, no-store\r\nConnection: close\r\n\r\n";
+            if w.write_all(head.as_bytes()).and_then(|_| w.flush()).is_err() {
+                return;
+            }
+            let (tx, rx) = crossbeam_channel::bounded::<Arc<Vec<i16>>>(64);
+            engine.add_tap(tx);
+            let mut out = Vec::new();
+            let mut checked = Instant::now();
+            loop {
+                match rx.recv_timeout(Duration::from_secs(1)) {
+                    Ok(pcm) => {
+                        // keep the delay short: skip what piled up while the network was slow
+                        while rx.len() > 12 {
+                            let _ = rx.try_recv();
+                        }
+                        out.clear();
+                        if crate::stream::mp3_encode(&mut enc, &pcm, &mut out).is_err() {
+                            break;
+                        }
+                        if !out.is_empty() && w.write_all(&out).and_then(|_| w.flush()).is_err() {
+                            break; // the app went away
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+                // signed out (or the sign-in expired): stop sending
+                if checked.elapsed() > Duration::from_secs(5) {
+                    checked = Instant::now();
+                    if !api.tokens.lock().contains_key(&token) {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// A slice of an app's mic audio (MP3). The first one turns the mic on.
+    fn mic(self: &Arc<Self>, token: &str, data: Vec<u8>) -> Reply {
+        let mut mics = self.mics.lock();
+        let data = match mics.get(token) {
+            Some(tx) => match tx.send(data) {
+                Ok(()) => return json(200, serde_json::json!({ "ok": true })),
+                // that mic went off meanwhile (nothing came for a while): start again
+                Err(e) => e.0,
+            },
+            None => data,
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let _ = tx.send(data);
+        mics.insert(token.to_string(), tx);
+        drop(mics);
+        let (api, user) = (self.clone(), self.user_of(token));
+        thread::spawn(move || api.run_mic(rx, user));
+        json(200, serde_json::json!({ "ok": true }))
+    }
+
+    /// Decode one app's mic and mix it in, with the station's mic settings, until it goes off.
+    fn run_mic(&self, rx: Receiver<Vec<u8>>, user: String) {
+        let engine = self.core.lock().engine.clone();
+        let (feed, src) = crate::engine::net_feed(MIC_PREBUFFER);
+        let id = engine.add_net_mic(src);
+        let level = || {
+            let c = self.core.lock();
+            engine.set_mic(true, c.cfg.mic_gain, c.cfg.mic_duck_level());
+        };
+        level();
+        self.core.lock().say(format!("Server: {user}'s mic is on"));
+        let mut last = Instant::now();
+        let reader = ChanReader { rx, cur: Vec::new(), pos: 0 };
+        let r = crate::live::decode_stream(Box::new(reader), "audio/mpeg", Some("mp3"), &mut |s| {
+            let _ = feed.try_send(s.to_vec());
+            // follow changes to the mic volume and ducking
+            if last.elapsed() > Duration::from_millis(500) {
+                last = Instant::now();
+                level();
+            }
+            true
+        });
+        if engine.remove_net_mic(id) == 0 {
+            engine.set_mic(false, 1.0, 1.0);
+        }
+        let c = self.core.lock();
+        match r {
+            Ok(()) => c.say(format!("Server: {user}'s mic is off")),
+            Err(e) => c.say(format!("Server: {user}'s mic stopped: {e}")),
         }
     }
 
@@ -536,6 +667,31 @@ fn respond_file(req: tiny_http::Request, text: &'static str, content_type: &str,
     let _ = req.respond(r);
 }
 
+/// Reads the mic slices as one stream; ends when the mic goes off or nothing arrives for `MIC_IDLE`.
+struct ChanReader {
+    rx: Receiver<Vec<u8>>,
+    cur: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChanReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.pos >= self.cur.len() {
+            match self.rx.recv_timeout(MIC_IDLE) {
+                Ok(b) => {
+                    self.cur = b;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = buf.len().min(self.cur.len() - self.pos);
+        buf[..n].copy_from_slice(&self.cur[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
 fn respond(req: tiny_http::Request, reply: Reply, gzip_ok: bool) {
     let Reply(code, text) = reply;
     let ct = header("Content-Type", "application/json");
@@ -559,6 +715,7 @@ mod tests {
     use crate::engine::Engine;
     use crate::items::PlEntry;
     use crate::library::Track;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
         let t = Instant::now();
@@ -570,6 +727,105 @@ mod tests {
 
     fn row(name: &str) -> PlEntry {
         PlEntry::file(Track { path: format!("/srv/music/{name}.mp3").into(), title: name.into(), ..Default::default() })
+    }
+
+    /// How long until what reaches `rx` gets loud (None: not within `secs`).
+    fn sound_after(rx: &crossbeam_channel::Receiver<Arc<Vec<i16>>>, secs: f32) -> Option<Duration> {
+        let t = Instant::now();
+        while t.elapsed().as_secs_f32() < secs {
+            if let Ok(b) = rx.recv_timeout(Duration::from_millis(100)) {
+                if b.iter().any(|x| x.saturating_abs() > 2000) {
+                    return Some(t.elapsed());
+                }
+            }
+        }
+        None
+    }
+
+    fn drain(rx: &crossbeam_channel::Receiver<Arc<Vec<i16>>>) {
+        thread::sleep(Duration::from_millis(300));
+        while rx.try_recv().is_ok() {}
+    }
+
+    fn sine(hz: f32) -> crate::engine::Pcm {
+        Box::new((0..).flat_map(move |k: u64| {
+            let v = (k as f32 * hz * std::f32::consts::TAU / crate::engine::SR as f32).sin() * 0.5;
+            [v, v]
+        }))
+    }
+
+    /// The broadcaster hears the station in the app, and the app's mic goes on air on the server.
+    #[test]
+    fn app_hears_the_station_and_its_mic_goes_on_air() {
+        crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
+        let station_engine = Engine::new_detached();
+        let _clock = station_engine.start_null_driver();
+        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let cfg = ServerCfg {
+            user: "dj".into(),
+            password_hash: crate::auth::hash("a long enough password").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        };
+        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let addr = spawn(station.clone(), cfg, host).unwrap().addr;
+        let s = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "dj", "a long enough password", "").unwrap();
+        let token = Arc::new(Mutex::new(s.token.clone()));
+
+        // the app's own engine (the one its sound cards play) plays what the station plays
+        let here = Engine::new_detached();
+        let _cards = here.start_null_driver();
+        let (tx, heard) = crossbeam_channel::bounded(512);
+        here.add_tap(tx);
+        let listener = crate::link::Listener::start(here.clone(), s.base.clone(), s.pin.clone(), token.clone(), Box::new(|_| {}));
+        thread::sleep(Duration::from_secs(2));
+        drain(&heard);
+        station_engine.set_volume(1.0);
+        station_engine.play_source(sine(440.0), None, 0.0, crate::engine::CueSpec::default(), None, true);
+        let delay = sound_after(&heard, 10.0).expect("the app should hear the station");
+        assert!(delay < Duration::from_secs(2), "heard {delay:?} late");
+        drop(listener);
+        drain(&heard);
+        assert!(sound_after(&heard, 1.5).is_none(), "silent again once it stops listening");
+
+        // the music stops and the app's mic (sent as MP3 slices) is heard on the server
+        station_engine.stop(0.0);
+        let (tx, on_air) = crossbeam_channel::bounded(512);
+        station_engine.add_tap(tx);
+        drain(&on_air);
+        let mut enc = crate::stream::mp3_encoder(128).unwrap();
+        let mut mic = sine(220.0);
+        let agent = ureq::agent();
+        let post = |path: &str, body: &[u8]| {
+            agent.post(&format!("{}/api/v1/{path}", s.base)).set("Authorization", &format!("Bearer {}", s.token)).send_bytes(body)
+        };
+        let sender = {
+            let stop = Arc::new(AtomicBool::new(false));
+            let st = stop.clone();
+            let base = s.base.clone();
+            let t = s.token.clone();
+            let h = thread::spawn(move || {
+                let agent = ureq::agent();
+                while !st.load(Ordering::Relaxed) {
+                    let pcm: Vec<i16> = (&mut mic).take(4410 * 2).map(|x| (x * 32767.0) as i16).collect();
+                    let mut out = Vec::new();
+                    crate::stream::mp3_encode(&mut enc, &pcm, &mut out).unwrap();
+                    if !out.is_empty() {
+                        agent.post(&format!("{base}/api/v1/mic")).set("Authorization", &format!("Bearer {t}")).send_bytes(&out).unwrap();
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            });
+            (stop, h)
+        };
+        let delay = sound_after(&on_air, 10.0).expect("the mic should be on air");
+        sender.0.store(true, Ordering::Relaxed);
+        sender.1.join().unwrap();
+        post("mic/off", b"{}").unwrap();
+        wait_for("the mic to go off", || station.lock().notify.lock().contains("mic is off"));
+        drain(&on_air);
+        assert!(sound_after(&on_air, 1.5).is_none(), "silent once the mic is off");
     }
 
     /// A server and a desktop mirror talking over HTTP: sign-in, both directions of playlist sync,
@@ -708,5 +964,41 @@ mod tests {
         // the certificate is kept: the same one after a restart
         let again = spawn(station, cfg, host()).unwrap();
         assert_eq!(again.fingerprint.unwrap(), fp);
+    }
+
+    /// The station's sound reaches the app over HTTPS too, through the pinned certificate, and keeps
+    /// flowing while the app sends nothing.
+    #[test]
+    fn listen_over_https() {
+        let dir = std::env::temp_dir().join(format!("rm-server-tls-listen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::config::set_data_dir(dir);
+        let station_engine = Engine::new_detached();
+        let _clock = station_engine.start_null_driver();
+        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let cfg = ServerCfg {
+            user: "dj".into(),
+            password_hash: crate::auth::hash("a long enough password").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            https: true,
+            ..Default::default()
+        };
+        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let l = spawn(station, cfg, host).unwrap();
+        let s =
+            crate::link::login(&format!("127.0.0.1:{}", l.addr.port()), "dj", "a long enough password", &l.fingerprint.unwrap()).unwrap();
+        let here = Engine::new_detached();
+        let _cards = here.start_null_driver();
+        let (tx, heard) = crossbeam_channel::bounded(512);
+        here.add_tap(tx);
+        let listener = crate::link::Listener::start(here, s.base.clone(), s.pin.clone(), Arc::new(Mutex::new(s.token)), Box::new(|_| {}));
+        thread::sleep(Duration::from_secs(2));
+        drain(&heard);
+        station_engine.set_volume(1.0);
+        station_engine.play_source(sine(440.0), None, 0.0, crate::engine::CueSpec::default(), None, true);
+        assert!(sound_after(&heard, 10.0).is_some(), "the app should hear the station over HTTPS");
+        drop(listener);
     }
 }

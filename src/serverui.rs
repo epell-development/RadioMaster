@@ -2,7 +2,7 @@
 //! The local session (playlists, settings, encoders) is put aside while connected, optionally saved
 //! as a station profile first, and comes back on disconnect.
 use super::*;
-use crate::link::{Link, LoginError, Session};
+use crate::link::{Link, Listener, LoginError, Session};
 use crate::playout::sync;
 
 /// The last server used (server_link.json; the password is never kept).
@@ -37,6 +37,8 @@ struct Connected {
     profile: Option<String>,
     /// local encoders that were on air, started again on disconnect
     encoders: Vec<usize>,
+    /// the station's sound, playing here (None when "Hear the station here" is off)
+    listen: Option<Listener>,
 }
 
 pub(super) struct ServerUi {
@@ -188,6 +190,30 @@ impl App {
         self.srv.conn.as_ref().map(|c| c.local.engine.clone()).unwrap_or_else(|| core.engine.clone())
     }
 
+    /// While connected: the mic, sent to the server (None when not connected).
+    pub(super) fn server_mic(&self, device: &str) -> Option<anyhow::Result<rodio::cpal::Stream>> {
+        let c = self.srv.conn.as_ref()?;
+        Some(crate::link::mic_uplink(c.link.session.base.clone(), c.link.session.pin.clone(), c.link.token(), device))
+    }
+
+    /// Start or stop playing the station here when "Hear the station here" changes.
+    fn server_audio(&mut self, core: &Playout) {
+        let Some(c) = &mut self.srv.conn else { return };
+        if core.cfg.hear_server == c.listen.is_some() {
+            return;
+        }
+        c.listen = core.cfg.hear_server.then(|| Self::listener(c, core));
+        // (kept with this machine's own settings)
+        c.local.cfg.hear_server = core.cfg.hear_server;
+        c.local.save_all();
+    }
+
+    fn listener(c: &Connected, core: &Playout) -> Listener {
+        let notify = core.notify.clone();
+        let say = Box::new(move |m: String| *notify.lock() = m);
+        Listener::start(c.local.engine.clone(), c.link.session.base.clone(), c.link.session.pin.clone(), c.link.token(), say)
+    }
+
     /// The connection indicator left of the RadioMaster logo.
     pub(super) fn server_chip(&mut self, ui: &mut egui::Ui) {
         let Some(c) = &self.srv.conn else { return };
@@ -207,6 +233,7 @@ impl App {
     }
 
     pub(super) fn server_windows(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        self.server_audio(core);
         self.connect_window(ctx);
         self.save_session_window(ctx, core);
         self.server_status_window(ctx, core);
@@ -425,13 +452,22 @@ impl App {
         let r = Remembered { address: self.srv.address.trim().to_string(), user: s.user.clone(), pins: self.srv.pins.clone() };
         let _ = std::fs::write(Remembered::path(), serde_json::to_string_pretty(&r).unwrap_or_default());
         core.say(format!("Connected to {} ({}) as {}", s.name, s.base, s.user));
-        self.srv.conn = Some(Connected { link, local, profile, encoders });
+        let mut c = Connected { link, local, profile, encoders, listen: None };
+        if core.cfg.hear_server {
+            c.listen = Some(Self::listener(&c, core));
+        }
+        self.srv.conn = Some(c);
         self.reset_playlist_view();
     }
 
     /// Back to the local session.
     pub(super) fn disconnect(&mut self, core: &mut Playout) {
         let Some(mut c) = self.srv.conn.take() else { return };
+        // the mic and the station's sound were the server's
+        self.mic_stream = None;
+        self.mic_on = false;
+        self.mic_paused = false;
+        c.listen = None;
         c.link.stop();
         std::mem::swap(core, &mut c.local);
         let mirror = c.local;
@@ -517,6 +553,10 @@ impl App {
                         ui.colored_label(AMBER, format!("Reconnecting… {}", st.error));
                     }
                     ui.end_row();
+                    ui.label(tr("Station audio"));
+                    ui.checkbox(&mut core.cfg.hear_server, tr("Hear the station here"))
+                        .on_hover_text(tr("Play the server's on-air mix on this computer's outputs (Settings → Audio). Turn it off when the server's speakers are in the same room."));
+                    ui.end_row();
                     ui.label(tr("Local session"));
                     ui.label(match &profile {
                         Some(p) => format!("saved as profile \"{p}\", restored on disconnect"),
@@ -526,7 +566,7 @@ impl App {
                 });
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(tr("Files, folders and the library are the server's. Previews, waveforms and the microphone need the files on this computer, so they don't work while connected."))
+                    RichText::new(tr("Files, folders and the library are the server's. Previews and waveforms need the files on this computer, so they don't work while connected. The Mic button sends this computer's microphone to the server, which puts it on air."))
                         .small()
                         .color(GRAY),
                 );

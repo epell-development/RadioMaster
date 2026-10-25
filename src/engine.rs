@@ -189,6 +189,11 @@ struct Shared {
     duck_now: f32,
     mic_buf: VecDeque<f32>,
     monitors: Vec<Sender<Arc<Vec<f32>>>>,
+    /// mics of apps connected to RadioMaster Server (summed with the local mic while the mic is on)
+    net_mics: Vec<(u64, NetSource)>,
+    next_mic: u64,
+    /// a connected app: the server's on-air mix, played after the volume and processing
+    feed: Option<NetSource>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -238,18 +243,27 @@ impl Bus {
         for c in s.carts.iter_mut() {
             c.mix(&mut self.buf, None);
         }
+        let s = &mut *s;
         if s.mic_on {
             let g = s.mic_gain;
-            for x in self.buf.iter_mut() {
-                *x += s.mic_buf.pop_front().unwrap_or(0.0) * g;
+            for f in self.buf.chunks_exact_mut(2) {
+                let (mut l, mut r) = (s.mic_buf.pop_front().unwrap_or(0.0), s.mic_buf.pop_front().unwrap_or(0.0));
+                for (_, m) in s.net_mics.iter_mut() {
+                    let (a, b) = m.frame();
+                    l += a;
+                    r += b;
+                }
+                f[0] += l * g;
+                f[1] += r * g;
             }
         }
         s.dsp.process(&mut self.buf);
         let vol = s.master;
         let (mut pl, mut pr) = (0f32, 0f32);
         for f in self.buf.chunks_exact_mut(2) {
-            f[0] = (f[0] * vol).clamp(-1.0, 1.0);
-            f[1] = (f[1] * vol).clamp(-1.0, 1.0);
+            let (a, b) = s.feed.as_mut().map_or((0.0, 0.0), NetSource::frame);
+            f[0] = (f[0] * vol + a).clamp(-1.0, 1.0);
+            f[1] = (f[1] * vol + b).clamp(-1.0, 1.0);
             pl = pl.max(f[0].abs());
             pr = pr.max(f[1].abs());
         }
@@ -395,6 +409,9 @@ impl Engine {
             duck_now: 1.0,
             mic_buf: VecDeque::new(),
             monitors: vec![],
+            net_mics: vec![],
+            next_mic: 0,
+            feed: None,
         }));
         Engine { shared, mic_live: Arc::new(AtomicBool::new(false)) }
     }
@@ -612,6 +629,30 @@ impl Engine {
         Ok(())
     }
 
+    /// Play audio arriving from RadioMaster Server (the connected app hears the station this way).
+    /// None stops it.
+    pub fn set_feed(&self, src: Option<NetSource>) {
+        self.shared.lock().feed = src;
+    }
+
+    /// A connected app's mic, heard on air while the mic is on (see `set_mic`). Returns its id.
+    #[allow(dead_code)] // RadioMaster-Server
+    pub fn add_net_mic(&self, src: NetSource) -> u64 {
+        let mut s = self.shared.lock();
+        s.next_mic += 1;
+        let id = s.next_mic;
+        s.net_mics.push((id, src));
+        id
+    }
+
+    /// Remove a connected app's mic; returns how many are left.
+    #[allow(dead_code)] // RadioMaster-Server
+    pub fn remove_net_mic(&self, id: u64) -> usize {
+        let mut s = self.shared.lock();
+        s.net_mics.retain(|(i, _)| *i != id);
+        s.net_mics.len()
+    }
+
     pub fn add_tap(&self, tx: Sender<Arc<Vec<i16>>>) {
         self.shared.lock().taps.push(tx);
     }
@@ -669,6 +710,60 @@ impl Source for MonitorSource {
     }
     fn total_duration(&self) -> Option<Duration> {
         None
+    }
+}
+
+/// Audio arriving over the network (interleaved stereo blocks at `SR`). It starts once `prebuffer`
+/// blocks have arrived and waits for that many again after running dry, so a late packet costs one
+/// short gap instead of crackling. When more than three times that is queued (the two machines'
+/// sound card clocks differ slightly) the oldest blocks are dropped, which keeps the delay short.
+pub struct NetSource {
+    rx: crossbeam_channel::Receiver<Vec<f32>>,
+    cur: Vec<f32>,
+    pos: usize,
+    prebuffer: usize,
+    buffering: bool,
+}
+
+/// A network feed: push blocks (with `try_send`, so a slow consumer never holds the network up)
+/// into the sender; the `NetSource` plays them.
+pub fn net_feed(prebuffer: usize) -> (Sender<Vec<f32>>, NetSource) {
+    let prebuffer = prebuffer.max(1);
+    let (tx, rx) = crossbeam_channel::bounded(prebuffer * 4);
+    (tx, NetSource { rx, cur: Vec::new(), pos: 0, prebuffer, buffering: true })
+}
+
+impl NetSource {
+    fn frame(&mut self) -> (f32, f32) {
+        if self.pos + 1 >= self.cur.len() {
+            if self.buffering {
+                if self.rx.len() < self.prebuffer {
+                    return (0.0, 0.0);
+                }
+                self.buffering = false;
+            }
+            while self.rx.len() > self.prebuffer * 3 {
+                let _ = self.rx.try_recv();
+            }
+            match self.rx.try_recv() {
+                Ok(b) => {
+                    self.cur = b;
+                    self.pos = 0;
+                }
+                Err(_) => {
+                    self.buffering = true;
+                    self.cur.clear();
+                    self.pos = 0;
+                    return (0.0, 0.0);
+                }
+            }
+            if self.cur.len() < 2 {
+                return (0.0, 0.0);
+            }
+        }
+        let f = (self.cur[self.pos], self.cur[self.pos + 1]);
+        self.pos += 2;
+        f
     }
 }
 
