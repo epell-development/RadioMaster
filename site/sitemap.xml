@@ -11,6 +11,15 @@
     <image:image><image:loc>https://radiomaster.dovafm.com/img/azuracast.png</image:loc></image:image>
   </url>
   <url>
+    <loc>https://radiomaster.dovafm.com/server/</loc>
+    <lastmod>2026-10-25</lastmod>
+  </url>
+  <url>
+    <loc>https://radiomaster.dovafm.com/guides/start-an-internet-radio-station/</loc>
+    <lastmod>2026-10-25</lastmod>
+    <image:image><image:loc>https://radiomaster.dovafm.com/img/main.png</image:loc></image:image>
+  </url>
+  <url>
     <loc>https://radiomaster.dovafm.com/updates/</loc>
     <lastmod>2026-10-25</lastmod>
   </url>

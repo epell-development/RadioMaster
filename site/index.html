@@ -49,7 +49,7 @@
       "releaseNotes": "https://radiomaster.dovafm.com/updates/",
       "image": "https://radiomaster.dovafm.com/img/social-card.png",
       "screenshot": "https://radiomaster.dovafm.com/img/main.png",
-      "featureList": ["Playlist tabs with live start times", "Hour markers (wait, soft, hard)", "Smart crossfades and silence trimming", "Advert and jingle scheduler", "Playlist generator", "Event scheduler", "Cart wall and microphone ducking", "Voice tracking", "Text to speech", "Icecast and Shoutcast streaming (MP3, AAC, Opus, Ogg Vorbis, FLAC)", "AzuraCast station management", "Users and permissions", "PDF and CSV play reports", "Plugins and remote control API"],
+      "featureList": ["Playlist tabs with live start times", "Hour markers (wait, soft, hard)", "Smart crossfades and silence trimming", "Advert and jingle scheduler", "Playlist generator", "Event scheduler", "Cart wall and microphone ducking", "Voice tracking", "Text to speech", "Icecast and Shoutcast streaming (MP3, AAC, Opus, Ogg Vorbis, FLAC)", "AzuraCast station management", "Users and permissions", "PDF and CSV play reports", "Plugins and remote control API", "Headless RadioMaster Server for Linux and Windows Server", "Connect to Server remote studio control"],
       "publisher": { "@id": "https://radiomaster.dovafm.com/#org" },
       "sameAs": ["https://github.com/epell-development/RadioMaster"]
     },
@@ -94,6 +94,7 @@
       <a class="hide-sm" href="#features">Features</a>
       <a class="hide-sm" href="#playlist">Playlist</a>
       <a class="hide-sm" href="#azuracast">AzuraCast</a>
+      <a class="hide-sm" href="server/">Server</a>
       <a class="hide-sm" href="updates/">Updates</a>
       <a class="hide-sm" href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a class="hide-sm" href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
@@ -201,7 +202,7 @@
         <p class="eyebrow">Screens</p>
         <h2>See it running</h2>
       </div>
-      <figure class="shot-main" style="margin:0"><img id="shot" src="img/main.png" alt="RadioMaster radio automation software: main window with playlist, library and side panels" width="1280" height="780"></figure>
+      <figure class="shot-main" style="margin:0"><img id="shot" src="img/main.png" loading="lazy" decoding="async" alt="RadioMaster radio automation software: main window with playlist, library and side panels" width="1280" height="780"></figure>
       <p class="caption" id="shot-cap">The main window: playlist tabs with start times and hour lines in the centre, panels left and right.</p>
       <div class="thumbs" role="group" aria-label="Choose a screenshot">
         <button type="button" aria-pressed="true" data-src="img/main.png" data-cap="The main window: playlist tabs with start times and hour lines in the centre, panels left and right." data-alt="RadioMaster main window"><img src="img/main.png" alt="" loading="lazy" width="1280" height="780"><span>Main window</span></button>
@@ -230,6 +231,20 @@
         <p class="note">Optional. Without a server RadioMaster streams to any Icecast or Shoutcast host.</p>
       </div>
       <figure><img src="img/azuracast.png" alt="The AzuraCast station manager window in RadioMaster" width="1280" height="780" loading="lazy"></figure>
+    </div>
+  </section>
+
+  <section class="block" id="server">
+    <div class="wrap">
+      <div class="head">
+        <p class="eyebrow">RadioMaster Server</p>
+        <h2>Run the station on a server</h2>
+        <p class="lede">RadioMaster Server is headless radio automation for Linux and Windows Server. It plays the playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast around the clock with no window open. Presenters run it from the desktop app with File → Connect to Server, and several can be connected at once.</p>
+      </div>
+      <div class="related">
+        <a class="btn primary" href="server/">About RadioMaster Server</a>
+        <a class="btn ghost" href="guides/start-an-internet-radio-station/">Guide: start an internet radio station</a>
+      </div>
     </div>
   </section>
 
@@ -309,6 +324,14 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
           <p>RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products.</p>
         </details>
         <details>
+          <summary><h3>Can RadioMaster run on a headless Linux server?</h3></summary>
+          <p>Yes. <a href="server/">RadioMaster Server</a> runs the station without a window on Linux (with a systemd service) or Windows Server. It plays playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast, through the server's sound cards or stream only. Presenters control it from the desktop app with File → Connect to Server.</p>
+        </details>
+        <details>
+          <summary><h3>How do I start an internet radio station with RadioMaster?</h3></summary>
+          <p>Get a streaming server (Icecast, Shoutcast or AzuraCast), install RadioMaster, add your music to the library and build playlists, then add an encoder in Tools → Streams / encoders with your server's address and password and press play. The <a href="guides/start-an-internet-radio-station/">step-by-step guide</a> covers music licences, jingles, adverts and running 24/7.</p>
+        </details>
+        <details>
           <summary><h3>Where do I get help?</h3></summary>
           <p>Ask on the <a href="https://discord.gg/zVxeUXCjhc">RadioMaster Support Discord</a> or <a href="https://github.com/epell-development/RadioMaster/issues">open an issue on GitHub</a>. Every release and what changed is on the <a href="updates/">Updates page</a>, and installed copies update themselves in one click.</p>
         </details>
@@ -370,6 +393,22 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
     },
     {
       "@type": "Question",
+      "name": "Can RadioMaster run on a headless Linux server?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. RadioMaster Server runs the station without a window on Linux (with a systemd service) or Windows Server. It plays playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast, through the server's sound cards or stream only. Presenters control it from the desktop app with File → Connect to Server."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I start an internet radio station with RadioMaster?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Get a streaming server (Icecast, Shoutcast or AzuraCast), install RadioMaster, add your music to the library and build playlists, then add an encoder in Tools → Streams / encoders with your server's address and password and press play. The step-by-step guide covers music licences, jingles, adverts and running 24/7."
+      }
+    },
+    {
+      "@type": "Question",
       "name": "Where do I get help?",
       "acceptedAnswer": {
         "@type": "Answer",
@@ -387,6 +426,8 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       <a class="brand" href="#top" style="font-size:1.2rem"><img src="img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
       <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="server/">RadioMaster Server</a>
+      <a href="guides/start-an-internet-radio-station/">Start a radio station</a>
       <a href="updates/">Updates</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
