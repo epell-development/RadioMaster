@@ -2,7 +2,7 @@
   <img src="assets/logo_light.png" alt="RadioMaster" width="420">
 </p>
 
-<p align="center"><b>Radio automation for Windows, macOS and Linux, written in Rust.</b><br>
+<p align="center"><b>Free, open-source radio automation software for Windows, macOS and Linux, written in Rust.</b><br>
 Playlists, hour markers, smart crossfades, Icecast / Shoutcast streaming and AzuraCast station management in one studio app.</p>
 
 <p align="center">
