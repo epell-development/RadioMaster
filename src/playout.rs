@@ -213,6 +213,9 @@ pub struct Playout {
     pending: std::collections::HashSet<PathBuf>,
     analyze_tx: mpsc::Sender<PathBuf>,
     analyze_rx: mpsc::Receiver<(PathBuf, Option<Waveform>)>,
+    /// background tag writes: (new tags, old tags, result)
+    tag_tx: mpsc::Sender<(Track, Track, Result<(), String>)>,
+    tag_rx: mpsc::Receiver<(Track, Track, Result<(), String>)>,
     /// cues of the track on air (what the smart trigger follows)
     pub active_cues: Option<Cues>,
     // ---- playlists
@@ -221,6 +224,8 @@ pub struct Playout {
     pub playing_tab: usize,
     /// set when playback starts from a list swapped in by `with_tab`: that tab goes on air
     adopt: bool,
+    /// tab whose rows `with_tab` has swapped into `playlist` (its own slot holds the on-air rows meanwhile)
+    swapped: Option<usize>,
     pending_tab: Option<usize>,
     // ---- what is on air
     /// file on air (None for streams, line input, pauses…)
@@ -265,6 +270,7 @@ impl Playout {
         // background analyser: decodes files and builds waveforms for smart fading / the editor
         let (analyze_tx, job_rx) = mpsc::channel::<PathBuf>();
         let (res_tx, analyze_rx) = mpsc::channel::<(PathBuf, Option<Waveform>)>();
+        let (tag_tx, tag_rx) = mpsc::channel();
         thread::spawn(move || {
             while let Ok(path) = job_rx.recv() {
                 let w = Waveform::analyze(&path).ok();
@@ -317,10 +323,13 @@ impl Playout {
             pending: Default::default(),
             analyze_tx,
             analyze_rx,
+            tag_tx,
+            tag_rx,
             active_cues: None,
             tabs: vec![PlTab { name: "Main".into(), ..Default::default() }],
             playing_tab: 0,
             adopt: false,
+            swapped: None,
             pending_tab: None,
             on_air: None,
             on_air_label: String::new(),
@@ -370,6 +379,7 @@ impl Playout {
     // ---------------------------------------------------------------- tick
     pub fn tick(&mut self) {
         self.drain_scan();
+        self.drain_tag_writes();
         self.drain_log();
         {
             let mut sh = self.azura_shared.lock();
@@ -565,7 +575,11 @@ impl Playout {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let (entries, current) = if i == self.playing_tab { (&self.playlist, self.current) } else { (&t.entries, t.current) };
+                // `slot` keeps this right while `with_tab` has another tab swapped in
+                let (entries, current) = match self.slot(i) {
+                    None => (&self.playlist, self.current),
+                    Some(k) => (&self.tabs[k].entries, self.tabs[k].current),
+                };
                 SavedTab { name: t.name.clone(), entries: entries.clone(), current }
             })
             .collect();
@@ -580,16 +594,38 @@ impl Playout {
     }
 
     /// Run `f` with tab `v` temporarily in place of the on-air list (so every playlist edit works on
-    /// any tab). If `f` starts playback from it, tab `v` becomes the on-air tab.
+    /// any tab). If `f` starts playback from it, tab `v` becomes the on-air tab. Calls may nest: a
+    /// nested call for the tab already swapped in runs in place, any other tab is swapped in properly.
     pub fn with_tab<R>(&mut self, v: usize, f: impl FnOnce(&mut Self) -> R) -> R {
-        if v == self.playing_tab || v >= self.tabs.len() {
+        if v >= self.tabs.len() {
+            return f(self);
+        }
+        match self.swapped {
+            // already working on tab v (e.g. a dialog drawn inside `with_tab` inserting rows)
+            Some(s) if s == v => return f(self),
+            Some(s) => {
+                // put the on-air rows back where they belong, work on v, then swap s in again
+                self.swap_tab(s);
+                self.swapped = None;
+                let r = self.with_tab(v, f);
+                if s != self.playing_tab && s < self.tabs.len() {
+                    self.swap_tab(s);
+                    self.swapped = Some(s);
+                }
+                return r;
+            }
+            None => {}
+        }
+        if v == self.playing_tab {
             self.adopt = false;
             return f(self);
         }
         let old = self.playing_tab;
         self.swap_tab(v);
+        self.swapped = Some(v);
         self.adopt = false;
         let r = f(self);
+        self.swapped = None;
         if self.adopt {
             // tab v is now on air; the previous on-air list moves back into its own slot
             let e = std::mem::take(&mut self.tabs[v].entries);
@@ -604,12 +640,21 @@ impl Playout {
         r
     }
 
+    /// Slot in `tabs` that holds tab `i`'s rows, or None when they are in `playlist`.
+    fn slot(&self, i: usize) -> Option<usize> {
+        match self.swapped {
+            Some(s) if i == s => None,
+            Some(s) if i == self.playing_tab => Some(s),
+            _ if i == self.playing_tab => None,
+            _ => Some(i),
+        }
+    }
+
     /// Rows of any tab (read only).
     pub fn tab_rows(&self, i: usize) -> &[PlEntry] {
-        if i == self.playing_tab {
-            &self.playlist
-        } else {
-            self.tabs.get(i).map(|t| t.entries.as_slice()).unwrap_or(&[])
+        match self.slot(i) {
+            None => &self.playlist,
+            Some(k) => self.tabs.get(k).map(|t| t.entries.as_slice()).unwrap_or(&[]),
         }
     }
 
@@ -649,10 +694,13 @@ impl Playout {
 
     /// Append rows to any tab (the on-air one included).
     pub fn append_to_tab(&mut self, i: usize, rows: Vec<PlEntry>) {
-        if i == self.playing_tab {
-            self.playlist.extend(rows);
-        } else if let Some(t) = self.tabs.get_mut(i) {
-            t.entries.extend(rows);
+        match self.slot(i) {
+            None => self.playlist.extend(rows),
+            Some(k) => {
+                if let Some(t) = self.tabs.get_mut(k) {
+                    t.entries.extend(rows);
+                }
+            }
         }
     }
 
@@ -1981,25 +2029,64 @@ impl Playout {
         }
     }
 
+    /// Save edited tags: the library, every playlist row and the on-air track show them at once, the
+    /// file's own tags are written on a background thread, and library.json is saved so the edit
+    /// survives a restart. If the file can't be written, the old tags come back.
     pub fn update_tags(&mut self, t: Track) {
-        match library::write_tags(&t) {
-            Ok(()) => {
-                if let Some(&i) = self.lib_index.get(&t.path) {
-                    self.library[i] = t.clone();
-                    self.library_ver += 1;
+        let old = self
+            .lib_index
+            .get(&t.path)
+            .map(|&i| self.library[i].clone())
+            .or_else(|| self.playlist_track(&t.path))
+            .unwrap_or_else(|| Track::from_path(&t.path));
+        self.apply_track(&t);
+        let tx = self.tag_tx.clone();
+        thread::spawn(move || {
+            let r = library::write_tags(&t).map_err(|e| e.to_string());
+            let _ = tx.send((t, old, r));
+        });
+    }
+
+    /// Results of background tag writes.
+    fn drain_tag_writes(&mut self) {
+        while let Ok((t, old, r)) = self.tag_rx.try_recv() {
+            let name = t.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            match r {
+                Ok(()) => self.say(format!("Tags saved to {name}")),
+                Err(e) => {
+                    self.apply_track(&old);
+                    self.say(format!("Tag write failed for {name}: {e}"));
                 }
-                for e in self.playlist.iter_mut().filter(|e| e.is_file() && e.track.path == t.path) {
-                    e.track = t.clone();
-                }
-                for tab in self.tabs.iter_mut() {
-                    for e in tab.entries.iter_mut().filter(|e| e.is_file() && e.track.path == t.path) {
-                        e.track = t.clone();
-                    }
-                }
-                self.say("Tags saved");
             }
-            Err(e) => self.say(format!("Tag write failed: {e}")),
         }
+    }
+
+    /// The track of a playlist row (any tab) that plays this file.
+    fn playlist_track(&self, p: &Path) -> Option<Track> {
+        std::iter::once(&self.playlist)
+            .chain(self.tabs.iter().map(|t| &t.entries))
+            .flatten()
+            .find(|e| e.is_file() && e.track.path == p)
+            .map(|e| e.track.clone())
+    }
+
+    /// Show a track's tags everywhere the file is used, and save the library and playlists.
+    fn apply_track(&mut self, t: &Track) {
+        if let Some(&i) = self.lib_index.get(&t.path) {
+            self.library[i] = t.clone();
+            self.library_ver += 1;
+            self.save_library();
+        }
+        let tabs = self.tabs.iter_mut().map(|t| &mut t.entries);
+        for e in std::iter::once(&mut self.playlist).chain(tabs).flatten() {
+            if e.is_file() && e.track.path == t.path {
+                e.track = t.clone();
+            }
+        }
+        if let Some(o) = self.on_air.as_mut().filter(|o| o.path == t.path) {
+            *o = t.clone();
+        }
+        self.save_tabs();
     }
 
     // ------------------------------------------------------- library cleanup
@@ -2580,6 +2667,69 @@ mod tests {
         assert_eq!(p.playing_tab, t, "playing a row of the tab puts that tab on air");
         assert_eq!(p.on_air.as_ref().map(|x| x.path.clone()), Some(wav));
         assert_eq!(p.tab_rows(0).len(), 1, "the old list is kept in its own tab");
+    }
+
+    #[test]
+    fn nested_with_tab_edits_the_viewed_tab() {
+        let mut p = playout();
+        p.playlist = vec![file("main1", 60.0)];
+        let t = p.new_tab(Some("Evening".into()));
+        let u = p.new_tab(Some("Night".into()));
+        // a dialog drawn inside `with_tab` inserts into the same tab with another `with_tab`
+        p.with_tab(t, |c| {
+            assert_eq!(c.tab_len(t), 0);
+            assert_eq!(c.tab_len(0), 1, "the on-air tab is still readable while another is swapped in");
+            c.with_tab(t, |c| c.insert_rows(0, vec![file("eve1", 60.0)]));
+            c.append_to_tab(0, vec![file("main2", 60.0)]);
+            c.with_tab(u, |c| c.insert_rows(0, vec![file("night1", 60.0)]));
+            c.with_tab(0, |c| c.insert_rows(0, vec![file("main0", 60.0)]));
+            assert_eq!(c.tab_len(t), 1);
+        });
+        assert_eq!(p.playing_tab, 0);
+        assert_eq!(p.playlist.iter().map(|e| e.title()).collect::<Vec<_>>(), ["main0", "main1", "main2"]);
+        assert_eq!(p.tab_rows(t).iter().map(|e| e.title()).collect::<Vec<_>>(), ["eve1"]);
+        assert_eq!(p.tab_rows(u).iter().map(|e| e.title()).collect::<Vec<_>>(), ["night1"]);
+    }
+
+    #[test]
+    fn track_editor_tags_reach_the_file_and_library() {
+        let mut p = playout();
+        let wav = std::env::temp_dir().join("rm_tag_test.wav");
+        crate::engine::write_wav(&wav, &vec![0.1; crate::engine::SR as usize], 2, crate::engine::SR).unwrap();
+        p.library = vec![Track::from_path(&wav)];
+        p.reindex();
+        let t = p.new_tab(Some("Evening".into()));
+        p.with_tab(t, |c| c.add_paths(vec![wav.clone()]));
+        let mut edited = p.library[0].clone();
+        (edited.artist, edited.title, edited.album) = ("Some Artist".into(), "New Title".into(), "Album".into());
+        p.update_tags(edited);
+        // shown everywhere straight away
+        assert_eq!(p.library[0].title, "New Title");
+        assert_eq!(p.tab_rows(t)[0].track.title, "New Title");
+        let wait = || std::thread::sleep(std::time::Duration::from_millis(20));
+        for _ in 0..250 {
+            p.drain_tag_writes();
+            if p.notify.lock().contains("Tags saved") {
+                break;
+            }
+            wait();
+        }
+        let back = Track::from_path(&wav);
+        assert_eq!((back.artist.as_str(), back.title.as_str(), back.album.as_str()), ("Some Artist", "New Title", "Album"));
+
+        // a file that can't be written gets its old tags back
+        let gone = Track { path: PathBuf::from("/nonexistent/rm_gone.mp3"), title: "Old".into(), ..Default::default() };
+        p.library.push(gone.clone());
+        p.reindex();
+        p.update_tags(Track { title: "New".into(), ..gone });
+        for _ in 0..250 {
+            p.drain_tag_writes();
+            if p.notify.lock().contains("Tag write failed") {
+                break;
+            }
+            wait();
+        }
+        assert_eq!(p.library.last().unwrap().title, "Old");
     }
 
     #[test]
