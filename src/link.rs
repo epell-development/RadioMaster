@@ -409,11 +409,12 @@ impl Fs {
     /// Copy a file from this computer into `dir` on the server; returns where it went there.
     pub fn upload(&self, file: &std::path::Path, dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
         let Fs::Server(s) = self else { return Err("not connected to a server".into()) };
-        let data = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let data = std::fs::File::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let len = data.metadata().map(|m| m.len()).unwrap_or(0);
         let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let url =
             format!("{}/api/v1/fs/upload?dir={}&name={}", s.base, urlencoding::encode(&dir.to_string_lossy()), urlencoding::encode(&name));
-        // big files take a while on a slow line
+        // big files take a while on a slow line (and go as they are read, not held in memory)
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(5))
             .timeout(Duration::from_secs(600))
@@ -423,7 +424,7 @@ impl Fs {
         struct Put {
             path: std::path::PathBuf,
         }
-        match agent.post(&url).set("Authorization", &format!("Bearer {}", s.token)).send_bytes(&data) {
+        match agent.post(&url).set("Authorization", &format!("Bearer {}", s.token)).set("Content-Length", &len.to_string()).send(data) {
             Ok(r) => r.into_json::<Put>().map(|p| p.path).map_err(|e| e.to_string()),
             Err(ureq::Error::Status(code, r)) => Err(r
                 .into_json::<serde_json::Value>()

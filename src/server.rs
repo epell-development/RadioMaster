@@ -418,8 +418,21 @@ impl Api {
                 None => respond(req, error(401, "sign in first"), false),
             };
         }
+        if path == "/api/v1/fs/upload" && post {
+            // (straight to disk, and only once signed in)
+            let me = token.as_deref().and_then(|t| self.check(t));
+            let reply = match me {
+                Some(me) if me.effective().edit_playlists || me.effective().jingles => {
+                    let (dir, name) = (query_str(query, "dir").unwrap_or_default(), query_str(query, "name").unwrap_or_default());
+                    self.upload(&dir, &name, req.as_reader(), &me)
+                }
+                Some(me) => error(403, &format!("your account ({}) may not upload files", me.name)),
+                None => error(401, "sign in first"),
+            };
+            return respond(req, reply, false);
+        }
         let mut body = Vec::new();
-        if req.as_reader().take(256 * 1024 * 1024).read_to_end(&mut body).is_err() {
+        if req.as_reader().take(64 * 1024 * 1024).read_to_end(&mut body).is_err() {
             return respond(req, error(400, "unreadable request"), false);
         }
         let reply = match (path, post) {
@@ -429,7 +442,7 @@ impl Api {
             ),
             ("/api/v1/login", true) => self.login(&body),
             _ => match token.as_deref().and_then(|t| self.check(t)) {
-                Some(me) => self.call(path, post, &body, query, &param, token.as_deref().unwrap_or(""), &me),
+                Some(me) => self.call(path, post, &body, &param, token.as_deref().unwrap_or(""), &me),
                 None => error(401, "sign in first"),
             },
         };
@@ -493,16 +506,7 @@ impl Api {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn call(
-        self: &Arc<Self>,
-        path: &str,
-        post: bool,
-        body: &[u8],
-        query: &str,
-        param: &dyn Fn(&str) -> u64,
-        token: &str,
-        me: &Operator,
-    ) -> Reply {
+    fn call(self: &Arc<Self>, path: &str, post: bool, body: &[u8], param: &dyn Fn(&str) -> u64, token: &str, me: &Operator) -> Reply {
         let p = me.effective();
         let files_ok = p.edit_playlists || p.jingles || p.settings || p.tool(crate::auth::tool::FILE_EXPLORER);
         let denied = |what: &str| error(403, &format!("your account ({}) may not {what}", me.name));
@@ -675,12 +679,6 @@ impl Api {
                 }
                 json(200, crate::playout::parse_m3u(&a.path))
             }
-            ("/api/v1/fs/upload", true) => {
-                if !(p.edit_playlists || p.jingles) {
-                    return denied("upload files");
-                }
-                self.upload(&query_str(query, "dir").unwrap_or_default(), &query_str(query, "name").unwrap_or_default(), body, me)
-            }
             ("/api/v1/plays", false) => {
                 use crate::auth::tool;
                 if !(p.tool(tool::REPORTS) || p.tool(tool::HISTORY)) {
@@ -771,7 +769,7 @@ impl Api {
     }
 
     /// A file from this computer, put in a folder on the server (never over a file that is there).
-    fn upload(&self, dir: &str, name: &str, body: &[u8], me: &Operator) -> Reply {
+    fn upload(&self, dir: &str, name: &str, body: &mut dyn Read, me: &Operator) -> Reply {
         use std::path::Path;
         let name = Path::new(name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         if dir.is_empty() || name.is_empty() || name.starts_with('.') {
@@ -794,7 +792,15 @@ impl Api {
             target = dir.join(format!("{stem} ({n}){ext}"));
             n += 1;
         }
-        let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).and_then(|mut f| f.write_all(body));
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).and_then(|mut f| {
+            let r = std::io::copy(&mut body.take(UPLOAD_MAX + 1), &mut f)
+                .and_then(|n| (n <= UPLOAD_MAX).then_some(()).ok_or_else(|| std::io::Error::other("the file is over 4 GB")));
+            if r.is_err() {
+                drop(f);
+                let _ = std::fs::remove_file(&target);
+            }
+            r
+        });
         match written {
             Ok(()) => {
                 self.core.lock().say(format!("Server: {} uploaded {}", me.name, target.display()));
@@ -1011,6 +1017,9 @@ impl Api {
         json(200, self.info(me))
     }
 }
+
+/// The biggest file an app may upload.
+const UPLOAD_MAX: u64 = 4 * 1024 * 1024 * 1024;
 
 /// `path` is in one of `roots` (canonical folders) once links and `..` are resolved; a path that
 /// isn't there is in none.
