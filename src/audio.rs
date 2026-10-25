@@ -63,13 +63,14 @@ impl AudioManager {
             s.store(true, Ordering::Relaxed);
         }
         let host = cpal::default_host();
-        let mut wanted: Vec<(String, f32)> = cfg.outputs.iter().filter(|o| o.enabled).map(|o| (o.name.clone(), o.gain)).collect();
+        let mut wanted: Vec<(String, f32, bool)> =
+            cfg.outputs.iter().filter(|o| o.enabled).map(|o| (o.name.clone(), o.gain, o.studio)).collect();
         let use_default = wanted.is_empty();
         if use_default {
-            wanted.push((default_output_name().unwrap_or_else(|| "System default".into()), 1.0));
+            wanted.push((default_output_name().unwrap_or_else(|| "System default".into()), 1.0, false));
         }
         let mut have_primary = false;
-        for (name, gain) in wanted {
+        for (name, gain, studio) in wanted {
             let device = if use_default {
                 host.default_output_device()
             } else {
@@ -82,14 +83,17 @@ impl AudioManager {
             match OutputStream::try_from_device(&device) {
                 Ok((stream, handle)) => {
                     let g = Arc::new(AtomicU32::new(gain.max(0.0).to_bits()));
-                    let ok = if !have_primary {
-                        handle.play_raw(GainSource::new(engine.primary_source(), g.clone())).is_ok()
-                    } else {
-                        handle.play_raw(GainSource::new(engine.monitor_source(), g.clone())).is_ok()
+                    // a studio monitor is gated after the mix, so muting it never touches the stream
+                    let ok = match (have_primary, studio) {
+                        (false, false) => handle.play_raw(GainSource::new(engine.primary_source(), g.clone())).is_ok(),
+                        (false, true) => handle.play_raw(GainSource::new(engine.studio_gate(engine.primary_source()), g.clone())).is_ok(),
+                        (true, false) => handle.play_raw(GainSource::new(engine.monitor_source(), g.clone())).is_ok(),
+                        (true, true) => handle.play_raw(GainSource::new(engine.studio_gate(engine.monitor_source()), g.clone())).is_ok(),
                     };
                     if ok {
-                        self.report
-                            .push((name.clone(), if have_primary { "playing (monitor)".into() } else { "playing (primary)".into() }));
+                        let role = if have_primary { "monitor" } else { "primary" };
+                        let extra = if studio { ", muted while the mic is on" } else { "" };
+                        self.report.push((name.clone(), format!("playing ({role}{extra})")));
                         self.running.push(Running { name, primary: !have_primary, gain: g, _stream: stream });
                         have_primary = true;
                     } else {
