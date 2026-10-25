@@ -2613,6 +2613,8 @@ mod tests {
         while p.playlist[0].track.duration == 0.0 && t0.elapsed() < std::time::Duration::from_secs(10) {
             std::thread::sleep(std::time::Duration::from_millis(20));
             p.drain_tags();
+            // tests run side by side and another test's playout may have taken the result: ask again
+            library::read_tags_later(&wav);
         }
         assert!((p.playlist[0].track.duration - 2.0).abs() < 0.1, "got {}", p.playlist[0].track.duration);
     }
