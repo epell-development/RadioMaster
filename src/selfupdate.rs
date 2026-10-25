@@ -96,14 +96,17 @@ pub fn latest() -> Result<Release, String> {
 /// Download `asset` and put its program in place of the one running (blocks). `progress` gets a
 /// short status line now and then. The running program carries on until it is started again.
 pub fn install(asset: &Asset, progress: &dyn Fn(String)) -> Result<(), String> {
+    if asset.size > DOWNLOAD_MAX {
+        return Err(format!("{} is too big to be RadioMaster Server ({} MB)", asset.name, asset.size >> 20));
+    }
     let resp = agent()
         .get(&asset.browser_download_url)
         .set("User-Agent", &format!("RadioMaster-Server/{CURRENT}"))
         .call()
         .map_err(|e| e.to_string())?;
     let total = resp.header("Content-Length").and_then(|v| v.parse().ok()).unwrap_or(asset.size).max(1);
-    let mut reader = resp.into_reader().take(512 * 1024 * 1024);
-    let mut data = Vec::with_capacity(total as usize);
+    let mut reader = resp.into_reader().take(DOWNLOAD_MAX + 1);
+    let mut data = Vec::with_capacity(total.min(DOWNLOAD_MAX) as usize);
     let mut buf = [0u8; 64 * 1024];
     let mut shown = 0;
     loop {
@@ -128,6 +131,9 @@ pub fn install(asset: &Asset, progress: &dyn Fn(String)) -> Result<(), String> {
     }
     replace_program(&program)
 }
+
+/// The biggest release file taken (it's read into memory; the server's are tens of MB).
+const DOWNLOAD_MAX: u64 = 200 * 1024 * 1024;
 
 /// The download is the release file whole and unchanged: its size and the SHA-256 the release
 /// lists (GitHub gives every file one; without it, nothing is installed).
