@@ -1,7 +1,9 @@
 //! Playlist rows. Besides audio files a row can be an internet stream, live line input, a command,
-//! a timed pause, a teaser, a time announcement, a comment, a container, a track list or an hour marker.
+//! a timed pause, a teaser, a time announcement, a comment, a container, a track list, an hour marker
+//! or an event.
 
 use crate::library::Track;
+use crate::scheduler::ActionKind;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -44,6 +46,9 @@ pub enum ItemKind {
         #[serde(default)]
         opts: SpeechOpts,
     },
+    /// Runs a scheduler action when playback reaches this row (put another playlist on air, play
+    /// the playlist again, start an encoder…). `path` / `arg` mean what they mean for `Event`.
+    Event { action: ActionKind, path: String, arg: f32 },
 }
 
 /// Rough length of a speech row. `files` also measures the intro/outro sounds (reads the files).
@@ -166,6 +171,17 @@ impl PlEntry {
                     self.track.title.clone()
                 }
             }
+            ItemKind::Event { action, path, .. } => {
+                if !self.track.title.is_empty() {
+                    format!("Event: {}", self.track.title)
+                } else if path.trim().is_empty() || *action == ActionKind::RunRule {
+                    format!("Event: {}", action.label())
+                } else {
+                    let p = path.trim();
+                    let name = Path::new(p).file_name().filter(|_| action.needs_path()).map(|n| n.to_string_lossy().to_string());
+                    format!("Event: {} — {}", action.label(), name.unwrap_or_else(|| p.to_string()))
+                }
+            }
         }
     }
 
@@ -186,6 +202,7 @@ impl PlEntry {
             ItemKind::HourMarker { .. } => "Hour marker",
             ItemKind::HourInfo { .. } => "Hour",
             ItemKind::Tts { .. } => "Speech",
+            ItemKind::Event { .. } => "Event",
         }
     }
 
@@ -204,14 +221,22 @@ impl PlEntry {
                     speech_secs(text, *rate, opts, false)
                 }
             }
-            ItemKind::Command(_) | ItemKind::Comment(_) | ItemKind::HourMarker { .. } | ItemKind::HourInfo { .. } => 0.0,
+            ItemKind::Command(_)
+            | ItemKind::Comment(_)
+            | ItemKind::HourMarker { .. }
+            | ItemKind::HourInfo { .. }
+            | ItemKind::Event { .. } => 0.0,
         }
     }
 
     /// Length as shown in the playlist.
     pub fn length_text(&self) -> String {
         match &self.kind {
-            ItemKind::Comment(_) | ItemKind::Command(_) | ItemKind::HourMarker { .. } | ItemKind::HourInfo { .. } => String::new(),
+            ItemKind::Comment(_)
+            | ItemKind::Command(_)
+            | ItemKind::HourMarker { .. }
+            | ItemKind::HourInfo { .. }
+            | ItemKind::Event { .. } => String::new(),
             ItemKind::Url { secs, .. } | ItemKind::LineIn { secs } if *secs <= 0.0 => "live".into(),
             _ if self.est_secs() <= 0.0 => "—:—".into(),
             _ => mmss(self.est_secs()),
@@ -270,6 +295,7 @@ mod tests {
                 12.0,
             ),
             PlEntry::special(ItemKind::Comment("Talk break here".into()), "", 0.0),
+            PlEntry::special(ItemKind::Event { action: ActionKind::SwitchPlaylist, path: "Main".into(), arg: 0.0 }, "", 0.0),
         ];
         for r in rows {
             let line = r.to_m3u();

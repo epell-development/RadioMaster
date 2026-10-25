@@ -21,14 +21,17 @@ pub enum ActionKind {
     SwitchPlaylist,
     /// any station command, e.g. "VOLUME 80" (`path`)
     Command,
+    /// play the on-air playlist again from its first row
+    RestartPlaylist,
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 12] = [
+    pub const ALL: [ActionKind; 13] = [
         ActionKind::GenerateReplace,
         ActionKind::GenerateAppend,
         ActionKind::RunRule,
         ActionKind::SwitchPlaylist,
+        ActionKind::RestartPlaylist,
         ActionKind::LoadPlaylistAndPlay,
         ActionKind::PlayFile,
         ActionKind::InsertNext,
@@ -52,6 +55,7 @@ impl ActionKind {
             ActionKind::RunRule => "Play adverts / jingles from a rule",
             ActionKind::SwitchPlaylist => "Put a playlist tab on air",
             ActionKind::Command => "Run a station command",
+            ActionKind::RestartPlaylist => "Play the on-air playlist again from the top",
         }
     }
     /// the action takes a generator template name

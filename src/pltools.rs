@@ -1,5 +1,5 @@
 //! Playlist menu tools (RadioBOSS "Playlist" menu): add URL / line input / command / timed pause /
-//! teaser / time announcement / comment / container / track list / hour marker, voice tracks
+//! teaser / time announcement / comment / container / track list / hour marker / event, voice tracks
 //! (insert or record), insert playlist, insert tracks from playlist, Extra, Notepad and Find.
 
 use super::*;
@@ -19,6 +19,7 @@ pub(super) enum DlgKind {
     TrackList,
     HourMarker,
     Tts,
+    Event,
 }
 
 impl DlgKind {
@@ -35,6 +36,7 @@ impl DlgKind {
             DlgKind::TrackList => "Add Track List",
             DlgKind::HourMarker => "Add hour marker",
             DlgKind::Tts => "Add text to speech",
+            DlgKind::Event => "Add event",
         }
     }
 }
@@ -61,6 +63,10 @@ pub(super) struct ItemDlg {
     pub voice: String,
     pub rate: i32,
     pub speech: crate::items::SpeechOpts,
+    /// event rows: what to do (`text` = its file / template / playlist / command, `arg` = rule id,
+    /// encoder or volume)
+    pub action: crate::scheduler::ActionKind,
+    pub arg: f32,
     pub err: String,
 }
 
@@ -112,6 +118,8 @@ impl App {
             voice: String::new(),
             rate: 0,
             speech: Default::default(),
+            action: crate::scheduler::ActionKind::SwitchPlaylist,
+            arg: 0.0,
             err: String::new(),
         }
     }
@@ -189,6 +197,11 @@ impl App {
                 (d.text, d.voice, d.rate, d.speech) = (text.clone(), voice.clone(), *rate, opts.clone());
                 d
             }
+            ItemKind::Event { action, path, arg } => {
+                let mut d = self.new_item_dlg(DlgKind::Event);
+                (d.action, d.text, d.arg) = (*action, path.clone(), *arg);
+                d
+            }
             ItemKind::TimeAnnounce => self.new_item_dlg(DlgKind::TimeAnnounce),
             ItemKind::Track | ItemKind::VoiceTrack => return,
         };
@@ -202,6 +215,22 @@ impl App {
         let dur = (d.mins * 60 + d.secs) as f32;
         let title = d.title.trim().to_string();
         Ok(match d.kind {
+            DlgKind::Event => {
+                use crate::scheduler::ActionKind as A;
+                let path = d.text.trim();
+                let wants_text = d.action.needs_template() || d.action.needs_path() || matches!(d.action, A::SwitchPlaylist | A::Command);
+                if wants_text && path.is_empty() {
+                    return Err(match d.action {
+                        A::SwitchPlaylist => "Pick the playlist to put on air",
+                        A::Command => "Type a command",
+                        _ if d.action.needs_template() => "Pick a generator template",
+                        _ => "Choose a file",
+                    }
+                    .into());
+                }
+                let path = if wants_text { path.to_string() } else { String::new() };
+                PlEntry::special(ItemKind::Event { action: d.action, path, arg: d.arg }, title, 0.0)
+            }
             DlgKind::Url => {
                 let url = d.text.trim();
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -338,6 +367,32 @@ impl App {
                         ui.label("");
                         ui.label(RichText::new(COMMAND_HELP).small().color(GRAY));
                         ui.end_row();
+                    }
+                    DlgKind::Event => {
+                        if d.action == crate::scheduler::ActionKind::SwitchPlaylist && d.text.trim().is_empty() {
+                            // most often: back to the main playlist when this one ends
+                            let other = (0..core.tabs.len()).find(|&t| t != d.tab).unwrap_or(0);
+                            d.text = core.tabs.get(other).map(|t| t.name.clone()).unwrap_or_default();
+                        }
+                        let opts = ActionOpts::of(core);
+                        ui.label(tr("Do"));
+                        ui.horizontal_wrapped(|ui| {
+                            if action_edit(ui, "item_event", &mut d.action, &mut d.text, &mut d.arg, &opts) {
+                                let a = d.action;
+                                self.dlg(move || action_file_dialog(a).pick_file().map(Dlg::EventPath));
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("");
+                        ui.label(
+                            RichText::new(tr(
+                                "Runs when playback reaches this row, like a scheduler event. Example: put this row at the end of an evening playlist and pick \"Put a playlist tab on air → Main\", so Main comes back on air instead of dead air. At the end of Main, \"Play the on-air playlist again from the top\" keeps it looping.",
+                            ))
+                            .small()
+                            .color(GRAY),
+                        );
+                        ui.end_row();
+                        name_row(ui, &mut d, "shown in the playlist (optional)");
                     }
                     DlgKind::Pause => {
                         ui.label(tr("Silence for"));
@@ -856,6 +911,9 @@ impl App {
         }
         if item(ui, edit, tr("Add command…"), "Alt+C") {
             self.open_item_dlg(DlgKind::Command);
+        }
+        if item(ui, edit, tr("Add event…"), "") {
+            self.open_item_dlg(DlgKind::Event);
         }
         if item(ui, edit, tr("Add timed pause…"), "Ctrl+P") {
             self.open_item_dlg(DlgKind::Pause);
