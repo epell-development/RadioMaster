@@ -1,7 +1,8 @@
 # systemd unit for RadioMaster Server.
 #   sudo useradd --system --create-home --home-dir /var/lib/radiomaster radiomaster
-#   sudo cp RadioMaster-Server /usr/local/bin/
-#   sudo -u radiomaster RadioMaster-Server --data /var/lib/radiomaster --setup
+#   sudo install -d -o radiomaster -g radiomaster /opt/radiomaster
+#   sudo install -o radiomaster -g radiomaster -m 755 RadioMaster-Server /opt/radiomaster/
+#   sudo -u radiomaster /opt/radiomaster/RadioMaster-Server --data /var/lib/radiomaster --setup
 #   sudo cp radiomaster-server.service /etc/systemd/system/
 #   sudo systemctl enable --now radiomaster-server
 #   journalctl -u radiomaster-server -f      (the station log)
@@ -14,7 +15,9 @@ Wants=network-online.target
 User=radiomaster
 # add the account to the "audio" group to play through a sound card
 SupplementaryGroups=audio
-ExecStart=/usr/local/bin/RadioMaster-Server --data /var/lib/radiomaster
+# (in a folder the service account owns, so administrators can update it from the app)
+ExecStart=/opt/radiomaster/RadioMaster-Server --data /var/lib/radiomaster
+# also how it restarts after an update or Restart in the app (it ends with a failure code for that)
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM

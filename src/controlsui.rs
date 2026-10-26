@@ -162,9 +162,9 @@ impl App {
             "stop_jingles" if p.playback && p.jingles => core.stop_carts(),
             // ---- playlist editing
             "add_files" if edit => {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AddFiles));
+                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Add files"), |_, v| Some(Dlg::AddFiles(v)));
             }
-            "add_folder" if edit => self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::add_folder)),
+            "add_folder" if edit => self.pick(Pick::Folder, tr("Add folder"), |fs, v| Some(Dlg::add_folder(fs, v.into_iter().next()?))),
             "add_url" if edit => self.open_item_dlg(DlgKind::Url),
             "add_command" if edit => self.open_item_dlg(DlgKind::Command),
             "add_tts" if edit => self.open_item_dlg(DlgKind::Tts),
@@ -172,12 +172,12 @@ impl App {
             "add_pause" if edit => self.open_item_dlg(DlgKind::Pause),
             "add_hour" if edit => self.open_item_dlg(DlgKind::HourMarker),
             "insert_voice" if edit => {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::InsertVoice));
+                self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Insert voice track"), |_, v| Some(Dlg::InsertVoice(v)));
             }
             "record_voice" if edit && p.tool(crate::auth::tool::VOICE_TRACK) => self.show_vt = true,
             "new_playlist" if edit => self.tab_ops.push(super::plview::TabOp::New),
             "open_playlist" if edit => {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
+                self.pick(Pick::File(M3U.0, M3U.1), tr("Open playlist"), |fs, v| Some(Dlg::load_m3u(fs, v.into_iter().next()?)));
             }
             "save_playlist" if edit => {
                 let name = format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));

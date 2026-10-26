@@ -99,6 +99,132 @@ pub enum Cmd {
     },
 }
 
+impl Cmd {
+    /// Whether an account with these permissions may send this action.
+    pub fn allowed(&self, p: &crate::auth::Perms) -> bool {
+        use crate::auth::tool;
+        match self {
+            Cmd::PlayPressed { .. }
+            | Cmd::PlayIndex { .. }
+            | Cmd::PauseToggle
+            | Cmd::Stop
+            | Cmd::Next
+            | Cmd::Prev
+            | Cmd::Volume { .. }
+            | Cmd::Seek { .. }
+            | Cmd::TabOnAir { .. } => p.playback,
+            Cmd::Cart { .. } | Cmd::StopCarts => p.jingles,
+            Cmd::EncoderStart { .. } | Cmd::EncoderStop { .. } => p.streaming,
+            Cmd::Command { .. } | Cmd::Insert { .. } | Cmd::RemoveRows { .. } => p.edit_playlists,
+            Cmd::Event { .. } => p.tool(tool::SCHEDULER),
+            Cmd::Generate { .. } => p.edit_playlists && p.tool(tool::GENERATOR),
+            Cmd::FireRule { .. } => p.edit_playlists && p.tool(tool::ADS),
+            Cmd::Rescan => p.settings || p.tool(tool::LIBRARY),
+            Cmd::WriteTags { .. } | Cmd::SetCues { .. } | Cmd::ClearCues { .. } | Cmd::ReanalyseCues => p.tool(tool::TRACK_EDITOR),
+        }
+    }
+}
+
+/// The first part of the station settings that differs between `old` and `new` and that an account
+/// with `p` may not change (None: it may make the whole change).
+pub fn cfg_denied(old: &Config, new: &Config, p: &crate::auth::Perms) -> Option<String> {
+    use crate::auth::tool;
+    let (Ok(serde_json::Value::Object(a)), Ok(serde_json::Value::Object(b))) = (serde_json::to_value(old), serde_json::to_value(new))
+    else {
+        return Some("settings".into());
+    };
+    let allowed = |key: &str| match key {
+        "categories" | "templates" | "auto_enabled" | "auto_template" | "auto_min_mins" | "repeat" => p.tool(tool::GENERATOR),
+        "ads" | "ad_breaks" | "ad_rules" | "ad_rules_v" | "rotations" | "teaser_secs" => p.tool(tool::ADS),
+        "events" => p.tool(tool::SCHEDULER),
+        "dsp" | "eq_presets" => p.tool(tool::AUDIO_FX),
+        "azuracast" => p.tool(tool::AZURACAST),
+        "carts" => p.jingles,
+        "encoders" => p.streaming,
+        "mic_gain" | "mic_duck" | "mic_mode" | "volume" => p.playback,
+        "loop_playlist" | "random_fill" | "hour_lines" | "announce" => p.edit_playlists,
+        _ => p.settings,
+    };
+    let null = serde_json::Value::Null;
+    a.keys().chain(b.keys()).find(|k| a.get(*k).unwrap_or(&null) != b.get(*k).unwrap_or(&null) && !allowed(k)).cloned()
+}
+
+/// A server account as an administrator sees it (never with its password).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct UserWire {
+    pub name: String,
+    pub admin: bool,
+    pub perms: crate::auth::Perms,
+    pub disabled: bool,
+}
+
+/// A change to the server's accounts (administrators only).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum UserOp {
+    Add { name: String, password: String, admin: bool, perms: crate::auth::Perms },
+    Update { name: String, admin: bool, perms: crate::auth::Perms, disabled: bool },
+    Password { name: String, password: String },
+    Delete { name: String },
+}
+
+/// A folder on the server, as its file browser shows it.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct FsList {
+    /// the folder listed (where the browser starts when none was asked for)
+    pub path: PathBuf,
+    pub parent: Option<PathBuf>,
+    /// drives (Windows) or / , the library folders and the home folder
+    pub places: Vec<PathBuf>,
+    pub entries: Vec<FsEntry>,
+    /// why the folder couldn't be read (empty when it could)
+    pub error: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct FsEntry {
+    pub path: PathBuf,
+    pub dir: bool,
+    pub size: u64,
+}
+
+/// List a folder for a file browser (reads the disk): its folders and audio files (`all`: every
+/// file). An empty path starts at the first library folder, else the home folder.
+pub fn list_folder(path: PathBuf, all: bool, library_folders: &[String]) -> FsList {
+    let home = dirs::home_dir();
+    let start = || library_folders.first().map(PathBuf::from).or_else(|| home.clone()).unwrap_or_else(|| PathBuf::from("/"));
+    let path = if path.as_os_str().is_empty() { start() } else { path };
+    let mut places = crate::library::drive_roots().to_vec();
+    places.extend(library_folders.iter().map(PathBuf::from));
+    places.extend(home.clone());
+    let mut out = FsList { parent: path.parent().map(|p| p.to_path_buf()), places, ..Default::default() };
+    match std::fs::read_dir(&path) {
+        Ok(rd) => {
+            out.entries = rd
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    // (follows links, so a linked folder opens like any other)
+                    let p = e.path();
+                    let m = std::fs::metadata(&p).ok()?;
+                    let dir = m.is_dir();
+                    (dir || all || crate::library::is_audio(&p)).then_some(FsEntry { dir, size: if dir { 0 } else { m.len() }, path: p })
+                })
+                .collect();
+            out.entries.sort_by(|a, b| {
+                b.dir.cmp(&a.dir).then_with(|| {
+                    let name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    name(&a.path).cmp(&name(&b.path))
+                })
+            });
+        }
+        Err(e) => out.error = e.to_string(),
+    }
+    out.path = path;
+    out
+}
+
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 #[serde(default)]
 pub struct TabWire {
@@ -222,8 +348,17 @@ pub struct WaveReply {
 #[serde(default)]
 pub struct ServerInfo {
     pub name: String,
+    /// the account signed in
     pub user: String,
+    /// it is an administrator (only they change these settings, accounts and updates)
+    pub admin: bool,
     pub version: String,
+    /// a newer RadioMaster Server release (empty: up to date, or not checked yet)
+    pub latest: String,
+    /// that release has a download for the server's system, so it can update itself
+    pub can_update: bool,
+    /// what an update or restart is doing now (empty: nothing)
+    pub update_state: String,
     pub port: u16,
     /// start playing when the server starts
     pub autoplay: bool,
@@ -245,9 +380,7 @@ pub struct ServerInfo {
     pub portal_port: u16,
     /// the saved HTTPS / portal settings differ from what is running
     pub restart_needed: bool,
-    /// a newer RadioMaster release than this server (empty: up to date, or not known yet)
-    pub latest: String,
-    /// its release page
+    /// the newer release's page
     pub release_page: String,
     /// when the certificate in use runs out (unix seconds; 0 without HTTPS)
     pub cert_expires: i64,
@@ -290,6 +423,103 @@ pub struct ServerUpdate {
     pub tunnel: Option<bool>,
     /// a new tunnel token (an empty one removes it: a quick tunnel)
     pub tunnel_token: Option<String>,
+}
+
+// ------------------------------------------------------------ station profiles onto a server
+
+/// The text looks like a full path on Windows (C:\\…, \\\\server\\…) or elsewhere (/…).
+fn is_abs_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    (b.len() > 1 && b[0] == b'/' && b[1] != b'/')
+        || (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || s.starts_with("\\\\")
+}
+
+/// "C:\\Music\\x.mp3" → "c:/music/x.mp3" for Windows-style paths (which ignore case), "/srv/x" as is.
+fn path_key(s: &str) -> String {
+    let unified = s.replace('\\', "/");
+    if s.contains('\\') || s.as_bytes().get(1) == Some(&b':') {
+        unified.to_lowercase()
+    } else {
+        unified
+    }
+}
+
+fn each_string(v: &serde_json::Value, f: &mut dyn FnMut(&str)) {
+    match v {
+        serde_json::Value::String(s) => f(s),
+        serde_json::Value::Array(a) => a.iter().for_each(|x| each_string(x, f)),
+        serde_json::Value::Object(o) => o.values().for_each(|x| each_string(x, f)),
+        _ => {}
+    }
+}
+
+/// The folders a station profile's file paths are under, as few as cover them all (a file's own
+/// folder, or the path itself when it has no extension), for mapping them to the server's folders.
+pub fn path_roots(v: &serde_json::Value) -> Vec<String> {
+    let mut dirs: Vec<String> = vec![];
+    each_string(v, &mut |s| {
+        if !is_abs_path(s) {
+            return;
+        }
+        let unified = s.trim_end_matches(['/', '\\']).replace('\\', "/");
+        let last = unified.rsplit('/').next().unwrap_or("");
+        let dir =
+            if last.contains('.') { unified.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or(unified.clone()) } else { unified };
+        // back in the profile's own style
+        let dir = if s.contains('\\') { dir.replace('/', "\\") } else { dir };
+        if !dir.is_empty() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    });
+    dirs.sort_by_key(|d| d.len());
+    let mut roots: Vec<String> = vec![];
+    for d in dirs {
+        let k = path_key(&d);
+        if !roots.iter().any(|r| {
+            let rk = path_key(r);
+            k == rk || k.starts_with(&format!("{}/", rk.trim_end_matches('/')))
+        }) {
+            roots.push(d);
+        }
+    }
+    roots
+}
+
+/// `path` moved from under `from` to under `to` (None: it isn't under `from`). The rest of the path
+/// takes `to`'s separators.
+pub fn map_path(path: &str, from: &str, to: &str) -> Option<String> {
+    let (pk, fk) = (path_key(path), path_key(from.trim_end_matches(['/', '\\'])));
+    if fk.is_empty() || !(pk == fk || pk.starts_with(&format!("{fk}/"))) {
+        return None;
+    }
+    let rest = path.replace('\\', "/")[fk.len()..].to_string();
+    let windows = to.contains('\\') || to.as_bytes().get(1) == Some(&b':');
+    let rest = if windows { rest.replace('/', "\\") } else { rest };
+    Some(format!("{}{rest}", to.trim_end_matches(['/', '\\'])))
+}
+
+/// Move every path in a station profile with the first mapping (from, to) it fits. Returns how
+/// many paths changed.
+pub fn map_paths(v: &mut serde_json::Value, maps: &[(String, String)]) -> usize {
+    match v {
+        serde_json::Value::String(s) if is_abs_path(s) => {
+            match maps
+                .iter()
+                .filter(|(f, t)| !f.trim().is_empty() && !t.trim().is_empty())
+                .find_map(|(f, t)| map_path(s, f.trim(), t.trim()))
+            {
+                Some(n) => {
+                    *s = n;
+                    1
+                }
+                None => 0,
+            }
+        }
+        serde_json::Value::Array(a) => a.iter_mut().map(|x| map_paths(x, maps)).sum(),
+        serde_json::Value::Object(o) => o.values_mut().map(|x| map_paths(x, maps)).sum(),
+        _ => 0,
+    }
 }
 
 /// Playlist files that are missing (on the server, which is the machine that plays them).
@@ -715,6 +945,45 @@ mod tests {
         // nothing played or moved here
         assert_eq!(m.state, PlayState::Stopped);
         assert_eq!(m.playing_tab, 0);
+    }
+
+    #[test]
+    fn profile_paths_map_to_the_server() {
+        let v = serde_json::json!({
+            "library_folders": ["C:\\Users\\DJ\\Music"],
+            "carts": [{"path": "C:\\Users\\DJ\\Music\\Jingles\\id.mp3"}, {"path": ""}],
+            "ads": [{"path": "D:\\Ads\\spring.mp3"}],
+            "azuracast": {"base_url": "https://radio.example.com/api"},
+            "_session": {"tabs": [{"entries": [{"track": {"path": "/home/dj/show/a.flac"}}]}]}
+        });
+        let roots = path_roots(&v);
+        assert_eq!(roots, vec!["D:\\Ads".to_string(), "/home/dj/show".into(), "C:\\Users\\DJ\\Music".into()]);
+        let mut m = v.clone();
+        let maps = vec![("c:\\users\\dj\\music".to_string(), "/srv/music".to_string()), ("D:\\Ads".into(), "E:\\Station\\Ads".into())];
+        assert_eq!(map_paths(&mut m, &maps), 3);
+        assert_eq!(m["library_folders"][0], "/srv/music");
+        assert_eq!(m["carts"][0]["path"], "/srv/music/Jingles/id.mp3");
+        assert_eq!(m["ads"][0]["path"], "E:\\Station\\Ads\\spring.mp3");
+        // not mapped, and not paths at all, stay as they were
+        assert_eq!(m["_session"]["tabs"][0]["entries"][0]["track"]["path"], "/home/dj/show/a.flac");
+        assert_eq!(m["azuracast"]["base_url"], "https://radio.example.com/api");
+        // a folder whose name only starts the same isn't under it
+        assert_eq!(map_path("/srv/musicals/x.mp3", "/srv/music", "/data"), None);
+    }
+
+    #[test]
+    fn permissions_limit_what_an_account_changes() {
+        let p = crate::auth::Perms::presenter();
+        let old = Config::default();
+        let mut new = old.clone();
+        new.carts.resize(24, Default::default());
+        new.carts[0].path = "/srv/jingles/id.mp3".into();
+        assert_eq!(cfg_denied(&old, &new, &p), None, "presenters may set up jingles");
+        new.crossfade_secs = 9.0;
+        assert_eq!(cfg_denied(&old, &new, &p).as_deref(), Some("crossfade_secs"));
+        assert_eq!(cfg_denied(&old, &new, &crate::auth::Perms::default()), None);
+        assert!(Cmd::Next.allowed(&p) && !Cmd::EncoderStart { i: 0 }.allowed(&p));
+        assert!(!Cmd::Generate { tab: 0, name: "Hits".into(), append: false }.allowed(&p));
     }
 
     #[test]

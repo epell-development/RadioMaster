@@ -105,6 +105,13 @@ impl Default for RepUi {
 }
 
 impl RepUi {
+    /// Read the history again next time (it is another station's after connecting or disconnecting).
+    pub(super) fn forget(&mut self) {
+        self.loaded = false;
+        self.all.clear();
+        self.key.clear();
+    }
+
     /// The history file, read in the background.
     pub(super) fn set_history(&mut self, all: Vec<Play>) {
         self.all = all;
@@ -207,7 +214,17 @@ impl App {
         if !self.rep.loaded && !self.rep.loading {
             // a station's history grows for years: read it off the UI thread
             self.rep.loading = true;
-            self.dlg(|| Some(super::Dlg::History(report::load())));
+            // while connected, the server's history (the station plays there)
+            let server = self.srv.session();
+            self.dlg(move || {
+                Some(super::Dlg::History(match server {
+                    Some(s) => match crate::link::Link::plays(&s) {
+                        Ok(csv) => report::parse(&csv),
+                        Err(_) => vec![],
+                    },
+                    None => report::load(),
+                }))
+            });
         }
         // ---- what
         ui.horizontal_wrapped(|ui| {

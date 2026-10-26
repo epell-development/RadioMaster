@@ -225,6 +225,11 @@ impl App {
     }
 
     pub(super) fn tab_cleanup(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        if self.srv.connected() {
+            // it deletes, moves and retags files: those are on the server, out of this app's reach
+            ui.label(tr("Library cleanup works on the files of the computer it runs on. While you're connected, the library is the server's, so disconnect to tidy this computer's library."));
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             for (v, l) in [
                 (CleanView::Duplicates, tr("👯 Duplicates")),
