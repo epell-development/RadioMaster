@@ -797,10 +797,13 @@ impl Playout {
         self.waves.get(p).map(|w| WaveWire::of(w, self.cues.get(p).copied()))
     }
 
-    /// From now on this mirror asks the server for waveforms (see `link`).
-    pub fn set_wave_source(&mut self, tx: crossbeam_channel::Sender<PathBuf>) {
+    /// From now on this mirror asks the server for waveforms: the paths it wants arrive on the
+    /// returned channel, for `link::Link::start`.
+    pub fn wave_requests(&mut self) -> crossbeam_channel::Receiver<PathBuf> {
+        let (tx, rx) = crossbeam_channel::unbounded();
         self.remote_waves = Some(tx);
         self.pending.clear();
+        rx
     }
 
     /// A waveform the server sent, or why it couldn't.
