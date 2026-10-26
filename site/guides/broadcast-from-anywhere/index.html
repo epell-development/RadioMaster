@@ -139,8 +139,9 @@
         <li>On a VPS it's already on the internet: allow ports 9259 (and 9260 for the web portal) through the firewall.</li>
         <li>At the studio, forward those ports on the router to the server, or use a VPN such as WireGuard or Tailscale so nothing is open to the internet at all.</li>
         <li>Give it a name, for example <code>studio.yourstation.com</code>, so presenters don't need to remember an address.</li>
+        <li>Or skip port forwarding altogether: a <a href="/server/docs/#tunnel">Cloudflare Tunnel</a> puts the web portal on the internet over HTTPS, and the desktop app can connect through it too.</li>
       </ul>
-      <p class="tip warn"><b>Turn on HTTPS</b> before you open the server to the internet, so passwords and everything else are encrypted. Use your own certificate (a free <a href="/server/docs/#letsencrypt">Let's Encrypt</a> one works) or let the server make one. See <a href="/server/docs/#https">HTTPS</a>.</p>
+      <p class="tip warn"><b>Turn on HTTPS</b> before you open the server to the internet, so passwords and everything else are encrypted. The server can get and renew a free <a href="/server/docs/#acme">Let's Encrypt</a> certificate by itself, use your own, or make one. See <a href="/server/docs/#https">HTTPS</a>.</p>
 
       <h2 id="connect">3. Connect from the desktop app</h2>
       <ol>
@@ -159,7 +160,7 @@
 
       <h2 id="phone">5. Use the station from your phone</h2>
       <p>Turn on the web portal (<code>RadioMaster-Server --setup --portal</code>, or <b>File → Server settings… → Web portal</b> in the app and restart the server). Then open <code>https://your-server:9260</code> on any phone, tablet or computer and sign in with the server's username and password.</p>
-      <p>The portal shows what's on air with its progress and levels, play, pause, stop, next and previous, the volume, the playlists (double-click a row to play it), the streams with start and stop, recently played and the station log.</p>
+      <p>On a phone the portal's sections sit along the bottom of the screen: the studio (what's on air, transport buttons, volume, playlists and streams), the library, the cart wall, the playlist generator, the advert and jingle rules, AzuraCast and the log. A banner tells you when the server is behind on updates.</p>
 
       <h2 id="tips">Tips</h2>
       <ul>
@@ -179,7 +180,7 @@
       </div>
 <!-- GUIDES:related -->
 <div class="guide-grid">
-<a class="guide-card" href="/server/docs/"><span class="tag">Server and remote</span><b>RadioMaster Server documentation</b><span>Install, HTTPS, the web portal, reverse proxies, services and troubleshooting.</span></a>
+<a class="guide-card" href="/server/docs/"><span class="tag">Server and remote</span><b>RadioMaster Server documentation</b><span>Install, HTTPS and Let&#x27;s Encrypt, the web portal, Cloudflare Tunnel, reverse proxies and troubleshooting.</span></a>
 <a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
 <a class="guide-card" href="/guides/stream-to-icecast-shoutcast/"><span class="tag">Get started</span><b>Stream to Icecast or Shoutcast</b><span>Add an encoder, pick a format and bitrate, and send song titles to your listeners.</span></a>
 </div>
