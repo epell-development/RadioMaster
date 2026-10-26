@@ -1,5 +1,68 @@
 //! Readable light/dark themes, comfortable spacing and UI scale.
 use eframe::egui::{self, Color32, FontFamily, FontId, Stroke, TextStyle};
+use serde::{Deserialize, Serialize};
+
+/// How big the interface is drawn on each screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScaleMode {
+    /// follow the display scaling the operating system sets for each screen
+    #[default]
+    Follow,
+    /// the same size in pixels on every screen (display scaling is ignored)
+    Fixed,
+    /// fit each screen: the layout looks the way it does on a 1920×1080 screen at 100%
+    Fit,
+}
+
+impl ScaleMode {
+    pub const ALL: [ScaleMode; 3] = [ScaleMode::Follow, ScaleMode::Fixed, ScaleMode::Fit];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ScaleMode::Follow => "Follow each screen's display scaling",
+            ScaleMode::Fixed => "Same size in pixels on every screen",
+            ScaleMode::Fit => "Fit each screen like 1920×1080",
+        }
+    }
+}
+
+/// The screen height the Fit mode keeps the layout of.
+const FIT_HEIGHT: f32 = 1080.0;
+
+fn scale_id() -> egui::Id {
+    egui::Id::new("radiomaster_ui_scale")
+}
+
+/// Set the zoom for the screen the main window is on now. Called every frame: it only changes
+/// anything when the window moved to a screen with other scaling or the settings changed.
+pub fn fit_zoom(ctx: &egui::Context, mode: ScaleMode) {
+    let mut scale = ctx.data(|d| d.get_temp::<f32>(scale_id())).unwrap_or(1.0);
+    // Ctrl + / Ctrl − zoomed since the last frame: keep that (for this session) instead of undoing it
+    let last = ctx.data(|d| d.get_temp::<f32>(last_zoom_id()));
+    if let Some(last) = last.filter(|l| (ctx.zoom_factor() - l).abs() > 0.005 && *l > 0.0) {
+        scale = (scale * ctx.zoom_factor() / last).clamp(0.5, 3.0);
+        ctx.data_mut(|d| d.insert_temp(scale_id(), scale));
+    }
+    let (native, monitor) = ctx.input(|i| (i.viewport().native_pixels_per_point.unwrap_or(1.0), i.viewport().monitor_size));
+    let native = if native.is_finite() && native > 0.0 { native } else { 1.0 };
+    let ppp = match (mode, monitor) {
+        (ScaleMode::Follow, _) => native * scale,
+        (ScaleMode::Fixed, _) => scale,
+        // (the monitor size is given in points at the current zoom)
+        (ScaleMode::Fit, Some(m)) if m.y > 100.0 => (m.y * ctx.pixels_per_point()).round() / FIT_HEIGHT * scale,
+        (ScaleMode::Fit, _) => native * scale,
+    };
+    let zoom = (ppp / native).clamp(0.4, 3.0);
+    if (ctx.zoom_factor() - zoom).abs() > 0.005 {
+        ctx.set_zoom_factor(zoom);
+    }
+    ctx.data_mut(|d| d.insert_temp(last_zoom_id(), zoom));
+}
+
+fn last_zoom_id() -> egui::Id {
+    egui::Id::new("radiomaster_ui_zoom")
+}
 
 pub fn apply(ctx: &egui::Context, dark: bool, scale: f32) {
     let mut v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -60,7 +123,8 @@ pub fn apply(ctx: &egui::Context, dark: bool, scale: f32) {
     s.spacing.window_margin = egui::Margin::same(12);
     s.spacing.menu_margin = egui::Margin::same(8);
     ctx.set_style(s);
-    ctx.set_zoom_factor(scale.clamp(0.8, 1.7));
+    // the zoom itself is set by `fit_zoom`, which also knows the screen
+    ctx.data_mut(|d| d.insert_temp(scale_id(), scale.clamp(0.8, 1.7)));
 }
 
 /// Fonts from the computer that cover what egui's built-in fonts don't (symbols, Chinese,

@@ -1301,7 +1301,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(core.notify.lock().clone());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(Local::now().format("%a %d %b  %H:%M:%S").to_string());
+                    ui.label(core.now().format("%a %d %b  %H:%M:%S").to_string());
                     ui.separator();
                     let live = core.handles.iter().flatten().filter(|h| h.status.lock().state == EncState::Live).count();
                     ui.label(RichText::new(format!("● {live} stream(s) live")).color(if live > 0 { GREEN } else { GRAY }));
@@ -1318,7 +1318,7 @@ impl App {
     fn player(&mut self, ctx: &egui::Context, core: &mut Playout) {
         egui::TopBottomPanel::top("player").show(ctx, |ui| {
             ui.add_space(4.0);
-            let now = Local::now();
+            let now = core.now();
             let st = core.status.clone();
             let title = Some(core.on_air_text()).filter(|t| !t.is_empty()).unwrap_or_else(|| "No track playing".into());
             let next_i = core.current.map(|i| i + 1).unwrap_or(0);
@@ -1660,8 +1660,9 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.add_space(12.0);
             ui.label(RichText::new(tr("STUDIO CLOCK")).small().color(GRAY));
-            ui.label(RichText::new(Local::now().format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
-            ui.label(Local::now().format("%A, %d %B %Y").to_string());
+            let now = core.now();
+            ui.label(RichText::new(now.format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
+            ui.label(now.format("%A, %d %B %Y").to_string());
             if let Some(m) = core.secs_to_next_marker() {
                 ui.label(
                     RichText::new(format!("Next hour marker in {:02}:{:02}:{:02}", m / 3600, (m / 60) % 60, m % 60))
@@ -1833,6 +1834,12 @@ impl App {
                                     }
                                 });
                                 ui.small(tr("Make everything larger or smaller if the text is hard to read."));
+                                ui.add_space(4.0);
+                                ui.label(tr("On screens with other display scaling or resolutions"));
+                                for m in crate::theme::ScaleMode::ALL {
+                                    ui.radio_value(&mut self.workzones.scale_mode, m, tr(m.label()));
+                                }
+                                ui.small(tr("\"Fit each screen\" keeps the layout you see on a 1920×1080 screen, so moving the window to a laptop or a 1440p or 4K screen shows the same amount of everything. \"Same size in pixels\" ignores the display scaling set in Windows."));
                                 ui.separator();
                                 ui.horizontal(|ui| {
                                     ui.label(tr("Work zone"));
@@ -2439,7 +2446,7 @@ impl App {
         let mut item_edit: Option<(usize, Option<pltools::DlgKind>)> = None;
         let mut opts = ActionOpts::of(core);
         opts.items = true;
-        let now = Local::now();
+        let now = core.now();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if core.cfg.events.is_empty() {
                 ui.label(RichText::new(tr("No events yet.")).color(GRAY));
@@ -3344,6 +3351,7 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::theme::fit_zoom(ctx, self.workzones.scale_mode);
         // redraw ~10×/s while audio is moving (VU meters, elapsed time), ~3×/s when idle (the clock)
         // (once a second while minimized with no Additional windows: nothing is on screen, and playback
         // runs on its own threads)
