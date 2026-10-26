@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.2.9 — 2026-10-26
+**New**
+- Playlist generator: inserts after N songs, every N minutes (on the clock) or at set times, with hour
+  limits; time announcements as inserts; different patterns for times of day; "until hh:mm" length; song
+  separation; categories with several genres, years and excluded words; a preview before the running
+  order goes in
+- Event scheduler: insert any playlist item (time announcement, speech, Track List, stream…), repeat
+  events every N minutes or hours until a time, an Hourly time announcement button and Duplicate
+- Equalizer: a Parametric mode with up to 16 bands (bell, shelf, cut, notch) next to the 12-band graphic
+  EQ, a response curve with draggable handles, a Preamp, and many more presets; save your own in either
+  mode
+- Help → Shortcuts and MIDI: change any keyboard shortcut, add your own shortcuts that run playlist
+  commands, and bind actions (and Volume to a fader) to a MIDI controller with Learn
+- RadioMaster Server has its own user accounts with permissions; administrators manage them with File →
+  Server users, and the server checks every action
+- While connected to a server, file and folder pickers (generator categories, the cart wall, adverts,
+  events, library folders…) browse the server's folders, with Upload from this computer
+- The file explorer can open in its own window (Tools → File explorer) and show all files; it works with
+  the server
+- The app says when the server is behind, and administrators can update, restart or stop it from the app
+- Station profiles load onto the server with their folders mapped to the server's; profiles can be
+  imported
+- RadioMaster Server: free HTTPS certificates from Let's Encrypt, renewed on their own; certificates given
+  with `--cert`/`--key` are picked up again when they're renewed
+- RadioMaster Server: optional Cloudflare Tunnel for the web portal, with your own domain or a quick
+  trycloudflare.com address
+- Web portal: library, cart wall, playlist generator, advert and jingle rules, and AzuraCast station
+  management; works on phones; says when the server is behind an update
+- Settings → Appearance: choose how the interface size applies on other screens (follow display scaling,
+  same size in pixels, or fit each screen like 1920×1080)
+
+**Fixed**
+- Connected to a server: playlist rows were all red; now they're red only when the file is missing on the
+  server
+- Connected to a server: the track editor stayed on "analysing…"; it now shows the waveform and cues
+  (worked out on the server), and says why when a file can't be analysed
+- Connected to a server: clocks were out of step; every clock now shows the server's time, and
+  elapsed/remaining tick together with it
+- `ERR_TOO_MANY_REDIRECTS` with HTTPS on behind IIS or another reverse proxy
+- The web portal showed its desk for a moment before signing in, and now has the RadioMaster icon
+- Keyboard shortcuts match exactly, so Ctrl+Shift+P no longer also fires Ctrl+P
+
+**Changed**
+- Less work per frame: start times are only worked out for the rows in view, library search is cheaper,
+  and smart-fade analysis is about 15% faster
+- Reports use the server's play history while connected; dropped files and recorded voice tracks are
+  uploaded to the server
+- Website: new guides, server docs for Let's Encrypt, Cloudflare Tunnel and the portal, and a mobile menu
+- More checks before every release (clippy, a server smoke test, version and website checks, a weekly
+  security audit)
+
 ## v0.2.8 — 2026-10-25
 **New**
 - HTTPS for RadioMaster Server (`--https`): use your own certificate (e.g. Let's Encrypt) or let the
