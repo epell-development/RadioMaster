@@ -354,6 +354,16 @@ pub struct Playout {
     pub link: Option<crossbeam_channel::Sender<sync::Cmd>>,
     /// jingles playing on the server
     mirror_carts: Vec<PathBuf>,
+    /// playlist files the server can't find (a mirror never checks this machine's disk)
+    mirror_missing: std::collections::HashSet<PathBuf>,
+    /// where a mirror asks the server for waveforms (instead of decoding files it doesn't have)
+    remote_waves: Option<crossbeam_channel::Sender<PathBuf>>,
+    /// the on-air position the server last reported and when it applies here (counted on between polls)
+    mirror_pos: Option<(f32, Instant)>,
+    /// the server's clock minus this machine's, in ms (0 when not mirroring)
+    pub clock_offset_ms: i64,
+    /// files that couldn't be analysed, and why
+    wave_errors: HashMap<PathBuf, String>,
     /// lines ever written to the log (how the server's clients follow it)
     pub log_total: u64,
 }
@@ -478,6 +488,11 @@ impl Playout {
             plugins,
             link: None,
             mirror_carts: vec![],
+            mirror_missing: Default::default(),
+            remote_waves: None,
+            mirror_pos: None,
+            clock_offset_ms: 0,
+            wave_errors: HashMap::new(),
             log_total: 0,
         }
     }
@@ -508,6 +523,7 @@ impl Playout {
         if self.link.is_some() {
             // mirroring a server: the server plays and schedules, this copy only shows it
             self.drain_log();
+            self.follow_mirror_pos();
             return;
         }
         self.drain_scan();
@@ -1235,7 +1251,7 @@ impl Playout {
         if n == 0 {
             return out;
         }
-        let now = Local::now();
+        let now = self.now();
         let ms = |s: f32| CDur::milliseconds((s.max(0.0) * 1000.0) as i64);
         let st = &self.status;
         let live = on_air && matches!(self.state, PlayState::Playing | PlayState::Paused);
@@ -1409,7 +1425,7 @@ impl Playout {
         (from..self.playlist.len())
             .find(|&i| matches!(self.playlist[i].kind, ItemKind::HourMarker { .. }))
             .and_then(|i| starts[i])
-            .map(|s| (s.at - Local::now()).num_seconds().max(0))
+            .map(|s| (s.at - self.now()).num_seconds().max(0))
     }
 
     /// Fill in a speech row's text: the time placeholders plus {next}, {next_artist}, {next_title},
@@ -1476,7 +1492,7 @@ impl Playout {
     /// Text for the On Air box.
     pub fn on_air_text(&self) -> String {
         if let Some(u) = self.wait_until {
-            let left = (u - Local::now()).num_seconds().max(0);
+            let left = (u - self.now()).num_seconds().max(0);
             return format!("{} ({:02}:{:02}:{:02})", self.wait_label, left / 3600, (left / 60) % 60, left % 60);
         }
         if self.state == PlayState::Stopped || !self.status.has_track {
@@ -1641,7 +1657,48 @@ impl Playout {
             return;
         }
         self.pending.insert(path.to_path_buf());
-        let _ = self.analyze_tx.send(path.to_path_buf());
+        self.wave_errors.remove(path);
+        match &self.remote_waves {
+            Some(tx) => {
+                let _ = tx.send(path.to_path_buf());
+            }
+            None => {
+                let _ = self.analyze_tx.send(path.to_path_buf());
+            }
+        }
+    }
+
+    /// Why a file couldn't be analysed (None while it is being analysed, or once it has been).
+    pub fn wave_error(&self, path: &Path) -> Option<&str> {
+        self.wave_errors.get(path).map(String::as_str)
+    }
+
+    /// Keep a waveform (and the cues worked out for it), dropping the oldest beyond 48.
+    fn keep_wave(&mut self, path: PathBuf, w: Waveform) {
+        self.waves.insert(path.clone(), Arc::new(w));
+        self.wave_order.retain(|p| p != &path);
+        self.wave_order.push(path);
+        while self.wave_order.len() > 48 {
+            let old = self.wave_order.remove(0);
+            self.waves.remove(&old);
+        }
+    }
+
+    /// The time here, or on the server when this is a mirror (so every clock shows the station's time).
+    pub fn now(&self) -> DateTime<Local> {
+        Local::now() + CDur::milliseconds(self.clock_offset_ms)
+    }
+
+    /// Whether a playlist row's file is missing: on this machine, or on the server for a mirror.
+    pub fn row_missing(&self, e: &PlEntry) -> bool {
+        if !e.is_file() {
+            return false;
+        }
+        if self.link.is_some() {
+            self.mirror_missing.contains(&e.track.path)
+        } else {
+            library::file_missing(&e.track.path)
+        }
     }
 
     fn on_air_path(&self) -> Option<PathBuf> {
@@ -1651,19 +1708,25 @@ impl Playout {
     fn drain_analysis(&mut self) {
         while let Ok((path, wave)) = self.analyze_rx.try_recv() {
             self.pending.remove(&path);
-            let Some(w) = wave else { continue };
+            match wave {
+                Some(w) => self.adopt_wave(path, w),
+                None => {
+                    self.wave_errors.insert(path, "this file can't be read or decoded".into());
+                }
+            }
+        }
+    }
+
+    /// Take a finished analysis: smart cues for the file (unless set by hand), and the track on air
+    /// picks them up if it started before they existed.
+    pub fn adopt_wave(&mut self, path: PathBuf, w: Waveform) {
+        {
             if !self.cues.get(&path).is_some_and(|c| c.manual) {
                 let c = smart_cues(&w, &self.cfg.fade);
                 self.cues.insert(path.clone(), c);
                 self.cues_dirty = true;
             }
-            self.waves.insert(path.clone(), Arc::new(w));
-            self.wave_order.retain(|p| p != &path);
-            self.wave_order.push(path.clone());
-            while self.wave_order.len() > 48 {
-                let old = self.wave_order.remove(0);
-                self.waves.remove(&old);
-            }
+            self.keep_wave(path.clone(), w);
             // the track on air was analysed after it started: hand its cues to the engine now
             if self.on_air_path().as_deref() == Some(path.as_path()) && self.active_cues.is_none() && !self.triggered_next {
                 if let Some(c) = self.cues_for(&path) {
@@ -1685,12 +1748,13 @@ impl Playout {
 
     /// Store hand-edited cues (from the track editor).
     pub fn set_manual_cues(&mut self, path: &Path, mut c: Cues, duration: f32) {
-        if self.forward(|_| sync::Cmd::SetCues { path: path.to_path_buf(), cues: c, duration }) {
-            return;
-        }
+        let mirror = self.forward(|_| sync::Cmd::SetCues { path: path.to_path_buf(), cues: c, duration });
         c.manual = true;
         c.clamp(duration);
         self.cues.insert(path.to_path_buf(), c);
+        if mirror {
+            return; // (kept here too, so the editor shows them; the server saves them)
+        }
         self.cues_dirty = true;
         self.refresh_active_cues(path);
     }
@@ -1702,13 +1766,14 @@ impl Playout {
 
     /// Forget hand-edited cues; smart analysis takes over again.
     pub fn clear_manual_cues(&mut self, path: &Path) {
-        if self.forward(|_| sync::Cmd::ClearCues { path: path.to_path_buf() }) {
-            return;
-        }
+        let mirror = self.forward(|_| sync::Cmd::ClearCues { path: path.to_path_buf() });
         if let Some(w) = self.waves.get(path).cloned() {
             self.cues.insert(path.to_path_buf(), smart_cues(&w, &self.cfg.fade));
         } else {
             self.cues.remove(path);
+        }
+        if mirror {
+            return;
         }
         self.cues_dirty = true;
         self.refresh_active_cues(path);

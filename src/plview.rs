@@ -445,7 +445,7 @@ impl App {
                     let is_cur = cur == Some(i) && playing && viewing_on_air;
                     let st = starts.get(i).copied().flatten();
                     let skipped = st.is_some_and(|s| s.skipped);
-                    let col = row_text_color(e, is_cur, skipped, dark);
+                    let col = row_text_color(e, is_cur, skipped, dark, core.row_missing(e));
                     row.set_selected(sel.contains(&i));
                     let txt = |s: String| {
                         let mut r = RichText::new(s).color(col);

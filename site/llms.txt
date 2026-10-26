@@ -8,7 +8,7 @@ RadioMaster is an independent project and is not affiliated with RadioBOSS, SAM 
 
 - [RadioMaster home](https://radiomaster.dovafm.com/): features, screenshots, downloads and FAQ
 - [RadioMaster Server](https://radiomaster.dovafm.com/server/): headless radio automation for Linux and Windows Server, setup and connecting from the desktop app
-- [RadioMaster Server documentation](https://radiomaster.dovafm.com/server/docs/): install, options, data folder, systemd and Windows services, HTTPS and Let's Encrypt, the web portal, nginx/Caddy/IIS reverse proxies, security and troubleshooting
+- [RadioMaster Server documentation](https://radiomaster.dovafm.com/server/docs/): install, options, data folder, systemd and Windows services, HTTPS and built-in Let's Encrypt, the web portal, Cloudflare Tunnel, nginx/Caddy/IIS reverse proxies, security and troubleshooting
 - [How to start an internet radio station for free](https://radiomaster.dovafm.com/guides/start-an-internet-radio-station/): step-by-step guide
 - [All guides](https://radiomaster.dovafm.com/guides/)
 - [Stream to Icecast or Shoutcast](https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/): encoders, formats, bitrates, ffmpeg and AzuraCast DJ ports

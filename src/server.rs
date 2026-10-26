@@ -3,7 +3,8 @@
 //!   GET  /api/v1/ping                      who is this (no sign-in needed)
 //!   POST /api/v1/login   {user, password}  → {token, name, version, protocol, admin, perms}
 //!   POST /api/v1/logout
-//!   GET  /api/v1/state?rev=&cfg=&log=&hist=  → sync::Snapshot (lists only when they changed)
+//!   GET  /api/v1/state?rev=&cfg=&log=&hist=&miss=  → sync::Snapshot (lists only when they changed)
+//!   POST /api/v1/wave {path}                 → sync::WaveReply (202 while the server analyses it)
 //!   GET  /api/v1/library                   → [Track]
 //!   POST /api/v1/cmd     [sync::Cmd]
 //!   POST /api/v1/tabs    {base, tabs}      → {rev}, or 409 when the server's playlists changed first
@@ -41,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::{Read, Write},
+    path::PathBuf,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -141,6 +143,10 @@ struct Revs {
     cfg_hash: u64,
     cfg: Arc<crate::config::Config>,
     hist_rev: u64,
+    /// playlist files the server can't find, looked at again every couple of seconds
+    missing_rev: u64,
+    missing: Arc<Vec<PathBuf>>,
+    ticks: u32,
 }
 
 impl Revs {
@@ -152,10 +158,20 @@ impl Revs {
             (c.tabs_wire(), sync::station_cfg(&c.cfg), h)
         };
         let th = digest(&tabs);
-        if th != self.tabs_hash {
+        let changed = th != self.tabs_hash;
+        if changed {
             self.tabs_hash = th;
             self.tabs = Arc::new(tabs);
             self.rev += 1;
+        }
+        self.ticks = self.ticks.wrapping_add(1);
+        if changed || self.ticks.is_multiple_of(8) {
+            let m = sync::missing_in(&self.tabs);
+            let mh = digest(&m);
+            if mh != self.missing_rev {
+                self.missing_rev = mh;
+                self.missing = Arc::new(m);
+            }
         }
         let ch = digest(&cfg);
         if ch != self.cfg_hash {
@@ -214,7 +230,18 @@ struct Api {
     hsts: bool,
     /// token → the mic audio of that app, while its mic is on
     mics: Mutex<HashMap<String, Sender<Vec<u8>>>>,
+    /// waveforms being worked out for apps' track editors
+    waves: Arc<Mutex<HashMap<PathBuf, WaveJob>>>,
 }
+
+enum WaveJob {
+    Busy,
+    Done(crate::fade::Waveform),
+    Failed(String),
+}
+
+/// Files analysed at the same time for apps.
+const WAVE_JOBS: usize = 3;
 
 /// Where the server is listening.
 pub struct Listening {
@@ -276,8 +303,18 @@ pub fn spawn(core: Arc<Mutex<Playout>>, mut cfg: ServerCfg, host: Host) -> Resul
     };
     // revisions start from the clock, so an app that was connected before a restart always gets fresh lists
     let start = chrono::Local::now().timestamp_millis() as u64;
-    let mut revs =
-        Revs { rev: start, tabs_hash: 0, tabs: Default::default(), cfg_rev: start, cfg_hash: 0, cfg: Default::default(), hist_rev: 0 };
+    let mut revs = Revs {
+        rev: start,
+        tabs_hash: 0,
+        tabs: Default::default(),
+        cfg_rev: start,
+        cfg_hash: 0,
+        cfg: Default::default(),
+        hist_rev: 0,
+        missing_rev: 0,
+        missing: Default::default(),
+        ticks: 0,
+    };
     revs.refresh(&core);
     let running = (cfg.https, cfg.portal, cfg.portal_port);
     let check_updates = cfg.check_updates;
@@ -294,6 +331,7 @@ pub fn spawn(core: Arc<Mutex<Playout>>, mut cfg: ServerCfg, host: Host) -> Resul
         fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()).unwrap_or_default(),
         hsts: tls.as_ref().is_some_and(|t| !t.self_signed),
         mics: Mutex::new(HashMap::new()),
+        waves: Default::default(),
     });
     {
         let api = api.clone();
@@ -518,9 +556,9 @@ impl Api {
                 json(200, serde_json::json!({ "ok": true }))
             }
             ("/api/v1/state", false) => {
-                let (rev, tabs, cfg_rev, cfg, hist_rev) = {
+                let (rev, tabs, cfg_rev, cfg, hist_rev, missing_rev, missing) = {
                     let r = self.revs.lock();
-                    (r.rev, r.tabs.clone(), r.cfg_rev, r.cfg.clone(), r.hist_rev)
+                    (r.rev, r.tabs.clone(), r.cfg_rev, r.cfg.clone(), r.hist_rev, r.missing_rev, r.missing.clone())
                 };
                 let c = self.core.lock();
                 let snap = Snapshot {
@@ -534,6 +572,8 @@ impl Api {
                     hist_rev,
                     history: (param("hist") != hist_rev).then(|| c.history_wire()),
                     lib_ver: c.library_ver,
+                    missing_rev,
+                    missing: (param("miss") != missing_rev).then(|| (*missing).clone()),
                 };
                 drop(c);
                 json(200, snap)
@@ -595,6 +635,7 @@ impl Api {
                 r.refresh(&self.core);
                 json(200, serde_json::json!({ "ok": true, "rev": r.cfg_rev }))
             }
+            ("/api/v1/wave", true) => self.wave(body),
             ("/api/v1/mic", true) if !p.playback => denied("use the mic"),
             ("/api/v1/mic", true) => self.mic(token, body.to_vec()),
             ("/api/v1/mic/off", true) => {
@@ -838,6 +879,54 @@ impl Api {
     fn library_roots(&self) -> Vec<std::path::PathBuf> {
         let folders = self.core.lock().cfg.library_folders.clone();
         folders.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect()
+    }
+
+    /// A track's waveform for an app's track editor. The file is analysed here (the app doesn't have
+    /// it), on a thread of its own: until that is done the answer is "pending" and the app asks again.
+    fn wave(&self, body: &[u8]) -> Reply {
+        #[derive(Deserialize)]
+        struct Ask {
+            path: PathBuf,
+        }
+        let Ok(a) = serde_json::from_slice::<Ask>(body) else { return error(400, "bad request") };
+        let done = {
+            let c = self.core.lock();
+            if !c.knows_file(&a.path) {
+                return error(404, "that file isn't in the server's library or playlists");
+            }
+            c.wave_wire(&a.path)
+        };
+        if let Some(w) = done {
+            return json(200, sync::WaveReply { wave: Some(w), pending: false });
+        }
+        let mut jobs = self.waves.lock();
+        match jobs.remove(&a.path) {
+            Some(WaveJob::Done(w)) => {
+                let mut c = self.core.lock();
+                c.adopt_wave(a.path.clone(), w);
+                json(200, sync::WaveReply { wave: c.wave_wire(&a.path), pending: false })
+            }
+            Some(WaveJob::Failed(e)) => error(422, &e),
+            Some(WaveJob::Busy) => {
+                jobs.insert(a.path, WaveJob::Busy);
+                json(202, sync::WaveReply { wave: None, pending: true })
+            }
+            None => {
+                // a few at a time; the others are started when the apps ask again
+                if jobs.len() < WAVE_JOBS {
+                    jobs.insert(a.path.clone(), WaveJob::Busy);
+                    let done = self.waves.clone();
+                    thread::spawn(move || {
+                        let r = match crate::fade::Waveform::analyze(&a.path) {
+                            Ok(w) => WaveJob::Done(w),
+                            Err(e) => WaveJob::Failed(format!("the server can't read this file: {e}")),
+                        };
+                        done.lock().insert(a.path, r);
+                    });
+                }
+                json(202, sync::WaveReply { wave: None, pending: true })
+            }
+        }
     }
 
     fn user_of(&self, token: &str) -> String {
@@ -1117,6 +1206,14 @@ mod tests {
         }
     }
 
+    /// A station with just these rows. (The data folder is shared by the tests running at the same
+    /// time, so the playlists another test saved there are replaced, not added to.)
+    fn station_with(rows: Vec<PlEntry>) -> Arc<Mutex<Playout>> {
+        let mut p = Playout::new(Engine::new_detached(), crate::config::Config::default());
+        p.set_tabs(TabsWire { tabs: vec![sync::TabWire { name: "Main".into(), entries: rows, current: None }], playing: 0 });
+        Arc::new(Mutex::new(p))
+    }
+
     fn row(name: &str) -> PlEntry {
         PlEntry::file(Track { path: format!("/srv/music/{name}.mp3").into(), title: name.into(), ..Default::default() })
     }
@@ -1226,8 +1323,7 @@ mod tests {
     #[test]
     fn app_and_server_stay_in_step() {
         crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
-        station.lock().append_to_tab(0, vec![row("one"), row("two")]);
+        let station = station_with(vec![row("one"), row("two")]);
         let cfg = ServerCfg {
             user: "studio".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),
@@ -1282,6 +1378,90 @@ mod tests {
         assert!(!crate::link::Link::server_update(&s, &u).unwrap().autoplay);
         assert!(crate::link::login(&address, "studio", "a brand new password", "").is_ok());
         link.stop();
+    }
+
+    /// A short 16-bit stereo WAV file with a tone in it.
+    fn write_wav(path: &std::path::Path, secs: f32) {
+        let rate = 22_050u32;
+        let n = (rate as f32 * secs) as u32;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + n * 4).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&rate.to_le_bytes());
+        b.extend_from_slice(&(rate * 4).to_le_bytes());
+        b.extend_from_slice(&4u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&(n * 4).to_le_bytes());
+        for k in 0..n {
+            let v = ((k as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 12000.0) as i16;
+            b.extend_from_slice(&v.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    /// Connected to a server, the app colours rows by what the server has, gets the track editor's
+    /// waveforms from it, and keeps its clock.
+    #[test]
+    fn app_sees_the_servers_files_and_clock() {
+        // (the data folder is shared by every test in this process: the files go in a folder of their own)
+        crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
+        let dir = std::env::temp_dir().join(format!("rm-server-files-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tone = dir.join("tone.wav");
+        write_wav(&tone, 3.0);
+        let gone = dir.join("gone.mp3");
+        let file = |p: &std::path::Path| PlEntry::file(Track { path: p.into(), title: "t".into(), ..Default::default() });
+        let station = station_with(vec![file(&tone), file(&gone)]);
+        let cfg = ServerCfg {
+            user: "studio".into(),
+            password_hash: crate::auth::hash("correct horse battery").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let addr = spawn(station.clone(), cfg, host).unwrap().addr;
+        let session = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "studio", "correct horse battery", "").unwrap();
+        let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
+        let link = crate::link::Link::start(mirror.clone(), session, rx, Box::new(|| {}));
+        wait_for("the first copy", || mirror.lock().playlist.len() == 2);
+
+        // missing is what the server says, whatever this machine has
+        wait_for("the server's missing files", || {
+            let m = mirror.lock();
+            let (a, b) = (m.playlist[0].clone(), m.playlist[1].clone());
+            !m.row_missing(&a) && m.row_missing(&b)
+        });
+
+        // the waveform is worked out on the server
+        mirror.lock().request_analysis(&tone);
+        wait_for("the waveform from the server", || mirror.lock().waves.contains_key(&tone));
+        let w = mirror.lock().waves.get(&tone).cloned().unwrap();
+        assert!((w.duration() - 3.0).abs() < 0.1, "{}", w.duration());
+        assert!(mirror.lock().cues.contains_key(&tone));
+        // a file the server can't read, and one it won't send, say why instead of spinning forever
+        mirror.lock().request_analysis(&gone);
+        wait_for("the error for a missing file", || mirror.lock().wave_error(&gone).is_some());
+        let elsewhere = dir.join("not-in-a-playlist.wav");
+        write_wav(&elsewhere, 1.0);
+        mirror.lock().request_analysis(&elsewhere);
+        wait_for("the refusal", || mirror.lock().wave_error(&elsewhere).is_some());
+        assert!(!mirror.lock().waves.contains_key(&elsewhere));
+
+        // same machine: the clocks agree to well within a second
+        assert!(mirror.lock().clock_offset_ms.abs() < 500, "{}", mirror.lock().clock_offset_ms);
+        link.stop();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn start_plain(station: Arc<Mutex<Playout>>, user: &str, password: &str) -> (String, Arc<std::sync::atomic::AtomicU8>) {
@@ -1450,8 +1630,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::config::set_data_dir(dir.clone());
-        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
-        station.lock().append_to_tab(0, vec![row("one")]);
+        let station = station_with(vec![row("one")]);
         let cfg = ServerCfg {
             user: "studio".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),

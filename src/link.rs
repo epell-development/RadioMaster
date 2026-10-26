@@ -1,7 +1,7 @@
 //! The desktop app's side of RadioMaster Server: signs in, keeps the mirror playout in step with the
 //! server (about four times a second) and sends it the actions taken in the app.
 
-use crate::playout::sync::{self, digest, Cmd, Snapshot, TabsWire};
+use crate::playout::sync::{self, digest, Cmd, Snapshot, TabsWire, WaveReply};
 use crate::playout::Playout;
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use parking_lot::Mutex;
@@ -277,11 +277,20 @@ impl Link {
             log_rev: 0,
             hist_rev: 0,
             lib_ver: 0,
+            miss_rev: 0,
+            clock: None,
             tabs_hash: None,
             cfg_hash: None,
             notify: String::new(),
             queued: vec![],
         };
+        // the track editor's waveforms come from the server, which has the files
+        let (wtx, wrx) = crossbeam_channel::unbounded();
+        s.core.lock().set_wave_source(wtx);
+        {
+            let (core, base, pin, token, stop) = (s.core.clone(), session.base.clone(), session.pin.clone(), token.clone(), stop.clone());
+            thread::spawn(move || fetch_waves(core, base, pin, token, wrx, &stop));
+        }
         let st = stop.clone();
         thread::spawn(move || s.run(&st, repaint));
         Link { stop, state, session, token, new_password }
@@ -579,6 +588,9 @@ struct Syncer {
     log_rev: u64,
     hist_rev: u64,
     lib_ver: u64,
+    miss_rev: u64,
+    /// the server's clock minus this machine's (ms), from the quickest poll lately: (offset, round trip, when)
+    clock: Option<(i64, u32, Instant)>,
     /// fingerprints of the mirror's playlists / station settings as last agreed with the server
     /// (None until the first copy arrives, and after a clash: the server's copy then wins)
     tabs_hash: Option<u64>,
@@ -744,8 +756,20 @@ impl Syncer {
             }
         }
         // 3. what the server has now
-        let snap: Snapshot =
-            self.get(&format!("state?rev={}&cfg={}&log={}&hist={}", self.rev, self.cfg_rev, self.log_rev, self.hist_rev))?;
+        let sent = chrono::Utc::now().timestamp_millis();
+        let t0 = Instant::now();
+        let snap: Snapshot = self.get(&format!(
+            "state?rev={}&cfg={}&log={}&hist={}&miss={}",
+            self.rev, self.cfg_rev, self.log_rev, self.hist_rev, self.miss_rev
+        ))?;
+        if snap.live.now_ms > 0 {
+            // the server read its clock about halfway through the round trip
+            let rtt = t0.elapsed().as_millis() as u32;
+            let offset = snap.live.now_ms - (sent + rtt as i64 / 2);
+            if self.clock.is_none_or(|(_, best, at)| rtt <= best || at.elapsed() > Duration::from_secs(30)) {
+                self.clock = Some((offset, rtt, Instant::now()));
+            }
+        }
         let library = if snap.lib_ver != self.lib_ver { Some(self.get::<Vec<crate::library::Track>>("library")?) } else { None };
         if stop.load(Ordering::Relaxed) {
             return Ok(());
@@ -755,6 +779,7 @@ impl Syncer {
             return Ok(()); // disconnected meanwhile: this is the local playout again
         }
         let notify = snap.live.notify.clone();
+        c.clock_offset_ms = self.clock.map(|(o, _, _)| o).unwrap_or(0);
         c.apply_live(snap.live);
         if notify != self.notify {
             *c.notify.lock() = notify.clone();
@@ -787,6 +812,52 @@ impl Syncer {
             c.set_library(lib);
             self.lib_ver = snap.lib_ver;
         }
+        if let Some(m) = snap.missing {
+            c.set_missing(m);
+            self.miss_rev = snap.missing_rev;
+        }
         Ok(())
+    }
+}
+
+/// How long an app waits for the server to analyse one track.
+const WAVE_WAIT: Duration = Duration::from_secs(180);
+
+/// Ask the server for the waveforms the track editor wants, one file at a time.
+fn fetch_waves(
+    core: Arc<Mutex<Playout>>,
+    base: String,
+    pin: String,
+    token: Arc<Mutex<String>>,
+    asks: Receiver<std::path::PathBuf>,
+    stop: &AtomicBool,
+) {
+    let agent = agent(&pin);
+    while !stop.load(Ordering::Relaxed) {
+        let path = match asks.recv_timeout(Duration::from_millis(500)) {
+            Ok(p) => p,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        let since = Instant::now();
+        let r = loop {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let tok = token.lock().clone();
+            match call::<WaveReply>(&agent, &base, &tok, "wave", Some(serde_json::json!({ "path": path }))) {
+                Ok(WaveReply { wave: Some(w), .. }) => break Ok(w),
+                Ok(_) if since.elapsed() < WAVE_WAIT => thread::sleep(Duration::from_millis(700)),
+                Ok(_) => break Err("the server took too long to analyse this track".to_string()),
+                // signed out for a moment (the server restarted): the syncer signs in again
+                Err(Fail::Auth(_)) if since.elapsed() < WAVE_WAIT => thread::sleep(Duration::from_secs(1)),
+                Err(Fail::Other(e)) if e == "unknown call" => break Err("update the server to see waveforms here".to_string()),
+                Err(e) => break Err(e.text()),
+            }
+        };
+        let mut c = core.lock();
+        if c.link.is_some() {
+            c.put_remote_wave(path, r);
+        }
     }
 }

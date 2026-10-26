@@ -31,7 +31,7 @@ GUIDES = [
     ("/guides/live-shows/", "Present a live show", "The microphone, the cart wall, voice tracks and text to speech.", "On air", False),
     ("/guides/azuracast/", "Manage an AzuraCast station", "Connect your AzuraCast server, then run the queue, requests, media and DJs from the studio.", "On air", True),
     ("/guides/broadcast-from-anywhere/", "Broadcast from anywhere", "Put the station on a server and run it from the desktop app or a phone browser.", "Server and remote", True),
-    ("/server/docs/", "RadioMaster Server documentation", "Install, HTTPS, the web portal, reverse proxies, services and troubleshooting.", "Server and remote", False),
+    ("/server/docs/", "RadioMaster Server documentation", "Install, HTTPS and Let's Encrypt, the web portal, Cloudflare Tunnel, reverse proxies and troubleshooting.", "Server and remote", False),
     ("/guides/plugins/", "Make a plugin", "Run your own scripts when a song starts or the hour changes, and control RadioMaster from them.", "Extend RadioMaster", True),
 ]
 
