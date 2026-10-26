@@ -3896,6 +3896,7 @@ dependencies = [
  "rand 0.8.8",
  "rcgen",
  "rfd",
+ "ring",
  "rodio",
  "rpassword",
  "rustls",

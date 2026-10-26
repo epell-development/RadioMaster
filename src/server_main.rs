@@ -2,6 +2,7 @@
 //! It plays, schedules and streams on its own; desktop apps connect with File → Connect to Server.
 // The server shares the desktop app's modules and uses only part of each.
 #![allow(dead_code)]
+mod acme;
 mod audio;
 mod auth;
 mod azuracast;
@@ -24,6 +25,8 @@ mod scheduler;
 mod server;
 mod stream;
 mod tls;
+mod tunnel;
+mod updater;
 
 use parking_lot::Mutex;
 use server::ServerCfg;
@@ -48,6 +51,17 @@ Usage: RadioMaster-Server [options]
   --https / --no-https  serve over HTTPS (saved with --setup)
   --cert FILE           PEM certificate (chain) for HTTPS, e.g. Let's Encrypt's fullchain.pem
   --key FILE            its PEM private key (without --cert/--key a self-signed certificate is made)
+  --acme DOMAINS        HTTPS with a free Let's Encrypt certificate for these names (comma-separated);
+                        port 80 of each name has to reach this server (saved with --setup)
+  --acme-email ADDRESS  where Let's Encrypt writes about the certificate (optional)
+  --acme-staging        use Let's Encrypt's staging server (for trying it out)
+  --acme-http-port N    port for Let's Encrypt's checks (default 80; 0: a proxy in front passes them on)
+  --no-acme             stop using Let's Encrypt
+  --tunnel / --no-tunnel  put the web portal on the internet through a Cloudflare Tunnel (saved with --setup)
+  --tunnel-token TOKEN  the tunnel's token from the Cloudflare dashboard (better: set CLOUDFLARE_TUNNEL_TOKEN,
+                        which other users can't see; without one: a quick trycloudflare.com tunnel). Saved
+                        with --setup in tunnel-token in the data folder, readable by its owner only
+  --cloudflared FILE    the cloudflared program (default: next to the server, or on the PATH)
   --portal / --no-portal  the web portal: run the station from a browser (saved with --setup)
   --portal-port N       port for the web portal (default 9260)
   --data FOLDER         data folder (default: the RadioMaster-Server folder in your settings folder)
@@ -80,6 +94,14 @@ struct Args {
     key: Option<String>,
     portal: Option<bool>,
     portal_port: Option<u16>,
+    acme: Option<String>,
+    no_acme: bool,
+    acme_email: Option<String>,
+    acme_staging: bool,
+    acme_http_port: Option<u16>,
+    tunnel: Option<bool>,
+    tunnel_token: Option<String>,
+    cloudflared: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -98,6 +120,14 @@ fn parse_args() -> Result<Args, String> {
         key: None,
         portal: None,
         portal_port: None,
+        acme: None,
+        no_acme: false,
+        acme_email: None,
+        acme_staging: false,
+        acme_http_port: None,
+        tunnel: None,
+        tunnel_token: None,
+        cloudflared: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -120,6 +150,18 @@ fn parse_args() -> Result<Args, String> {
             "--portal-port" => {
                 a.portal_port = Some(value("a number")?.parse().map_err(|_| "--portal-port needs a number from 1 to 65535".to_string())?)
             }
+            "--acme" => a.acme = Some(value("domain names")?),
+            "--no-acme" => a.no_acme = true,
+            "--acme-email" => a.acme_email = Some(value("an email address")?),
+            "--acme-staging" => a.acme_staging = true,
+            "--acme-http-port" => {
+                a.acme_http_port =
+                    Some(value("a number")?.parse().map_err(|_| "--acme-http-port needs a number from 0 to 65535".to_string())?)
+            }
+            "--tunnel" => a.tunnel = Some(true),
+            "--no-tunnel" => a.tunnel = Some(false),
+            "--tunnel-token" => a.tunnel_token = Some(value("a token")?),
+            "--cloudflared" => a.cloudflared = Some(value("a file")?),
             "--list-devices" => a.list_devices = true,
             "--version" | "-V" => {
                 println!("RadioMaster Server {}", env!("CARGO_PKG_VERSION"));
@@ -134,6 +176,9 @@ fn parse_args() -> Result<Args, String> {
     }
     if a.password.is_none() {
         a.password = std::env::var("RADIOMASTER_PASSWORD").ok().filter(|p| !p.is_empty());
+    }
+    if a.tunnel_token.is_none() {
+        a.tunnel_token = std::env::var("CLOUDFLARE_TUNNEL_TOKEN").ok().filter(|p| !p.is_empty());
     }
     Ok(a)
 }
@@ -205,6 +250,14 @@ fn setup(args: &Args, old: Option<ServerCfg>) -> Result<ServerCfg, String> {
         None if tty => yes_no("Serve over HTTPS (a self-signed certificate is made unless you give --cert and --key)", cfg.https),
         None => cfg.https,
     };
+    if cfg.https && args.acme.is_none() && !args.no_acme && args.cert.is_none() && tty {
+        let d = ask("Domain name for a free Let's Encrypt certificate (port 80 must reach this machine; blank: none)", &cfg.acme_domains);
+        cfg.acme = !d.trim().is_empty();
+        cfg.acme_domains = acme::domains(&d).join(", ");
+        if cfg.acme {
+            cfg.acme_email = ask("Email for Let's Encrypt's notices (optional)", &cfg.acme_email);
+        }
+    }
     cfg.portal = match args.portal {
         Some(p) => p,
         None if tty => yes_no("Turn on the web portal (run the station from a browser)", cfg.portal),
@@ -226,14 +279,42 @@ fn yes_no(prompt: &str, default: bool) -> bool {
     a.to_lowercase().starts_with('y')
 }
 
-/// --cert and --key: a given certificate turns HTTPS on.
+/// --cert and --key (a given certificate turns HTTPS on), Let's Encrypt and the Cloudflare Tunnel.
 fn apply_tls_args(args: &Args, cfg: &mut ServerCfg) {
     if let Some(c) = &args.cert {
         cfg.cert_file = c.clone();
         cfg.https = args.https.unwrap_or(true);
+        cfg.acme = false;
     }
     if let Some(k) = &args.key {
         cfg.key_file = k.clone();
+    }
+    if let Some(d) = &args.acme {
+        cfg.acme_domains = acme::domains(d).join(", ");
+        cfg.acme = !cfg.acme_domains.is_empty();
+        cfg.https = args.https.unwrap_or(true);
+    }
+    if args.no_acme {
+        cfg.acme = false;
+    }
+    if let Some(e) = &args.acme_email {
+        cfg.acme_email = e.trim().to_string();
+    }
+    if args.acme_staging {
+        cfg.acme_staging = true;
+    }
+    if let Some(p) = args.acme_http_port {
+        cfg.acme_http_port = p;
+    }
+    if let Some(t) = args.tunnel {
+        cfg.tunnel = t;
+    }
+    if let Some(t) = &args.tunnel_token {
+        cfg.tunnel_token = t.trim().to_string();
+        cfg.tunnel = args.tunnel.unwrap_or(true);
+    }
+    if let Some(c) = &args.cloudflared {
+        cfg.cloudflared = c.clone();
     }
 }
 
@@ -361,7 +442,9 @@ fn main() {
             let scheme = if l.fingerprint.is_some() { "https" } else { "http" };
             println!("Listening on {scheme}://{} — sign in as '{}' from File → Connect to Server", l.addr, scfg.user);
             if let Some(fp) = &l.fingerprint {
-                if l.self_signed {
+                if scfg.acme_order().is_some() && l.self_signed {
+                    println!("HTTPS: getting a Let's Encrypt certificate for {} (self-signed until then)", scfg.acme_domains);
+                } else if l.self_signed {
                     println!("HTTPS: self-signed certificate. The app asks once whether to trust it; check that it shows");
                     println!("       SHA-256 {fp}");
                 } else {
@@ -370,6 +453,9 @@ fn main() {
             }
             if let Some(p) = l.portal {
                 println!("Web portal: {scheme}://{p} (sign in with the same username and password)");
+            }
+            if scfg.tunnel {
+                println!("Cloudflare Tunnel: starting cloudflared ({})", tunnel::find(&scfg.cloudflared).display());
             }
         }
         Err(e) => {
