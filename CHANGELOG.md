@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.10 — 2026-10-26
+**Fixed**
+- The app froze when connecting to a RadioMaster Server, and when opening a file or folder picker while
+  connected (v0.2.9). Only the app needs this update; servers on v0.2.9 are fine
+
 ## v0.2.9 — 2026-10-26
 **New**
 - Playlist generator: inserts after N songs, every N minutes (on the clock) or at set times, with hour
