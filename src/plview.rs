@@ -142,8 +142,10 @@ impl App {
         if self.view_pl >= core.tabs.len() {
             self.view_pl = core.playing_tab; // first frame, or the viewed tab was closed
         }
-        let strip: Vec<(String, usize, f32)> =
-            (0..core.tabs.len()).map(|i| (core.tabs[i].name.clone(), core.tab_len(i), core.tab_secs(i))).collect();
+        let hovered = self.tab_hovered.take();
+        let strip: Vec<(String, usize, f32)> = (0..core.tabs.len())
+            .map(|i| (core.tabs[i].name.clone(), core.tab_len(i), if hovered == Some(i) { core.tab_secs(i) } else { 0.0 }))
+            .collect();
         let v = self.view_pl;
         let on_air_tab = core.playing_tab;
         core.with_tab(v, |core| self.playlist_view(ctx, core, &strip, on_air_tab));
@@ -266,6 +268,9 @@ impl App {
                     fmt(*secs),
                     if live { " · ON AIR" } else { "" }
                 ));
+                if r.hovered() {
+                    self.tab_hovered = Some(i);
+                }
                 if r.clicked() {
                     self.tab_ops.push(TabOp::View(i));
                 }
@@ -374,7 +379,8 @@ impl App {
                 }
             });
 
-            let starts = core.projected_starts(viewing_on_air);
+            // only the rows drawn are worked out (up to the next hour marker, which may skip them)
+            let mut starts = core.starts(viewing_on_air);
             let mods = ui.input(|i| i.modifiers);
             let view_tab = self.view_pl;
             let avail_w = ui.available_width();
@@ -443,7 +449,7 @@ impl App {
                     let i = row.index();
                     let e = &pl[i];
                     let is_cur = cur == Some(i) && playing && viewing_on_air;
-                    let st = starts.get(i).copied().flatten();
+                    let st = starts.get(i);
                     let skipped = st.is_some_and(|s| s.skipped);
                     let col = row_text_color(e, is_cur, skipped, dark, core.row_missing(e));
                     row.set_selected(sel.contains(&i));

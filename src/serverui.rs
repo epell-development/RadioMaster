@@ -505,7 +505,10 @@ impl App {
         self.anchor = None;
         self.followed = None;
         self.lib_sel.clear();
+        // the other session's library can have the same version number
         self.lib_key = (String::new(), 0);
+        self.lib_lower = (0, vec![]);
+        self.search_hits = ((String::new(), 0), vec![]);
     }
 
     fn server_status_window(&mut self, ctx: &egui::Context, core: &mut Playout) {

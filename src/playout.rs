@@ -196,6 +196,69 @@ pub struct Start {
     pub skipped: bool,
 }
 
+fn span_ms(s: f32) -> CDur {
+    CDur::milliseconds((s.max(0.0) * 1000.0) as i64)
+}
+
+/// See `Playout::starts`.
+pub struct Starts<'a> {
+    p: &'a Playout,
+    out: Vec<Option<Start>>,
+    /// the first row not worked out yet
+    next: usize,
+    /// the first row after the last hour marker
+    since: usize,
+    /// when row `next` starts
+    t: DateTime<Local>,
+}
+
+impl Starts<'_> {
+    /// When row `r` starts. Exact: an hour marker can skip the rows before it, so rows are worked
+    /// out up to the first marker at or after `r`. Rows already worked out are kept, so use one
+    /// `Starts` for all the rows of a frame rather than a new one per row.
+    pub fn get(&mut self, r: usize) -> Option<Start> {
+        self.fill(r);
+        self.out.get(r).copied().flatten()
+    }
+
+    fn fill(&mut self, r: usize) {
+        let pl = &self.p.playlist;
+        let n = pl.len();
+        if n == 0 {
+            return;
+        }
+        let r = r.min(n - 1);
+        if r < self.since && r < self.next {
+            return; // worked out, and the marker after it too
+        }
+        let from = r.max(self.next);
+        let end = (from..n).find(|&i| matches!(pl[i].kind, ItemKind::HourMarker { .. })).unwrap_or(r);
+        while self.next < n && self.next <= end {
+            let i = self.next;
+            if let ItemKind::HourMarker { hour, minute, hard, wait } = pl[i].kind {
+                let target = marker_target(hour, minute, self.t);
+                let late = (self.since..i).find(|&r| self.out[r].is_some_and(|s| s.at > target) && self.p.row_span(&pl[r]) > 0.0);
+                if let Some(r0) = late {
+                    // rows that would start after the marker time are skipped
+                    let resume = if hard { target } else { self.out[r0].unwrap().at };
+                    for s in self.out[r0..i].iter_mut().flatten() {
+                        s.skipped = true;
+                    }
+                    self.t = resume;
+                } else if wait && self.t < target {
+                    self.t = target;
+                }
+                self.out[i] = Some(Start { at: self.t, skipped: false });
+                self.since = i + 1;
+            } else {
+                self.out[i] = Some(Start { at: self.t, skipped: false });
+                self.t += span_ms(self.p.row_span(&pl[i]));
+            }
+            self.next += 1;
+        }
+    }
+}
+
 enum ScanMsg {
     Progress(usize),
     Done(Vec<Track>),
@@ -1245,30 +1308,37 @@ impl Playout {
     /// Approximate air time of every row of the list currently in `playlist`
     /// (`on_air` = it is the list that is playing). Hour markers wait or skip rows.
     pub fn projected_starts(&self, on_air: bool) -> Vec<Option<Start>> {
+        let mut s = self.starts(on_air);
+        s.fill(usize::MAX);
+        s.out
+    }
+
+    /// Start times worked out only as far as they are asked for (`Starts::get`), so drawing the rows
+    /// in view of a long playlist doesn't add up the whole list every frame.
+    pub fn starts(&self, on_air: bool) -> Starts<'_> {
         let n = self.playlist.len();
         let mut out: Vec<Option<Start>> = vec![None; n];
-        if n == 0 {
-            return out;
-        }
         let now = self.now();
-        let ms = |s: f32| CDur::milliseconds((s.max(0.0) * 1000.0) as i64);
+        if n == 0 {
+            return Starts { p: self, out, next: 0, since: 0, t: now };
+        }
         let st = &self.status;
         let live = on_air && matches!(self.state, PlayState::Playing | PlayState::Paused);
         let xf = self.cfg.crossfade_secs;
-        let (first, mut t) = match self.current {
+        let (first, t) = match self.current {
             Some(c) if live && c < n => {
                 if let Some(u) = self.wait_until {
                     out[c] = Some(Start { at: u, skipped: false });
                     (c + 1, u.max(now))
                 } else if st.has_track {
-                    out[c] = Some(Start { at: now - ms(st.pos), skipped: false });
+                    out[c] = Some(Start { at: now - span_ms(st.pos), skipped: false });
                     let next_at = match self.active_cues {
                         Some(cu) => cu.mix - st.pos,
                         None if st.total > 0.0 => st.total - st.pos - xf.min(st.total * 0.5),
                         None => self.playlist[c].est_secs() - st.pos,
                     };
                     let rest: f32 = self.sub_queue.iter().map(|t| self.span_of(t)).sum();
-                    (c + 1, now + ms(next_at + rest))
+                    (c + 1, now + span_ms(next_at + rest))
                 } else {
                     (c + 1, now)
                 }
@@ -1276,29 +1346,7 @@ impl Playout {
             Some(c) if c < n => (c, now), // stopped: Play resumes here
             _ => (0, now),
         };
-        let mut since = first;
-        for i in first..n {
-            if let ItemKind::HourMarker { hour, minute, hard, wait } = self.playlist[i].kind {
-                let target = marker_target(hour, minute, t);
-                let late = (since..i).find(|&r| out[r].is_some_and(|s| s.at > target) && self.row_span(&self.playlist[r]) > 0.0);
-                if let Some(r0) = late {
-                    // rows that would start after the marker time are skipped
-                    let resume = if hard { target } else { out[r0].unwrap().at };
-                    for s in out[r0..i].iter_mut().flatten() {
-                        s.skipped = true;
-                    }
-                    t = resume;
-                } else if wait && t < target {
-                    t = target;
-                }
-                out[i] = Some(Start { at: t, skipped: false });
-                since = i + 1;
-            } else {
-                out[i] = Some(Start { at: t, skipped: false });
-                t += ms(self.row_span(&self.playlist[i]));
-            }
-        }
-        out
+        Starts { p: self, out, next: first, since: first, t }
     }
 
     /// Where a row for time `h:m` belongs: before the first upcoming row that starts at or after it.
@@ -1329,7 +1377,7 @@ impl Playout {
             }
             let Some(st) = starts[i].filter(|s| !s.skipped) else { continue };
             if let Some(p) = prev {
-                let hour_of = |t: DateTime<Local>| t.format("%Y%m%d%H").to_string();
+                let hour_of = |t: DateTime<Local>| (t.date_naive(), chrono::Timelike::hour(&t));
                 if hour_of(p) != hour_of(st.at) {
                     // only one row per hour change, and none right after a manual marker for that hour
                     let manual =
@@ -1419,12 +1467,9 @@ impl Playout {
 
     /// Seconds until the next hour marker in the on-air list (if any).
     pub fn secs_to_next_marker(&self) -> Option<i64> {
-        let starts = self.projected_starts(true);
         let from = self.current.map(|c| c + 1).unwrap_or(0);
-        (from..self.playlist.len())
-            .find(|&i| matches!(self.playlist[i].kind, ItemKind::HourMarker { .. }))
-            .and_then(|i| starts[i])
-            .map(|s| (s.at - self.now()).num_seconds().max(0))
+        let i = (from..self.playlist.len()).find(|&i| matches!(self.playlist[i].kind, ItemKind::HourMarker { .. }))?;
+        self.starts(true).get(i).map(|s| (s.at - self.now()).num_seconds().max(0))
     }
 
     /// Fill in a speech row's text: the time placeholders plus {next}, {next_artist}, {next_title},
@@ -2958,6 +3003,43 @@ mod tests {
         assert!(s[3].unwrap().skipped);
         assert_eq!(s[4].unwrap().at, target);
         assert_eq!(s[5].unwrap().at, target);
+    }
+
+    #[test]
+    fn start_times_worked_out_on_demand_match_the_whole_list() {
+        let mut p = playout();
+        p.cfg.crossfade_secs = 3.0;
+        p.cfg.fade.mode = FadeMode::Fixed;
+        let now = Local::now();
+        let at = |mins: i64| {
+            let m = now + CDur::minutes(mins);
+            marker_target(m.hour(), m.minute(), now)
+        };
+        // soft, hard and waiting markers, some reached late (rows before them skipped), some early
+        p.playlist = vec![];
+        for (k, (mins, hard, wait)) in
+            [(5, false, true), (9, true, true), (40, false, true), (41, true, false), (90, false, false)].into_iter().enumerate()
+        {
+            for j in 0..4 {
+                p.playlist.push(file(&format!("{k}-{j}"), 100.0 + j as f32 * 20.0));
+            }
+            p.playlist.push(marker(at(mins), hard, wait));
+        }
+        p.playlist.push(file("last", 60.0));
+        let full = p.projected_starts(false);
+        assert!(full.iter().flatten().any(|s| s.skipped), "the list has skipped rows to check");
+        let same = |a: Option<Start>, b: Option<Start>| match (a, b) {
+            (Some(a), Some(b)) => a.skipped == b.skipped && (a.at - b.at).num_milliseconds().abs() < 1000,
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        // each row on its own, and rows asked for out of order (scrolled down, then back up)
+        for (r, &want) in full.iter().enumerate() {
+            assert!(same(p.starts(false).get(r), want), "row {r}");
+        }
+        let mut s = p.starts(false);
+        for r in (12..20).chain(0..full.len()).chain(30..40) {
+            assert!(same(s.get(r), full.get(r).copied().flatten()), "row {r} out of order");
+        }
     }
 
     #[test]
