@@ -22,6 +22,19 @@ pub(super) enum DlgKind {
     Event,
 }
 
+/// The Playlist-menu items a scheduler event can insert.
+pub(super) const EVENT_ITEMS: [(DlgKind, &str); 9] = [
+    (DlgKind::TimeAnnounce, "Time announcement"),
+    (DlgKind::Tts, "Text to speech…"),
+    (DlgKind::TrackList, "Track List (a random track from a folder)…"),
+    (DlgKind::Container, "Container…"),
+    (DlgKind::Url, "URL (internet stream)…"),
+    (DlgKind::LineIn, "Line Input…"),
+    (DlgKind::Teaser, "Teaser…"),
+    (DlgKind::Pause, "Timed pause…"),
+    (DlgKind::Command, "Command…"),
+];
+
 impl DlgKind {
     fn title(self) -> &'static str {
         match self {
@@ -47,6 +60,8 @@ pub(super) struct ItemDlg {
     /// row being edited (in `tab`), or None to insert a new one
     pub edit: Option<usize>,
     pub tab: usize,
+    /// the row is for scheduler event `event` (`ActionKind::InsertItem`), not the playlist
+    pub event: Option<usize>,
     pub title: String,
     pub text: String,
     pub mins: u32,
@@ -103,6 +118,7 @@ impl App {
             kind,
             edit: None,
             tab: self.view_pl,
+            event: None,
             title: String::new(),
             text: String::new(),
             mins: if kind == DlgKind::Pause { 0 } else { 5 },
@@ -137,6 +153,39 @@ impl App {
 
     /// Open the dialog for an existing special row so it can be changed.
     pub(super) fn edit_item(&mut self, row: usize, e: &PlEntry) {
+        if let Some(mut d) = self.dlg_for(e) {
+            d.edit = Some(row);
+            self.item_dlg = Some(d);
+        }
+    }
+
+    /// Open the dialog for the row scheduler event `i` inserts: a new one of `kind`, or (None)
+    /// the one it has. A time announcement needs no settings and is set straight away.
+    pub(super) fn edit_event_item(&mut self, core: &mut Playout, i: usize, kind: Option<DlgKind>) {
+        if !self.perm.tool(crate::auth::tool::SCHEDULER) {
+            return;
+        }
+        let d = match kind {
+            Some(DlgKind::TimeAnnounce) => {
+                if let (Some(ev), Ok(row)) = (core.cfg.events.get_mut(i), Self::item_from_dlg(&self.new_item_dlg(DlgKind::TimeAnnounce))) {
+                    ev.item = Some(row);
+                }
+                return;
+            }
+            Some(k) => {
+                self.open_item_dlg(k);
+                self.item_dlg.take()
+            }
+            None => core.cfg.events.get(i).and_then(|e| e.item.as_ref()).and_then(|e| self.dlg_for(e)),
+        };
+        if let Some(mut d) = d {
+            d.event = Some(i);
+            self.item_dlg = Some(d);
+        }
+    }
+
+    /// A dialog filled in from an existing special row (None for audio files).
+    fn dlg_for(&self, e: &PlEntry) -> Option<ItemDlg> {
         let split = |s: f32| ((s.max(0.0) as u32) / 60, (s.max(0.0) as u32) % 60);
         let mut d = match &e.kind {
             ItemKind::Url { url, secs } => {
@@ -203,11 +252,10 @@ impl App {
                 d
             }
             ItemKind::TimeAnnounce => self.new_item_dlg(DlgKind::TimeAnnounce),
-            ItemKind::Track | ItemKind::VoiceTrack => return,
+            ItemKind::Track | ItemKind::VoiceTrack => return None,
         };
         d.title = e.track.title.clone();
-        d.edit = Some(row);
-        self.item_dlg = Some(d);
+        Some(d)
     }
 
     /// Build the playlist row a dialog describes.
@@ -324,12 +372,20 @@ impl App {
 
     pub(super) fn item_dialog_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
         let Some(mut d) = self.item_dlg.take() else { return };
-        if !self.perm.edit_playlists {
-            return; // the dialog closes: this account can't change playlists
+        // a scheduler event's item is the scheduler's to change; any other row is the playlist's
+        let allowed = if d.event.is_some() { self.perm.tool(crate::auth::tool::SCHEDULER) } else { self.perm.edit_playlists };
+        if !allowed {
+            return; // the dialog closes: this account can't change it
         }
         let mut open = true;
         let (mut ok, mut cancel) = (false, false);
-        let title = if d.edit.is_some() { d.kind.title().replace("Add", "Edit") } else { d.kind.title().to_string() };
+        let title = if d.event.is_some() {
+            d.kind.title().replacen("Add ", "Scheduled ", 1)
+        } else if d.edit.is_some() {
+            d.kind.title().replace("Add", "Edit")
+        } else {
+            d.kind.title().to_string()
+        };
         Self::window_for(ctx, &title, [460.0, 300.0]).id(egui::Id::new("item_dlg")).collapsible(false).open(&mut open).show(ctx, |ui| {
             // the fields scroll; OK / Cancel always stay on screen
             let max_h = (ui.ctx().screen_rect().height() - 220.0).max(160.0);
@@ -618,6 +674,12 @@ impl App {
         });
         if ok {
             match Self::item_from_dlg(&d) {
+                Ok(e) if d.event.is_some() => {
+                    if let Some(ev) = d.event.and_then(|i| core.cfg.events.get_mut(i)) {
+                        ev.item = Some(e);
+                    }
+                    return;
+                }
                 Ok(e) => {
                     match d.edit {
                         Some(row) => {

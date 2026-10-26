@@ -13,7 +13,7 @@
 //! tiny overlap so they are not chopped; long fading outros get a longer overlap.
 
 use anyhow::Result;
-use rodio::{source::UniformSourceIterator, Decoder, Source};
+use rodio::{Decoder, Source};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
@@ -43,6 +43,37 @@ impl<I: Iterator<Item = f32>> Iterator for Gentle<I> {
     }
 }
 
+/// Interleaved samples with any number of channels as left/right pairs: mono is doubled, channels
+/// after the first two are left out.
+struct Stereo<I> {
+    inner: I,
+    channels: usize,
+    /// position in the current frame
+    k: usize,
+    /// a mono sample still to be given as the right channel
+    held: Option<f32>,
+}
+
+impl<I: Iterator<Item = f32>> Iterator for Stereo<I> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if let Some(x) = self.held.take() {
+            return Some(x);
+        }
+        if self.channels == 1 {
+            let x = self.inner.next()?;
+            self.held = Some(x);
+            return Some(x);
+        }
+        while self.k >= 2 {
+            self.inner.next()?;
+            self.k = (self.k + 1) % self.channels;
+        }
+        self.k = (self.k + 1) % self.channels;
+        self.inner.next()
+    }
+}
+
 /// Seconds per analysis bin.
 pub const BIN: f32 = 0.02;
 
@@ -62,8 +93,9 @@ impl Waveform {
     /// rests as long as it works, so on a slow PC playback and the window keep a core to themselves.
     pub fn analyze(path: &Path) -> Result<Waveform> {
         let dec = Decoder::new(BufReader::with_capacity(256 * 1024, File::open(path)?))?;
-        let rate = 22_050u32; // half rate is plenty for envelopes and twice as fast
-        let src = UniformSourceIterator::<_, f32>::new(dec.convert_samples::<f32>(), 2, rate);
+        // the file's own rate: envelopes don't need resampling, which cost as much as the decoding
+        let (rate, channels) = (dec.sample_rate().max(1), dec.channels().max(1) as usize);
+        let src = Stereo { inner: dec.convert_samples::<f32>(), channels, k: 0, held: None };
         let gentle = Gentle { inner: src, n: 0, every: rate as usize * 2 * 5, t: Instant::now() };
         Ok(Self::from_interleaved(gentle, rate))
     }
@@ -291,6 +323,14 @@ pub fn detect_level(w: &Waveform, target_db: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_channel_count_becomes_left_right_pairs() {
+        let pairs = |v: Vec<f32>, channels| Stereo { inner: v.into_iter(), channels, k: 0, held: None }.collect::<Vec<_>>();
+        assert_eq!(pairs(vec![1.0, 2.0], 1), vec![1.0, 1.0, 2.0, 2.0]);
+        assert_eq!(pairs(vec![1.0, 2.0, 3.0, 4.0], 2), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(pairs((1..=12).map(|x| x as f32).collect(), 6), vec![1.0, 2.0, 7.0, 8.0]);
+    }
 
     /// Synthetic track: `lead` s silence, `body` s of loud tone, then an outro shaped by `outro(t)`.
     fn synth(lead: f32, body: f32, outro_secs: f32, outro: impl Fn(f32) -> f32, trail: f32) -> Waveform {

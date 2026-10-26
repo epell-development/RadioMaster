@@ -1,6 +1,6 @@
 use crate::azuracast::Client;
 use crate::browser::Browsers;
-use crate::config::{data_dir, CartPad, Category, Marker, PatternItem, ServerKind, Template};
+use crate::config::{data_dir, CartPad, ServerKind};
 use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
@@ -194,6 +194,8 @@ mod controlsui;
 mod equi;
 #[path = "fileui.rs"]
 mod fileui;
+#[path = "genui.rs"]
+mod genui;
 use fileui::{Pick, AUDIO, M3U};
 #[path = "panes.rs"]
 mod panes;
@@ -257,6 +259,9 @@ pub struct App {
     lib_filter: String,
     lib_filtered: Vec<usize>,
     lib_key: (String, u64),
+    /// lower-case "artist\ntitle\nalbum\ngenre" of every library track and where its album ends, made
+    /// once per library version instead of on every keystroke of a search
+    lib_lower: (u64, Vec<(String, usize)>),
     /// Search tab: (search text, library version) and its hits, so the library isn't searched every frame
     search_hits: ((String, u64), Vec<usize>),
     /// selected library tracks (library indexes)
@@ -278,6 +283,7 @@ pub struct App {
     /// playback was paused by the mic (Pause mode) and resumes when it goes off
     mic_paused: bool,
     tpl_sel: usize,
+    gen: genui::GenUi,
     rep: reportui::RepUi,
     /// where ffmpeg was found (None = look again)
     ffmpeg_found: Option<Option<String>>,
@@ -312,6 +318,8 @@ pub struct App {
     icon_tex: Option<egui::TextureHandle>,
     view_pl: usize,
     renaming: Option<(usize, String)>,
+    /// the playlist tab under the mouse: only its total length is added up (for its tooltip)
+    tab_hovered: Option<usize>,
     tab_ops: Vec<plview::TabOp>,
     scroll_to: Option<usize>,
     /// (tab, on-air row) the playlist last scrolled to follow
@@ -450,6 +458,8 @@ pub(super) struct ActionOpts {
     pub rules: Vec<(u64, String)>,
     pub tabs: Vec<String>,
     pub n_enc: usize,
+    /// offer "Insert a playlist item" (scheduler events; playlist event rows can't hold one)
+    pub items: bool,
 }
 
 impl ActionOpts {
@@ -459,6 +469,7 @@ impl ActionOpts {
             rules: core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone())).collect(),
             tabs: core.tabs.iter().map(|t| t.name.clone()).collect(),
             n_enc: core.cfg.encoders.len(),
+            items: false,
         }
     }
 }
@@ -476,7 +487,9 @@ pub(super) fn action_edit(
     let mut browse = false;
     egui::ComboBox::from_id_salt(("act", id)).selected_text(tr(action.label())).width(290.0).height(400.0).show_ui(ui, |ui| {
         for a in ActionKind::ALL {
-            ui.selectable_value(action, a, tr(a.label()));
+            if a != ActionKind::InsertItem || o.items {
+                ui.selectable_value(action, a, tr(a.label()));
+            }
         }
     });
     if action.needs_template() {
@@ -524,10 +537,12 @@ fn action_pick(action: ActionKind) -> Pick {
 }
 
 /// Where generator tracks come from: a category, or the files of an advert / jingle rule
-/// (stored as "rule:<id>"). `rules` = (id, name, adverts).
-fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)]) {
+/// (stored as "rule:<id>"). `rules` = (id, name, adverts). `time` also offers a time announcement
+/// (for inserts).
+fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)], time: bool) {
     let shown = match cur.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) {
         Some(rid) => rules.iter().find(|r| r.0 == rid).map(|r| format!("⚡ {}", r.1)).unwrap_or_else(|| tr("(deleted rule)").to_string()),
+        None if cur == crate::generator::TIME_SOURCE => format!("⏰ {}", tr("Time announcement")),
         None => cur.clone(),
     };
     egui::ComboBox::from_id_salt(id).selected_text(shown).width(170.0).show_ui(ui, |ui| {
@@ -543,7 +558,17 @@ fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, c
                 ui.selectable_value(cur, format!("rule:{rid}"), format!("⚡ {name}  ({tag})"));
             }
         }
+        if time {
+            ui.separator();
+            ui.selectable_value(cur, crate::generator::TIME_SOURCE.to_string(), format!("⏰ {}", tr("Time announcement")));
+        }
     });
+}
+
+/// Something a background thread calls to have the window drawn again.
+fn repainter(ctx: &egui::Context) -> impl Fn() + Send + 'static {
+    let ctx = ctx.clone();
+    move || ctx.request_repaint()
 }
 
 fn host_of(url: &str) -> String {
@@ -600,6 +625,7 @@ impl App {
             lib_filter: String::new(),
             lib_filtered: vec![],
             lib_key: (String::new(), 0),
+            lib_lower: (0, vec![]),
             search_hits: ((String::new(), 0), vec![]),
             lib_sel: BTreeSet::new(),
             lib_anchor: None,
@@ -625,6 +651,7 @@ impl App {
             mic_on: false,
             mic_paused: false,
             tpl_sel: 0,
+            gen: Default::default(),
             rep: Default::default(),
             ffmpeg_found: None,
             ads: Default::default(),
@@ -655,6 +682,7 @@ impl App {
             icon_tex: None,
             view_pl: usize::MAX,
             renaming: None,
+            tab_hovered: None,
             tab_ops: vec![],
             scroll_to: None,
             followed: None,
@@ -1172,7 +1200,7 @@ impl App {
                         ui.close_menu();
                     }
                     if ui.button(tr("Check for updates…")).clicked() {
-                        crate::updater::check(self.updates.clone(), ctx.clone(), true);
+                        crate::updater::check(self.updates.clone(), repainter(ctx), true);
                         self.show_update = true;
                         ui.close_menu();
                     }
@@ -1663,20 +1691,8 @@ impl App {
         }
         let key = (self.lib_filter.to_lowercase(), core.library_ver);
         if key != self.search_hits.0 {
-            let needle = &key.0;
-            let hits = core
-                .library
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| {
-                    t.artist.to_lowercase().contains(needle)
-                        || t.title.to_lowercase().contains(needle)
-                        || t.album.to_lowercase().contains(needle)
-                        || t.genre.to_lowercase().contains(needle)
-                })
-                .take(150)
-                .map(|(i, _)| i)
-                .collect();
+            let needle = key.0.as_str();
+            let hits = self.lib_lower(core).iter().enumerate().filter(|(_, (t, _))| t.contains(needle)).take(150).map(|(i, _)| i).collect();
             self.search_hits = (key, hits);
         }
         let hits = &self.search_hits.1;
@@ -1737,11 +1753,11 @@ impl App {
         ui.label(if on.is_empty() { "Silence / idle".to_string() } else { on });
         ui.separator();
         ui.strong(tr("Projected start times"));
-        let starts = core.projected_starts(true);
+        let mut starts = core.starts(true);
         let next = core.current.map(|n| n + 1).unwrap_or(0);
         for (i, e) in core.playlist.iter().enumerate().skip(next).take(14) {
             ui.horizontal(|ui| {
-                let t = starts.get(i).copied().flatten();
+                let t = starts.get(i);
                 ui.monospace(t.map(|s| s.at.format("%H:%M:%S").to_string()).unwrap_or_else(|| "--:--:--".into()));
                 let mut txt = RichText::new(e.title());
                 if t.is_some_and(|s| s.skipped) {
@@ -2265,6 +2281,23 @@ impl App {
         self.show_profiles = open;
     }
 
+    /// See `lib_lower`.
+    fn lib_lower(&mut self, core: &Playout) -> &[(String, usize)] {
+        if self.lib_lower.0 != core.library_ver {
+            let text = core
+                .library
+                .iter()
+                .map(|t| {
+                    let s = format!("{}\n{}\n{}", t.artist, t.title, t.album).to_lowercase();
+                    let album_end = s.len();
+                    (s + "\n" + &t.genre.to_lowercase(), album_end)
+                })
+                .collect();
+            self.lib_lower = (core.library_ver, text);
+        }
+        &self.lib_lower.1
+    }
+
     /// "Load onto the server": a profile's folders mapped to the server's, then its settings (and
     /// playlists) put on the server.
     fn profile_map_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
@@ -2364,19 +2397,13 @@ impl App {
     pub(super) fn refresh_lib_filter(&mut self, core: &Playout) {
         let key = (self.lib_filter.to_lowercase(), core.library_ver);
         if key != self.lib_key {
-            let f = key.0.clone();
-            self.lib_filtered = core
-                .library
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| {
-                    f.is_empty()
-                        || t.artist.to_lowercase().contains(&f)
-                        || t.title.to_lowercase().contains(&f)
-                        || t.album.to_lowercase().contains(&f)
-                })
-                .map(|(i, _)| i)
-                .collect();
+            // typing more letters only narrows the tracks already shown
+            let narrow = key.1 == self.lib_key.1 && key.0.contains(self.lib_key.0.as_str());
+            let shown = std::mem::take(&mut self.lib_filtered);
+            let f = key.0.as_str();
+            let text = self.lib_lower(core);
+            let hit = |&i: &usize| f.is_empty() || text[i].0[..text[i].1].contains(f);
+            self.lib_filtered = if narrow { shown.into_iter().filter(hit).collect() } else { (0..text.len()).filter(hit).collect() };
             self.lib_key = key;
         }
     }
@@ -2616,13 +2643,25 @@ impl App {
     }
 
     fn tab_scheduler(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button(tr("➕ Add event")).clicked() {
                 core.cfg.events.push(Event::default());
             }
+            if ui.button(tr("➕ Hourly time announcement")).on_hover_text(tr("Every hour on the hour, after the song that's playing")).clicked() {
+                core.cfg.events.push(Event {
+                    name: tr("Time announcement").to_string(),
+                    hour: 0,
+                    minute: 0,
+                    repeat_mins: 60,
+                    until: (23, 59),
+                    action: ActionKind::InsertItem,
+                    item: Some(crate::items::PlEntry::special(crate::items::ItemKind::TimeAnnounce, "", 4.0)),
+                    ..Default::default()
+                });
+            }
             ui.label(
                 RichText::new(tr(
-                    "Things that happen at a set time: a new playlist from a template, adverts, a playlist going on air, encoders, volume…",
+                    "Things that happen at a set time, or again and again: a time announcement or any other playlist item, a new playlist from a template, adverts, a playlist going on air, encoders, volume…",
                 ))
                 .small()
                 .color(GRAY),
@@ -2631,7 +2670,10 @@ impl App {
         ui.add_space(4.0);
         let mut del = None;
         let mut run_now = None;
-        let opts = ActionOpts::of(core);
+        let mut dup = None;
+        let mut item_edit: Option<(usize, Option<pltools::DlgKind>)> = None;
+        let mut opts = ActionOpts::of(core);
+        opts.items = true;
         let now = core.now();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if core.cfg.events.is_empty() {
@@ -2644,15 +2686,47 @@ impl App {
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut e.enabled, "");
                         ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(170.0));
-                        ui.label(tr("at"));
+                        ui.label(if e.repeat_mins == 0 { tr("at") } else { tr("from") });
                         ui.add(egui::DragValue::new(&mut e.hour).range(0..=23).custom_formatter(|v, _| format!("{:02}", v as u32)));
                         ui.label(":");
                         ui.add(egui::DragValue::new(&mut e.minute).range(0..=59).custom_formatter(|v, _| format!("{:02}", v as u32)));
                         if ui.button(tr("▶ Run now")).on_hover_text(tr("Do it now, as a test")).clicked() {
                             run_now = Some(i);
                         }
+                        if ui.button(tr("Duplicate")).on_hover_text(tr("A copy of this event to change")).clicked() {
+                            dup = Some(i);
+                        }
                         if delete_button(ui, ("event", i), tr("this event")) {
                             del = Some(i);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let mut repeat = e.repeat_mins > 0;
+                        if ui.checkbox(&mut repeat, tr("Repeat every")).changed() {
+                            e.repeat_mins = if repeat { 60 } else { 0 };
+                        }
+                        if repeat {
+                            let hours = e.repeat_mins.is_multiple_of(60);
+                            if hours {
+                                let mut h = (e.repeat_mins / 60).max(1);
+                                if ui.add(egui::DragValue::new(&mut h).range(1..=23)).changed() {
+                                    e.repeat_mins = h * 60;
+                                }
+                            } else {
+                                ui.add(egui::DragValue::new(&mut e.repeat_mins).range(1..=1439));
+                            }
+                            let mut unit_hours = hours;
+                            if ui.selectable_value(&mut unit_hours, false, tr("minutes")).clicked() && hours {
+                                e.repeat_mins = 30;
+                            }
+                            if ui.selectable_value(&mut unit_hours, true, tr("hours")).clicked() && !hours {
+                                e.repeat_mins = 60;
+                            }
+                            ui.label(tr("until"));
+                            ui.add(egui::DragValue::new(&mut e.until.0).range(0..=23).custom_formatter(|v, _| format!("{:02}", v as u32)));
+                            ui.label(":");
+                            ui.add(egui::DragValue::new(&mut e.until.1).range(0..=59).custom_formatter(|v, _| format!("{:02}", v as u32)));
+                            ui.label(RichText::new(e.when_text()).small().color(GRAY));
                         }
                     });
                     adsui::days_edit(ui, &mut e.days);
@@ -2661,10 +2735,7 @@ impl App {
                         date_edit(ui, ("ev_from", i), &mut e.from_date, true);
                         ui.label(tr("to"));
                         date_edit(ui, ("ev_to", i), &mut e.to_date, true);
-                        let mut probe = e.clone();
-                        probe.hour = now.hour();
-                        probe.minute = now.minute();
-                        if e.enabled && !probe.due(&now) {
+                        if e.enabled && !e.on_day(&now) {
                             ui.label(RichText::new(tr("○ not today")).small().color(AMBER));
                         }
                     });
@@ -2674,13 +2745,49 @@ impl App {
                             let a = e.action;
                             self.pick(action_pick(a), tr("Choose a file"), move |_, v| Some(Dlg::SchedPath(i, v.into_iter().next()?)));
                         }
+                        if e.action == ActionKind::InsertItem {
+                            let shown = match &e.item {
+                                Some(it) if it.title().contains(tr(it.type_label())) => it.title(),
+                                Some(it) => format!("{} · {}", tr(it.type_label()), it.title()),
+                                None => tr("pick an item").to_string(),
+                            };
+                            egui::ComboBox::from_id_salt(("ev_item", i)).selected_text(shown).width(240.0).height(400.0).show_ui(
+                                ui,
+                                |ui| {
+                                    for (k, label) in pltools::EVENT_ITEMS {
+                                        if ui.selectable_label(false, tr(label)).clicked() {
+                                            item_edit = Some((i, Some(k)));
+                                        }
+                                    }
+                                },
+                            );
+                            if e.item.as_ref().is_some_and(|it| !matches!(it.kind, crate::items::ItemKind::TimeAnnounce))
+                                && ui.button(tr("✏ Edit…")).clicked()
+                            {
+                                item_edit = Some((i, None));
+                            }
+                        }
                     });
+                    if e.action == ActionKind::InsertItem {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.radio_value(&mut e.play_now, false, tr("after the track on air"));
+                            ui.radio_value(&mut e.play_now, true, tr("now (the track on air moves on)"));
+                        });
+                    }
                 });
             }
         });
+        if let Some((i, kind)) = item_edit {
+            self.edit_event_item(core, i, kind);
+        }
         if let Some(i) = run_now {
             let e = core.cfg.events[i].clone();
             core.run_event(&e);
+        }
+        if let Some(i) = dup {
+            let mut e = core.cfg.events[i].clone();
+            e.name = format!("{} (copy)", e.name);
+            core.cfg.events.push(e);
         }
         if let Some(i) = del {
             core.cfg.events.remove(i);
@@ -3204,151 +3311,6 @@ impl App {
         });
     }
 
-    fn tab_generator(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        let cat_names: Vec<String> = core.cfg.categories.iter().map(|c| c.name.clone()).collect();
-        let tpl_names: Vec<String> = core.cfg.templates.iter().map(|t| t.name.clone()).collect();
-        let rules: Vec<(u64, String, bool)> = core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone(), r.adverts)).collect();
-        let first_jingle = rules.iter().find(|r| !r.2).map(|r| format!("rule:{}", r.0));
-        let mut gen: Option<(String, bool)> = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.strong(tr("Auto-playlist"));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut core.cfg.auto_enabled, tr("Keep the playlist filled automatically"));
-                ui.label(tr("using"));
-                name_combo(ui, "autotpl", &mut core.cfg.auto_template, &tpl_names);
-                ui.label(tr("when under"));
-                ui.add(egui::DragValue::new(&mut core.cfg.auto_min_mins).range(1..=600).suffix(" min left"));
-            });
-            ui.separator();
-            ui.strong(tr("Categories  (what each pool of tracks is made from)"));
-            let mut del = None;
-            for i in 0..core.cfg.categories.len() {
-                let c = &mut core.cfg.categories[i];
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(100.0));
-                    ui.label(tr("folder"));
-                    ui.add(egui::TextEdit::singleline(&mut c.folder).desired_width(260.0).hint_text(tr("any")));
-                    if ui.button("…").clicked() {
-                        self.pick(Pick::Folder, tr("Category folder"), move |_, v| Some(Dlg::CatFolder(i, v.into_iter().next()?)));
-                    }
-                    ui.label(tr("genre"));
-                    ui.add(egui::TextEdit::singleline(&mut c.genre).desired_width(90.0).hint_text(tr("any")));
-                    ui.label(tr("length"));
-                    ui.add(egui::DragValue::new(&mut c.min_secs).range(0.0..=3600.0).suffix("s"));
-                    ui.label("–");
-                    ui.add(egui::DragValue::new(&mut c.max_secs).range(0.0..=7200.0).suffix("s"));
-                    if delete_button(ui, ("category", i), tr("this category")) {
-                        del = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = del {
-                core.cfg.categories.remove(i);
-            }
-            if ui.button(tr("➕ Add category")).clicked() {
-                core.cfg.categories.push(Category { name: format!("Category {}", core.cfg.categories.len() + 1), ..Default::default() });
-            }
-            ui.separator();
-            ui.strong(tr("Templates"));
-            ui.horizontal(|ui| {
-                for (i, n) in tpl_names.iter().enumerate() {
-                    ui.selectable_value(&mut self.tpl_sel, i, n);
-                }
-                if ui.button(tr("➕ New")).clicked() {
-                    core.cfg.templates.push(Template { name: format!("Template {}", core.cfg.templates.len() + 1), ..Default::default() });
-                    self.tpl_sel = core.cfg.templates.len() - 1;
-                }
-            });
-            if self.tpl_sel >= core.cfg.templates.len() {
-                self.tpl_sel = core.cfg.templates.len().saturating_sub(1);
-            }
-            let mut del_tpl = false;
-            if let Some(t) = core.cfg.templates.get_mut(self.tpl_sel) {
-                ui.horizontal(|ui| {
-                    ui.label(tr("Name"));
-                    ui.add(egui::TextEdit::singleline(&mut t.name).desired_width(140.0));
-                    ui.label(tr("Length"));
-                    ui.add(egui::DragValue::new(&mut t.minutes).range(5..=1440).suffix(" min"));
-                    ui.label(tr("Artist separation"));
-                    ui.add(egui::DragValue::new(&mut t.artist_gap).range(0..=50).suffix(" tracks"));
-                });
-                ui.label(RichText::new(tr("Pattern (repeats until the length is reached):")).color(GRAY));
-                let mut pdel = None;
-                for (k, p) in t.pattern.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}.", k + 1));
-                        ui.add(egui::DragValue::new(&mut p.count).range(1..=20).suffix(" ×"));
-                        source_combo(ui, ("pat", k), &mut p.category, &cat_names, &rules);
-                        if ui.small_button("✖").clicked() {
-                            pdel = Some(k);
-                        }
-                    });
-                }
-                if let Some(k) = pdel {
-                    t.pattern.remove(k);
-                }
-                if ui.button(tr("➕ Add pattern step")).clicked() {
-                    t.pattern.push(PatternItem::default());
-                }
-                ui.label(
-                    RichText::new(tr("Jingles, adverts and other inserts by time (counted along the generated running order):"))
-                        .color(GRAY),
-                );
-                let mut mdel = None;
-                for (k, m) in t.markers.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(tr("every"));
-                        ui.add(egui::DragValue::new(&mut m.every_mins).range(1..=600).suffix(" min"));
-                        ui.label(tr("insert"));
-                        ui.add(egui::DragValue::new(&mut m.count).range(1..=10).suffix(" ×"));
-                        ui.label(tr("from"));
-                        source_combo(ui, ("mk", k), &mut m.category, &cat_names, &rules);
-                        if ui.small_button("✖").clicked() {
-                            mdel = Some(k);
-                        }
-                    });
-                }
-                if let Some(k) = mdel {
-                    t.markers.remove(k);
-                }
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(first_jingle.is_some(), egui::Button::new(tr("➕ Add jingles")))
-                        .on_hover_text(tr("Uses the files of a jingle rule (Advertisement scheduler) every 15 minutes"))
-                        .on_disabled_hover_text(tr("Make a jingle rule in the Advertisement scheduler first, or add a Jingles category"))
-                        .clicked()
-                    {
-                        t.markers.push(Marker { category: first_jingle.clone().unwrap_or_default(), every_mins: 15, count: 1 });
-                    }
-                    if ui.button(tr("➕ Add insert")).clicked() {
-                        t.markers.push(Marker::default());
-                    }
-                    ui.checkbox(&mut t.hour_markers, tr("Hour marker at the top of every hour"));
-                });
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new(tr("▶ Generate (replace playlist)")).color(GREEN)).clicked() {
-                        gen = Some((t.name.clone(), false));
-                    }
-                    if ui.button(tr("Append to playlist")).clicked() {
-                        gen = Some((t.name.clone(), true));
-                    }
-                    if delete_button(ui, ("template", self.tpl_sel), tr("this template")) {
-                        del_tpl = true;
-                    }
-                });
-            }
-            if del_tpl {
-                core.cfg.templates.remove(self.tpl_sel);
-            }
-        });
-        if let Some((n, append)) = gen {
-            let c = core.generate_playlist(&n, append);
-            if c > 0 {
-                core.say(format!("Generated {c} tracks from '{n}'"));
-            }
-        }
-    }
-
     fn tab_plugins(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.label(tr("Plugins are small programs, in any language, that RadioMaster runs when something happens on air — a song starts, the hour changes, an encoder drops. They can also send station commands back."));
         ui.horizontal_wrapped(|ui| {
@@ -3562,7 +3524,7 @@ impl App {
             }
         });
         if start_download {
-            crate::updater::download(self.updates.clone(), ctx.clone());
+            crate::updater::download(self.updates.clone(), repainter(ctx));
         }
         if let Some(p) = install {
             match crate::updater::run_installer(&p) {
@@ -3756,7 +3718,7 @@ impl eframe::App for App {
         if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
             // at start-up, then every 6 hours for stations that run for weeks
             self.update_next = Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
-            crate::updater::check(self.updates.clone(), ctx.clone(), false);
+            crate::updater::check(self.updates.clone(), repainter(ctx), false);
         }
         self.update_window(ctx, &mut core);
         self.apply_tab_ops(&mut core);

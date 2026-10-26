@@ -2,19 +2,39 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#0e1724">
 <title>RadioMaster Web Portal</title>
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/portal.css">
 <script src="/portal.js" defer></script>
 </head>
-<body>
+<body class="boot">
+<div class="top">
 <header>
-  <div class="brand"><span class="lamp" id="lamp"></span><span>RadioMaster</span> <span class="muted" id="station"></span></div>
+  <div class="brand">
+    <img src="/favicon.png" alt="" width="24" height="24">
+    <span class="lamp" id="lamp"></span><span>RadioMaster</span> <span class="muted" id="station"></span>
+  </div>
   <button id="signout" class="ghost" hidden>Sign out</button>
 </header>
 
+<nav id="nav" hidden aria-label="Sections">
+  <button data-view="studio"><span class="ic">📻</span><span>Studio</span></button>
+  <button data-view="library"><span class="ic">🎵</span><span>Library</span></button>
+  <button data-view="carts"><span class="ic">▦</span><span>Carts</span></button>
+  <button data-view="generator"><span class="ic">⚙</span><span>Generator</span></button>
+  <button data-view="ads"><span class="ic">📢</span><span>Adverts</span></button>
+  <button data-view="azuracast"><span class="ic">☁</span><span>AzuraCast</span></button>
+  <button data-view="log"><span class="ic">☰</span><span>Log</span></button>
+</nav>
+</div>
+
 <main>
+  <div id="update" class="banner" hidden></div>
+
   <section id="login" class="card narrow">
     <h1>Sign in</h1>
     <p class="muted">Use the username and password set up on RadioMaster Server.</p>
@@ -26,52 +46,179 @@
     </form>
   </section>
 
-  <div id="desk" hidden>
-    <section class="card onair">
-      <div class="row between">
-        <span class="badge" id="state">stopped</span>
-        <span class="muted" id="wait"></span>
-      </div>
-      <div class="title" id="title">Nothing playing</div>
-      <div class="bar"><div id="progress"></div></div>
-      <div class="row between mono"><span id="pos">0:00</span><span id="remain">0:00</span></div>
-      <div class="meters"><div id="vul"></div><div id="vur"></div></div>
-      <div class="controls">
-        <button data-cmd="prev" title="Previous">⏮</button>
-        <button data-cmd="play" class="primary" title="Play">▶</button>
-        <button data-cmd="pause" title="Pause / resume">⏸</button>
-        <button data-cmd="stop" title="Stop">⏹</button>
-        <button data-cmd="next" title="Next">⏭</button>
-      </div>
-      <label class="row volume">Volume <input type="range" id="volume" min="0" max="1" step="0.01"></label>
-      <p class="muted small" id="notify"></p>
-    </section>
+  <div id="views" hidden>
+    <div class="view grid2" data-view="studio">
+      <section class="card onair">
+        <div class="row between">
+          <span class="badge" id="state">stopped</span>
+          <span class="muted" id="wait"></span>
+        </div>
+        <div class="title" id="title">Nothing playing</div>
+        <div class="bar"><div id="progress"></div></div>
+        <div class="row between mono"><span id="pos">0:00</span><span id="remain">0:00</span></div>
+        <div class="meters"><div id="vul"></div><div id="vur"></div></div>
+        <div class="controls">
+          <button data-cmd="prev" title="Previous" aria-label="Previous">⏮</button>
+          <button data-cmd="play" class="primary" title="Play" aria-label="Play">▶</button>
+          <button data-cmd="pause" title="Pause / resume" aria-label="Pause or resume">⏸</button>
+          <button data-cmd="stop" title="Stop" aria-label="Stop">⏹</button>
+          <button data-cmd="next" title="Next" aria-label="Next">⏭</button>
+        </div>
+        <label class="row volume">Volume <input type="range" id="volume" min="0" max="1" step="0.01"></label>
+        <p class="muted small" id="notify"></p>
+      </section>
 
-    <section class="card playlist">
-      <div class="row between">
-        <h2>Playlist</h2>
-        <select id="tab" aria-label="Playlist tab"></select>
-      </div>
-      <p class="muted small">Double-click a row (or tap ▶) to play it now.</p>
-      <ol id="rows"></ol>
-    </section>
+      <section class="card playlist">
+        <div class="row between wrap">
+          <h2>Playlist</h2>
+          <div class="row">
+            <select id="tab" aria-label="Playlist tab"></select>
+            <button id="toLibrary" title="Add songs from the library">＋ Add</button>
+          </div>
+        </div>
+        <p class="muted small">Double-click a row (or tap ▶) to play it now.</p>
+        <ol id="rows" class="rows"></ol>
+      </section>
 
-    <section class="card">
-      <h2>Streams</h2>
-      <ul id="encoders" class="plain"></ul>
-    </section>
+      <section class="card">
+        <h2>Streams</h2>
+        <ul id="encoders" class="plain"></ul>
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>Recently played</h2>
-      <ul id="history" class="plain small"></ul>
-    </section>
+    <div class="view" data-view="library">
+      <section class="card">
+        <div class="row between wrap">
+          <h2>Library</h2>
+          <div class="row wrap">
+            <label class="row inline">Add to <select id="libTab" aria-label="Playlist to add to"></select></label>
+            <button id="rescan" title="Look for new and changed files in the library folders">Rescan</button>
+          </div>
+        </div>
+        <div class="row wrap">
+          <input id="libSearch" type="search" placeholder="Search artist, title, album, genre or file" aria-label="Search the library">
+          <select id="libFolder" aria-label="Folder"></select>
+        </div>
+        <p class="muted small" id="libInfo"></p>
+        <ol id="libRows" class="rows"></ol>
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>Station log</h2>
-      <ul id="log" class="plain small mono"></ul>
-    </section>
+    <div class="view" data-view="carts">
+      <section class="card">
+        <div class="row between wrap">
+          <h2>Cart wall</h2>
+          <div class="row">
+            <button id="cartEdit" aria-pressed="false">Edit pads</button>
+            <button id="cartStop" class="danger">Stop all</button>
+          </div>
+        </div>
+        <p class="muted small" id="cartHint">Tap a pad to play it on air.</p>
+        <div id="carts" class="carts"></div>
+      </section>
+    </div>
+
+    <div class="view grid2" data-view="generator">
+      <section class="card">
+        <h2>Make a playlist</h2>
+        <label>Template <select id="genTemplate"></select></label>
+        <label>Into <select id="genTab"></select></label>
+        <div class="row wrap">
+          <label class="row inline"><input type="radio" name="genMode" value="append" checked> Add to the end</label>
+          <label class="row inline"><input type="radio" name="genMode" value="replace"> Replace what's there</label>
+        </div>
+        <button id="genRun" class="primary">Generate</button>
+      </section>
+      <section class="card">
+        <h2>Keep the playlist filled</h2>
+        <label class="row inline"><input type="checkbox" id="autoOn"> Generate more when the on-air playlist runs low</label>
+        <label>Template <select id="autoTemplate"></select></label>
+        <label>When less than this many minutes are left <input type="number" id="autoMins" min="1" max="1440"></label>
+        <button id="autoSave">Save</button>
+      </section>
+      <section class="card">
+        <div class="row between"><h2>Templates</h2><button id="tplAdd">＋ New</button></div>
+        <ul id="templates" class="plain items"></ul>
+      </section>
+      <section class="card">
+        <div class="row between"><h2>Categories</h2><button id="catAdd">＋ New</button></div>
+        <p class="muted small">Folders are on the server, as it sees them.</p>
+        <ul id="categories" class="plain items"></ul>
+      </section>
+    </div>
+
+    <div class="view" data-view="ads">
+      <section class="card">
+        <div class="row between wrap">
+          <h2>Advert and jingle rules</h2>
+          <button id="ruleAdd">＋ New rule</button>
+        </div>
+        <p class="muted small">Rules put adverts and jingles into the on-air playlist after a number of songs, every so many minutes, or at set times.</p>
+        <ul id="rules" class="plain items"></ul>
+      </section>
+    </div>
+
+    <div class="view grid2" data-view="azuracast">
+      <section class="card">
+        <div class="row between"><h2>Station</h2><button id="azRefresh">Refresh</button></div>
+        <div id="azStatus" class="muted">Not loaded yet.</div>
+        <div class="controls wrap" id="azControls">
+          <button data-az="POST /station/{st}/backend/skip">Skip song</button>
+          <button data-az="POST /station/{st}/restart" data-confirm="Restart the whole station? Listeners are cut off for a moment.">Restart station</button>
+        </div>
+        <div class="row wrap small">
+          <span class="muted">Broadcasting:</span>
+          <button data-az="POST /station/{st}/frontend/start">Start</button>
+          <button data-az="POST /station/{st}/frontend/stop" data-confirm="Stop the station's broadcast server?">Stop</button>
+          <button data-az="POST /station/{st}/frontend/restart">Restart</button>
+        </div>
+        <div class="row wrap small">
+          <span class="muted">AutoDJ:</span>
+          <button data-az="POST /station/{st}/backend/start">Start</button>
+          <button data-az="POST /station/{st}/backend/stop" data-confirm="Stop the AutoDJ?">Stop</button>
+          <button data-az="POST /station/{st}/backend/restart">Restart</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2>AzuraCast playlists</h2>
+        <ul id="azPlaylists" class="plain items"></ul>
+      </section>
+      <section class="card">
+        <h2>Connection</h2>
+        <form id="azForm">
+          <label>AzuraCast address <input id="azUrl" placeholder="https://radio.example.com" autocomplete="off"></label>
+          <label>Station (short name or number) <input id="azStation" autocomplete="off"></label>
+          <label>API key <input id="azKey" type="password" autocomplete="off"></label>
+          <label class="row inline"><input type="checkbox" id="azOn"> Show now playing from AzuraCast in RadioMaster</label>
+          <button type="submit">Save</button>
+        </form>
+      </section>
+    </div>
+
+    <div class="view grid2" data-view="log">
+      <section class="card">
+        <h2>Recently played</h2>
+        <ul id="history" class="plain small tall"></ul>
+      </section>
+      <section class="card">
+        <h2>Station log</h2>
+        <ul id="log" class="plain small mono tall"></ul>
+      </section>
+    </div>
   </div>
   <p class="error center" id="neterr"></p>
 </main>
+
+<dialog id="dlg">
+  <form method="dialog" id="dlgForm">
+    <h2 id="dlgTitle"></h2>
+    <div id="dlgBody"></div>
+    <div class="row end">
+      <button value="cancel" formnovalidate class="ghost">Cancel</button>
+      <button value="ok" class="primary" id="dlgOk">Save</button>
+    </div>
+  </form>
+</dialog>
+<div id="toast" role="status" hidden></div>
 </body>
 </html>

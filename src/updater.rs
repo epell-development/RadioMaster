@@ -83,8 +83,8 @@ fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(60)).build()
 }
 
-/// Check GitHub in the background.
-pub fn check(state: Shared, ctx: eframe::egui::Context, manual: bool) {
+/// Check GitHub in the background; `repaint` is called when the answer is in.
+pub fn check(state: Shared, repaint: impl Fn() + Send + 'static, manual: bool) {
     {
         let mut s = state.lock();
         if matches!(s.phase, Phase::Checking | Phase::Downloading { .. }) {
@@ -131,12 +131,12 @@ pub fn check(state: Shared, ctx: eframe::egui::Context, manual: bool) {
             Err(e) => s.phase = Phase::Failed(e),
         }
         drop(s);
-        ctx.request_repaint();
+        repaint();
     });
 }
 
 /// Download the installer to the temp folder, reporting progress.
-pub fn download(state: Shared, ctx: eframe::egui::Context) {
+pub fn download(state: Shared, repaint: impl Fn() + Send + 'static) {
     let Some((url, size)) = state.lock().available.as_ref().and_then(|a| a.installer.clone()) else { return };
     let version = state.lock().available.as_ref().map(|a| a.version.clone()).unwrap_or_default();
     state.lock().phase = Phase::Downloading { done: 0, total: size };
@@ -154,7 +154,7 @@ pub fn download(state: Shared, ctx: eframe::egui::Context) {
                 }
                 data.extend_from_slice(&buf[..n]);
                 state.lock().phase = Phase::Downloading { done: data.len() as u64, total };
-                ctx.request_repaint();
+                repaint();
             }
             if data.len() < 1024 * 100 || &data[..2] != b"MZ" {
                 return Err("the download doesn't look like a Windows installer".into());
@@ -167,7 +167,7 @@ pub fn download(state: Shared, ctx: eframe::egui::Context) {
             Ok(p) => Phase::Ready(p),
             Err(e) => Phase::Failed(format!("Download failed: {e}")),
         };
-        ctx.request_repaint();
+        repaint();
     });
 }
 

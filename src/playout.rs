@@ -196,6 +196,69 @@ pub struct Start {
     pub skipped: bool,
 }
 
+fn span_ms(s: f32) -> CDur {
+    CDur::milliseconds((s.max(0.0) * 1000.0) as i64)
+}
+
+/// See `Playout::starts`.
+pub struct Starts<'a> {
+    p: &'a Playout,
+    out: Vec<Option<Start>>,
+    /// the first row not worked out yet
+    next: usize,
+    /// the first row after the last hour marker
+    since: usize,
+    /// when row `next` starts
+    t: DateTime<Local>,
+}
+
+impl Starts<'_> {
+    /// When row `r` starts. Exact: an hour marker can skip the rows before it, so rows are worked
+    /// out up to the first marker at or after `r`. Rows already worked out are kept, so use one
+    /// `Starts` for all the rows of a frame rather than a new one per row.
+    pub fn get(&mut self, r: usize) -> Option<Start> {
+        self.fill(r);
+        self.out.get(r).copied().flatten()
+    }
+
+    fn fill(&mut self, r: usize) {
+        let pl = &self.p.playlist;
+        let n = pl.len();
+        if n == 0 {
+            return;
+        }
+        let r = r.min(n - 1);
+        if r < self.since && r < self.next {
+            return; // worked out, and the marker after it too
+        }
+        let from = r.max(self.next);
+        let end = (from..n).find(|&i| matches!(pl[i].kind, ItemKind::HourMarker { .. })).unwrap_or(r);
+        while self.next < n && self.next <= end {
+            let i = self.next;
+            if let ItemKind::HourMarker { hour, minute, hard, wait } = pl[i].kind {
+                let target = marker_target(hour, minute, self.t);
+                let late = (self.since..i).find(|&r| self.out[r].is_some_and(|s| s.at > target) && self.p.row_span(&pl[r]) > 0.0);
+                if let Some(r0) = late {
+                    // rows that would start after the marker time are skipped
+                    let resume = if hard { target } else { self.out[r0].unwrap().at };
+                    for s in self.out[r0..i].iter_mut().flatten() {
+                        s.skipped = true;
+                    }
+                    self.t = resume;
+                } else if wait && self.t < target {
+                    self.t = target;
+                }
+                self.out[i] = Some(Start { at: self.t, skipped: false });
+                self.since = i + 1;
+            } else {
+                self.out[i] = Some(Start { at: self.t, skipped: false });
+                self.t += span_ms(self.p.row_span(&pl[i]));
+            }
+            self.next += 1;
+        }
+    }
+}
+
 enum ScanMsg {
     Progress(usize),
     Done(Vec<Track>),
@@ -1246,30 +1309,37 @@ impl Playout {
     /// Approximate air time of every row of the list currently in `playlist`
     /// (`on_air` = it is the list that is playing). Hour markers wait or skip rows.
     pub fn projected_starts(&self, on_air: bool) -> Vec<Option<Start>> {
+        let mut s = self.starts(on_air);
+        s.fill(usize::MAX);
+        s.out
+    }
+
+    /// Start times worked out only as far as they are asked for (`Starts::get`), so drawing the rows
+    /// in view of a long playlist doesn't add up the whole list every frame.
+    pub fn starts(&self, on_air: bool) -> Starts<'_> {
         let n = self.playlist.len();
         let mut out: Vec<Option<Start>> = vec![None; n];
-        if n == 0 {
-            return out;
-        }
         let now = self.now();
-        let ms = |s: f32| CDur::milliseconds((s.max(0.0) * 1000.0) as i64);
+        if n == 0 {
+            return Starts { p: self, out, next: 0, since: 0, t: now };
+        }
         let st = &self.status;
         let live = on_air && matches!(self.state, PlayState::Playing | PlayState::Paused);
         let xf = self.cfg.crossfade_secs;
-        let (first, mut t) = match self.current {
+        let (first, t) = match self.current {
             Some(c) if live && c < n => {
                 if let Some(u) = self.wait_until {
                     out[c] = Some(Start { at: u, skipped: false });
                     (c + 1, u.max(now))
                 } else if st.has_track {
-                    out[c] = Some(Start { at: now - ms(st.pos), skipped: false });
+                    out[c] = Some(Start { at: now - span_ms(st.pos), skipped: false });
                     let next_at = match self.active_cues {
                         Some(cu) => cu.mix - st.pos,
                         None if st.total > 0.0 => st.total - st.pos - xf.min(st.total * 0.5),
                         None => self.playlist[c].est_secs() - st.pos,
                     };
                     let rest: f32 = self.sub_queue.iter().map(|t| self.span_of(t)).sum();
-                    (c + 1, now + ms(next_at + rest))
+                    (c + 1, now + span_ms(next_at + rest))
                 } else {
                     (c + 1, now)
                 }
@@ -1277,29 +1347,7 @@ impl Playout {
             Some(c) if c < n => (c, now), // stopped: Play resumes here
             _ => (0, now),
         };
-        let mut since = first;
-        for i in first..n {
-            if let ItemKind::HourMarker { hour, minute, hard, wait } = self.playlist[i].kind {
-                let target = marker_target(hour, minute, t);
-                let late = (since..i).find(|&r| out[r].is_some_and(|s| s.at > target) && self.row_span(&self.playlist[r]) > 0.0);
-                if let Some(r0) = late {
-                    // rows that would start after the marker time are skipped
-                    let resume = if hard { target } else { out[r0].unwrap().at };
-                    for s in out[r0..i].iter_mut().flatten() {
-                        s.skipped = true;
-                    }
-                    t = resume;
-                } else if wait && t < target {
-                    t = target;
-                }
-                out[i] = Some(Start { at: t, skipped: false });
-                since = i + 1;
-            } else {
-                out[i] = Some(Start { at: t, skipped: false });
-                t += ms(self.row_span(&self.playlist[i]));
-            }
-        }
-        out
+        Starts { p: self, out, next: first, since: first, t }
     }
 
     /// Where a row for time `h:m` belongs: before the first upcoming row that starts at or after it.
@@ -1330,7 +1378,7 @@ impl Playout {
             }
             let Some(st) = starts[i].filter(|s| !s.skipped) else { continue };
             if let Some(p) = prev {
-                let hour_of = |t: DateTime<Local>| t.format("%Y%m%d%H").to_string();
+                let hour_of = |t: DateTime<Local>| (t.date_naive(), chrono::Timelike::hour(&t));
                 if hour_of(p) != hour_of(st.at) {
                     // only one row per hour change, and none right after a manual marker for that hour
                     let manual =
@@ -1420,12 +1468,9 @@ impl Playout {
 
     /// Seconds until the next hour marker in the on-air list (if any).
     pub fn secs_to_next_marker(&self) -> Option<i64> {
-        let starts = self.projected_starts(true);
         let from = self.current.map(|c| c + 1).unwrap_or(0);
-        (from..self.playlist.len())
-            .find(|&i| matches!(self.playlist[i].kind, ItemKind::HourMarker { .. }))
-            .and_then(|i| starts[i])
-            .map(|s| (s.at - self.now()).num_seconds().max(0))
+        let i = (from..self.playlist.len()).find(|&i| matches!(self.playlist[i].kind, ItemKind::HourMarker { .. }))?;
+        self.starts(true).get(i).map(|s| (s.at - self.now()).num_seconds().max(0))
     }
 
     /// Fill in a speech row's text: the time placeholders plus {next}, {next_artist}, {next_title},
@@ -2525,14 +2570,39 @@ impl Playout {
         if self.forward(|tab| sync::Cmd::Generate { tab, name: name.to_string(), append }) {
             return 0;
         }
+        let Some(rows) = self.generated_rows(name, append) else { return 0 };
+        let n = rows.iter().filter(|r| r.is_file()).count();
+        if !append {
+            self.clear_playlist();
+        }
+        self.playlist.extend(rows);
+        n
+    }
+
+    /// When rows added now would start on air: after the playlist (`append`), or now.
+    pub fn generate_start(&self, append: bool) -> DateTime<Local> {
+        if !append || self.playlist.is_empty() {
+            return self.now();
+        }
+        let k = self.playlist.len();
+        let starts = self.projected_starts(true);
+        let last = &self.playlist[k - 1];
+        starts[k - 1].map(|s| s.at).unwrap_or_else(Local::now) + CDur::milliseconds((self.row_span(last) * 1000.0) as i64)
+    }
+
+    /// The playlist rows template `name` makes, laid out from when they would start (None: it
+    /// made nothing; the reason is in the log).
+    pub fn generated_rows(&mut self, name: &str, append: bool) -> Option<Vec<PlEntry>> {
         let Some(tpl) = self.cfg.templates.iter().find(|t| t.name == name).cloned() else {
             self.say(format!("Template '{name}' not found"));
-            return 0;
+            return None;
         };
         // advert / jingle rules used as pattern steps or markers: their files join the pool
         let mut lib = self.library.clone();
         let mut preset: HashMap<String, Vec<usize>> = HashMap::new();
-        for src in tpl.pattern.iter().map(|p| &p.category).chain(tpl.markers.iter().map(|m| &m.category)) {
+        let sources = tpl.pattern.iter().chain(tpl.dayparts.iter().flat_map(|d| d.pattern.iter())).map(|p| &p.category);
+        let sources: Vec<String> = sources.chain(tpl.markers.iter().map(|m| &m.category)).cloned().collect();
+        for src in &sources {
             let Some(id) = src.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) else { continue };
             if preset.contains_key(src) {
                 continue;
@@ -2544,42 +2614,48 @@ impl Playout {
             }
             preset.insert(src.clone(), (start..lib.len()).collect());
         }
-        let tracks = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset);
-        let n = tracks.len();
-        if n == 0 {
+        let mut t = self.generate_start(append);
+        let span = |tr: &Track| self.span_of(tr);
+        let made = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset, t.naive_local(), &span);
+        if !made.iter().any(|g| matches!(g, crate::generator::Gen::Track { insert: false, .. })) {
             self.say("Generator produced nothing — scan the library and check category filters");
-            return 0;
+            return None;
         }
-        if !append {
-            self.clear_playlist();
-        }
-        // when the new rows would start, so hour markers land on the right hours
-        let starts = self.projected_starts(true);
-        let mut t = match self.playlist.len() {
-            0 => Local::now(),
-            k => {
-                let last = &self.playlist[k - 1];
-                starts[k - 1].map(|s| s.at).unwrap_or_else(Local::now) + CDur::milliseconds((self.row_span(last) * 1000.0) as i64)
-            }
-        };
-        for tr in tracks {
-            let span = self.span_of(&tr);
+        let mut rows = vec![];
+        for g in made {
+            let (row, span) = match g {
+                crate::generator::Gen::Track { track, .. } => {
+                    let span = self.span_of(&track);
+                    (PlEntry::file(track), span)
+                }
+                crate::generator::Gen::TimeAnnounce => {
+                    (PlEntry::special(ItemKind::TimeAnnounce, "", crate::generator::TIME_SECS), crate::generator::TIME_SECS)
+                }
+            };
             if tpl.hour_markers {
                 use chrono::Timelike;
                 let after = t + CDur::milliseconds((span * 1000.0) as i64);
                 if after.hour() != t.hour() || after.date_naive() != t.date_naive() {
-                    // this track would run over the top of the hour: the next hour starts with a marker
-                    self.playlist.push(PlEntry::file(tr));
+                    // this row would run over the top of the hour: the next hour starts with a marker
+                    rows.push(row);
                     let h = after.hour();
-                    self.playlist.push(PlEntry::special(ItemKind::HourMarker { hour: h, minute: 0, hard: false, wait: true }, "", 0.0));
+                    rows.push(PlEntry::special(ItemKind::HourMarker { hour: h, minute: 0, hard: false, wait: true }, "", 0.0));
                     t = marker_target(h, 0, after);
                     continue;
                 }
             }
             t += CDur::milliseconds((span * 1000.0) as i64);
-            self.playlist.push(PlEntry::file(tr));
+            rows.push(row);
         }
-        n
+        Some(rows)
+    }
+
+    /// Put rows made by `generated_rows` (e.g. a preview the user liked) into the playlist.
+    pub fn use_generated(&mut self, rows: Vec<PlEntry>, append: bool) {
+        if !append {
+            self.clear_playlist();
+        }
+        self.playlist.extend(rows);
     }
 
     fn export_now(&self, t: &Track) {
@@ -2712,6 +2788,8 @@ impl Playout {
                 self.playlist.iter_mut().for_each(|e| e.played = false);
                 self.pending_jump = Some(0);
             }
+            // playlist event rows don't carry an item (the scheduler's events do)
+            ActionKind::InsertItem => {}
         }
         // another playlist goes on air next tick: don't start this list's next row in between
         self.pending_tab.is_some() || self.state == PlayState::Stopped
@@ -2756,6 +2834,26 @@ impl Playout {
             ActionKind::RestartPlaylist => {
                 self.playlist.iter_mut().for_each(|r| r.played = false);
                 self.play_index(0, xf);
+            }
+            ActionKind::InsertItem => {
+                let Some(mut row) = e.item.clone() else {
+                    self.say(format!("Scheduler: '{}' has nothing to insert", e.name));
+                    return;
+                };
+                row.played = false;
+                let at = self.current.map(|c| c + 1).unwrap_or(0);
+                // the last one hasn't played yet (e.g. playback is stopped): don't pile them up
+                let waiting = self.playlist.get(at).is_some_and(|r| !r.played && r.kind == row.kind && r.track.title == row.track.title);
+                if !waiting {
+                    self.insert_rows(at, vec![row]);
+                }
+                if e.play_now {
+                    if self.state == PlayState::Stopped {
+                        self.play_index(at, xf);
+                    } else {
+                        self.next();
+                    }
+                }
             }
         }
     }
@@ -2962,6 +3060,43 @@ mod tests {
     }
 
     #[test]
+    fn start_times_worked_out_on_demand_match_the_whole_list() {
+        let mut p = playout();
+        p.cfg.crossfade_secs = 3.0;
+        p.cfg.fade.mode = FadeMode::Fixed;
+        let now = Local::now();
+        let at = |mins: i64| {
+            let m = now + CDur::minutes(mins);
+            marker_target(m.hour(), m.minute(), now)
+        };
+        // soft, hard and waiting markers, some reached late (rows before them skipped), some early
+        p.playlist = vec![];
+        for (k, (mins, hard, wait)) in
+            [(5, false, true), (9, true, true), (40, false, true), (41, true, false), (90, false, false)].into_iter().enumerate()
+        {
+            for j in 0..4 {
+                p.playlist.push(file(&format!("{k}-{j}"), 100.0 + j as f32 * 20.0));
+            }
+            p.playlist.push(marker(at(mins), hard, wait));
+        }
+        p.playlist.push(file("last", 60.0));
+        let full = p.projected_starts(false);
+        assert!(full.iter().flatten().any(|s| s.skipped), "the list has skipped rows to check");
+        let same = |a: Option<Start>, b: Option<Start>| match (a, b) {
+            (Some(a), Some(b)) => a.skipped == b.skipped && (a.at - b.at).num_milliseconds().abs() < 1000,
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        // each row on its own, and rows asked for out of order (scrolled down, then back up)
+        for (r, &want) in full.iter().enumerate() {
+            assert!(same(p.starts(false).get(r), want), "row {r}");
+        }
+        let mut s = p.starts(false);
+        for r in (12..20).chain(0..full.len()).chain(30..40) {
+            assert!(same(s.get(r), full.get(r).copied().flatten()), "row {r} out of order");
+        }
+    }
+
+    #[test]
     fn playing_from_another_tab_puts_it_on_air() {
         let mut p = playout();
         let wav = std::env::temp_dir().join("rm_tab_test.wav");
@@ -3043,6 +3178,56 @@ mod tests {
             wait();
         }
         assert_eq!(p.library.last().unwrap().title, "Old");
+    }
+
+    #[test]
+    fn scheduler_inserts_a_playlist_item_next() {
+        let mut p = playout();
+        p.playlist = vec![file("a", 180.0), file("b", 180.0)];
+        p.current = Some(0);
+        let e =
+            Event { action: ActionKind::InsertItem, item: Some(PlEntry::special(ItemKind::TimeAnnounce, "", 4.0)), ..Default::default() };
+        p.run_event(&e);
+        assert_eq!(p.playlist.len(), 3);
+        assert!(matches!(p.playlist[1].kind, ItemKind::TimeAnnounce), "goes in after the track on air");
+        // it hasn't played yet when the next one comes round: no second copy
+        p.run_event(&e);
+        assert_eq!(p.playlist.len(), 3);
+        // an event without an item does nothing
+        p.run_event(&Event { action: ActionKind::InsertItem, ..Default::default() });
+        assert_eq!(p.playlist.len(), 3);
+    }
+
+    #[test]
+    fn generated_rows_follow_the_clock_and_go_in() {
+        use crate::config::{Category, Marker, PatternItem, Template};
+        let mut p = playout();
+        p.library = (0..30)
+            .map(|i| Track {
+                path: PathBuf::from(format!("/m/t{i}.mp3")),
+                artist: format!("A{i}"),
+                title: format!("T{i}"),
+                duration: 200.0,
+                ..Default::default()
+            })
+            .collect();
+        p.cfg.categories = vec![Category { name: "Music".into(), ..Default::default() }];
+        p.cfg.templates = vec![Template {
+            name: "Clock".into(),
+            minutes: 130,
+            pattern: vec![PatternItem { category: "Music".into(), count: 1 }],
+            markers: vec![Marker { category: crate::generator::TIME_SOURCE.into(), on_clock: true, every_mins: 60, ..Default::default() }],
+            ..Default::default()
+        }];
+        let rows = p.generated_rows("Clock", false).unwrap();
+        let ann = rows.iter().filter(|r| matches!(r.kind, ItemKind::TimeAnnounce)).count();
+        assert!((2..=3).contains(&ann), "one per top of the hour in 130 minutes ({ann})");
+        assert!(p.playlist.is_empty(), "a preview changes nothing");
+        p.use_generated(rows.clone(), false);
+        assert_eq!(p.playlist.len(), rows.len());
+        let before = p.playlist.len();
+        let n = p.generate_playlist("Clock", true);
+        assert!(n > 0 && p.playlist.len() > before + n - 1, "appended after the list");
     }
 
     #[test]

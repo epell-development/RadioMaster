@@ -693,81 +693,84 @@ impl App {
         });
         self.aux_pl.insert(key.clone(), which);
         let on_air = which == core.playing_tab;
-        let (starts, cur): (Vec<Option<crate::playout::Start>>, Option<usize>) =
-            core.with_tab(which, |c| (c.projected_starts(on_air), c.current));
         let state = core.state;
-        let rows = core.tab_rows(which);
         let sel = self.aux_sel.entry(key.clone()).or_default();
         let mut play: Option<usize> = None;
         let mut remove = false;
         let playing = state != PlayState::Stopped;
         let dark = ui_dark(&self.workzones);
-        TableBuilder::new(ui)
-            .id_salt(("aux_pl", key.clone()))
-            .striped(true)
-            .sense(egui::Sense::click())
-            .column(Column::exact(34.0))
-            .column(Column::remainder().at_least(80.0).clip(true))
-            .column(Column::exact(52.0))
-            .column(Column::exact(70.0))
-            .header(20.0, |mut h| {
-                for t in ["#", "Title", "Length", "Start"] {
-                    h.col(|ui| {
-                        ui.strong(tr(t));
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(22.0, rows.len(), |mut row| {
-                    let i = row.index();
-                    let e = &rows[i];
-                    let is_cur = on_air && playing && cur == Some(i);
-                    row.set_selected(sel.contains(&i));
-                    let st = starts.get(i).copied().flatten();
-                    let col = row_text_color(e, is_cur, st.is_some_and(|s| s.skipped), dark, core.row_missing(e));
-                    row.col(|ui| {
-                        row_background(ui, e, is_cur);
-                        ui.label(RichText::new(if is_cur { "▶".to_string() } else { (i + 1).to_string() }).color(col));
-                    });
-                    row.col(|ui| {
-                        row_background(ui, e, is_cur);
-                        ui.add(egui::Label::new(RichText::new(e.title()).color(col)).truncate());
-                    });
-                    row.col(|ui| {
-                        row_background(ui, e, is_cur);
-                        ui.label(RichText::new(e.length_text()).color(col));
-                    });
-                    row.col(|ui| {
-                        row_background(ui, e, is_cur);
-                        let t = match st {
-                            Some(s) if s.skipped => "skip".to_string(),
-                            Some(s) => s.at.format("%H:%M:%S").to_string(),
-                            None => String::new(),
-                        };
-                        ui.label(RichText::new(t).color(col));
-                    });
-                    let r = row.response();
-                    if r.clicked() {
-                        sel.clear();
-                        sel.insert(i);
+        // the table is drawn with the tab swapped in, so start times are only worked out for the rows in view
+        core.with_tab(which, |c| {
+            let mut starts = c.starts(on_air);
+            let cur = c.current;
+            let rows = &c.playlist;
+            TableBuilder::new(ui)
+                .id_salt(("aux_pl", key.clone()))
+                .striped(true)
+                .sense(egui::Sense::click())
+                .column(Column::exact(34.0))
+                .column(Column::remainder().at_least(80.0).clip(true))
+                .column(Column::exact(52.0))
+                .column(Column::exact(70.0))
+                .header(20.0, |mut h| {
+                    for t in ["#", "Title", "Length", "Start"] {
+                        h.col(|ui| {
+                            ui.strong(tr(t));
+                        });
                     }
-                    if r.double_clicked() {
-                        play = Some(i);
-                    }
-                    r.context_menu(|ui| {
-                        if ui.button(tr("▶ Play now")).clicked() {
-                            play = Some(i);
-                            ui.close_menu();
-                        }
-                        if ui.button(tr("🗑 Remove")).clicked() {
+                })
+                .body(|body| {
+                    body.rows(22.0, rows.len(), |mut row| {
+                        let i = row.index();
+                        let e = &rows[i];
+                        let is_cur = on_air && playing && cur == Some(i);
+                        row.set_selected(sel.contains(&i));
+                        let st = starts.get(i);
+                        let col = row_text_color(e, is_cur, st.is_some_and(|s| s.skipped), dark, c.row_missing(e));
+                        row.col(|ui| {
+                            row_background(ui, e, is_cur);
+                            ui.label(RichText::new(if is_cur { "▶".to_string() } else { (i + 1).to_string() }).color(col));
+                        });
+                        row.col(|ui| {
+                            row_background(ui, e, is_cur);
+                            ui.add(egui::Label::new(RichText::new(e.title()).color(col)).truncate());
+                        });
+                        row.col(|ui| {
+                            row_background(ui, e, is_cur);
+                            ui.label(RichText::new(e.length_text()).color(col));
+                        });
+                        row.col(|ui| {
+                            row_background(ui, e, is_cur);
+                            let t = match st {
+                                Some(s) if s.skipped => "skip".to_string(),
+                                Some(s) => s.at.format("%H:%M:%S").to_string(),
+                                None => String::new(),
+                            };
+                            ui.label(RichText::new(t).color(col));
+                        });
+                        let r = row.response();
+                        if r.clicked() {
                             sel.clear();
                             sel.insert(i);
-                            remove = true;
-                            ui.close_menu();
                         }
+                        if r.double_clicked() {
+                            play = Some(i);
+                        }
+                        r.context_menu(|ui| {
+                            if ui.button(tr("▶ Play now")).clicked() {
+                                play = Some(i);
+                                ui.close_menu();
+                            }
+                            if ui.button(tr("🗑 Remove")).clicked() {
+                                sel.clear();
+                                sel.insert(i);
+                                remove = true;
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
-            });
+        });
         if let Some(i) = play {
             let xf = if core.state == PlayState::Playing { core.cfg.crossfade_secs } else { 0.0 };
             core.with_tab(which, |c| c.play_index(i, xf));
