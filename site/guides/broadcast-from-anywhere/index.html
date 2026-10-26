@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>Broadcast from Anywhere with RadioMaster: Remote Radio Studio and Web Portal</title>
+<meta name="description" content="Run your radio station from anywhere: put it on RadioMaster Server, connect from the RadioMaster desktop app at home or on the road, go live with your own microphone, and control it from a phone with the web portal over HTTPS.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/broadcast-from-anywhere/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to broadcast from anywhere">
+<meta property="og:description" content="Put the station on a server, then present from home with the desktop app or check in from your phone.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/broadcast-from-anywhere/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="RadioMaster radio automation software">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to broadcast from anywhere">
+<meta name="twitter:description" content="Put the station on a server, then present from home with the desktop app or check in from your phone.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/broadcast-from-anywhere/#article",
+      "headline": "How to broadcast from anywhere",
+      "description": "Run your radio station from anywhere: put it on RadioMaster Server, connect from the RadioMaster desktop app at home or on the road, go live with your own microphone, and control it from a phone with the web portal over HTTPS.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/broadcast-from-anywhere/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Broadcast from anywhere",
+          "item": "https://radiomaster.dovafm.com/guides/broadcast-from-anywhere/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Broadcast from anywhere</nav>
+    <p class="eyebrow">Guide · Server and remote</p>
+    <h1 class="page-h">How to broadcast from anywhere</h1>
+    <p class="lede" style="margin-top:16px">With RadioMaster Server the station lives on a machine that's always on, and you run it from wherever you are. Presenters connect with the desktop app they already know, go live with their own microphone, and anyone with the password can check in from a phone browser.</p>
+    <div class="related"><a class="btn primary" href="/server/docs/">Server documentation</a><a class="btn ghost" href="/server/">About RadioMaster Server</a></div>
+    <nav class="toc" aria-label="On this page"><a href="#how">How it works</a><a href="#server">Set up the server</a><a href="#reach">Reach it from outside</a><a href="#connect">Connect from the app</a><a href="#live">Go live from home</a><a href="#phone">Use your phone</a><a href="#tips">Tips</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="how" style="margin-top:0">How it works</h2>
+      <ul>
+        <li><b>RadioMaster Server</b> runs the station on a Linux machine, a VPS or Windows Server. It plays the playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast around the clock, with no screen.</li>
+        <li><b>The desktop app</b> connects to it with <b>File → Connect to Server</b>. Everything you do in the app then happens on the server, and several presenters can be connected at once.</li>
+        <li><b>The web portal</b> runs the station from any browser, including a phone, with nothing to install.</li>
+      </ul>
+
+      <h2 id="server">1. Set up the server</h2>
+      <p>Download RadioMaster Server for Linux or Windows from the <a href="https://github.com/epell-development/RadioMaster/releases/latest">latest release</a>, then run the setup once. It asks for the station name, the username and password presenters sign in with (at least 12 characters), the port (9259), whether to use HTTPS and whether to turn on the web portal:</p>
+      <div class="code"><pre>RadioMaster-Server --setup</pre></div>
+      <p>Then start it with <code>RadioMaster-Server</code>, or as a service so it starts with the machine. The <a href="/server/docs/">server documentation</a> covers every step, including systemd and Windows Server.</p>
+      <p>Already running a station in the desktop app? Copy its playlists, library and settings over, as described in <a href="/server/docs/#move">moving a station to the server</a>.</p>
+
+      <h2 id="reach">2. Make it reachable from outside</h2>
+      <p>On your own network, presenters connect to the server's local address, for example <code>192.168.1.20:9259</code>. To connect from home or on the road:</p>
+      <ul>
+        <li>On a VPS it's already on the internet: allow ports 9259 (and 9260 for the web portal) through the firewall.</li>
+        <li>At the studio, forward those ports on the router to the server, or use a VPN such as WireGuard or Tailscale so nothing is open to the internet at all.</li>
+        <li>Give it a name, for example <code>studio.yourstation.com</code>, so presenters don't need to remember an address.</li>
+        <li>Or skip port forwarding altogether: a <a href="/server/docs/#tunnel">Cloudflare Tunnel</a> puts the web portal on the internet over HTTPS, and the desktop app can connect through it too.</li>
+      </ul>
+      <p class="tip warn"><b>Turn on HTTPS</b> before you open the server to the internet, so passwords and everything else are encrypted. The server can get and renew a free <a href="/server/docs/#acme">Let's Encrypt</a> certificate by itself, use your own, or make one. See <a href="/server/docs/#https">HTTPS</a>.</p>
+
+      <h2 id="connect">3. Connect from the desktop app</h2>
+      <ol>
+        <li>In RadioMaster, choose <b>File → Connect to Server…</b> (or <b>Connect to Remote Server…</b> on the login screen) and type the server's address, username and password.</li>
+        <li>RadioMaster offers to <b>save your local session</b> as a station profile, so your own playlists and settings come back exactly as they were when you disconnect.</li>
+        <li>A green button with the station's name appears next to the RadioMaster logo. Click it for the connection details or to disconnect.</li>
+      </ol>
+      <p>While connected you edit the playlists, fire carts, run the generator, adverts and scheduler, and start and stop encoders, all on the server. If two people change the same playlist at the same moment, the server's version wins and the app tells you.</p>
+
+      <h2 id="live">4. Go live from home</h2>
+      <ul>
+        <li>The app plays the station's on-air mix on your own speakers or headphones, about half a second behind the server. Untick <b>Hear the station here</b> (click the green button) if you're in the same room as the server's speakers.</li>
+        <li>Press <b>Mic</b> and your microphone goes to the server and on air, with the station's mic settings (lower, mute or pause the music).</li>
+        <li>Wear headphones rather than speakers, and expect to hear your own voice come back slightly late.</li>
+      </ul>
+
+      <h2 id="phone">5. Use the station from your phone</h2>
+      <p>Turn on the web portal (<code>RadioMaster-Server --setup --portal</code>, or <b>File → Server settings… → Web portal</b> in the app and restart the server). Then open <code>https://your-server:9260</code> on any phone, tablet or computer and sign in with the server's username and password.</p>
+      <p>On a phone the portal's sections sit along the bottom of the screen: the studio (what's on air, transport buttons, volume, playlists and streams), the library, the cart wall, the playlist generator, the advert and jingle rules, AzuraCast and the log. A banner tells you when the server is behind on updates.</p>
+
+      <h2 id="tips">Tips</h2>
+      <ul>
+        <li>Music files and the library are the server's, so a library folder is typed the way the server sees it, for example <code>/srv/music</code>. Upload new music to the server, or keep it in a folder that's synced to it.</li>
+        <li>Previews and waveforms in the track editor need the files on your own computer, so they don't work while connected.</li>
+        <li>Your interface language, sound cards, plugins and remote control API stay on your own computer.</li>
+        <li>Use a long, unique server password: whoever signs in can do everything the station can.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/server/docs/"><span class="tag">Server and remote</span><b>RadioMaster Server documentation</b><span>Install, HTTPS and Let&#x27;s Encrypt, the web portal, Cloudflare Tunnel, reverse proxies and troubleshooting.</span></a>
+<a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
+<a class="guide-card" href="/guides/stream-to-icecast-shoutcast/"><span class="tag">Get started</span><b>Stream to Icecast or Shoutcast</b><span>Add an encoder, pick a format and bitrate, and send song titles to your listeners.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

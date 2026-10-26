@@ -153,7 +153,7 @@ impl Plugins {
                 defs.push(d);
             }
         }
-        defs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        defs.sort_by_key(|a| a.name.to_lowercase());
         self.defs = defs;
         self.start_services(off);
     }

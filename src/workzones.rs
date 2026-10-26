@@ -255,6 +255,8 @@ pub struct WorkzoneSet {
     /// the playlist scrolls along with the on-air track
     pub follow: bool,
     pub scale: f32,
+    /// how `scale` is applied on screens with different display scaling
+    pub scale_mode: crate::theme::ScaleMode,
     /// Four user-defined web panels (name + address). Nothing is built in.
     pub web: Vec<WebSite>,
     // ---- legacy fields, read once to migrate older layouts
@@ -285,6 +287,7 @@ impl Default for WorkzoneSet {
             dark: false,
             follow: true,
             scale: 1.0,
+            scale_mode: Default::default(),
             web: default_web(),
             zones: vec![],
             active: 0,

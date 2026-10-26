@@ -104,8 +104,7 @@ impl Waveform {
         let per_bin = ((rate as f32 * BIN) as usize).max(1);
         let mut w = Waveform::default();
         let (mut pk, mut sq, mut n) = (0f32, 0f64, 0usize);
-        loop {
-            let (Some(l), Some(r)) = (src.next(), src.next()) else { break };
+        while let (Some(l), Some(r)) = (src.next(), src.next()) {
             let m = (l + r) * 0.5;
             pk = pk.max(l.abs().max(r.abs()));
             sq += (m as f64) * (m as f64);

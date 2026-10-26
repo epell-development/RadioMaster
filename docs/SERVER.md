@@ -85,6 +85,12 @@ then encrypted, and the port answers plain `http://` only with a pointer to `htt
 
 An address typed without `https://` still finds a server that uses HTTPS.
 
+**Behind a reverse proxy** (nginx, Caddy, IIS…): do HTTPS in one place. Either the proxy does it and the
+server's HTTPS is off (`--setup --no-https`, plus `--bind 127.0.0.1` when the proxy is on the same machine), or
+the proxy forwards to `https://` on the server. A proxy that sends plain `http://` to a server with HTTPS on gets
+a redirect to `https://` every time, which browsers report as "too many redirects". Examples for nginx, Caddy
+and IIS are in the [online documentation](https://radiomaster.dovafm.com/server/docs/#proxy).
+
 ## Web portal
 The web portal runs the station from a browser on any computer, tablet or phone, with nothing to install.
 Turn it on with `--setup --portal` (choose the port with `--portal-port`, default 9260), or in the app with

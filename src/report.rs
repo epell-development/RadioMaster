@@ -82,7 +82,7 @@ impl Filter {
         if d < self.from || d > self.to {
             return false;
         }
-        if !self.kinds.is_empty() && !self.kinds.iter().any(|k| *k == p.kind) {
+        if !self.kinds.is_empty() && !self.kinds.contains(&p.kind) {
             return false;
         }
         let t = p.text.to_lowercase();

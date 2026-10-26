@@ -1,7 +1,6 @@
 use crate::azuracast::Client;
 use crate::browser::Browsers;
 use crate::config::{data_dir, CartPad, Category, Marker, PatternItem, ServerKind, Template};
-use crate::dsp::EQ_FREQS;
 use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
@@ -27,20 +26,6 @@ const AMBER: Color32 = Color32::from_rgb(235, 190, 60);
 const RED: Color32 = Color32::from_rgb(230, 70, 70);
 const GRAY: Color32 = Color32::from_rgb(98, 106, 120);
 const ACCENT: Color32 = Color32::from_rgb(30, 110, 205);
-
-/// Built-in EQ curves (31 Hz … 16 kHz, dB).
-const EQ_PRESETS: &[(&str, [f32; 12])] = &[
-    ("Flat", [0.0; 12]),
-    ("Broadcast (FM warmth)", [2.0, 2.5, 1.5, 0.0, -1.0, -0.5, 0.5, 1.5, 2.0, 2.5, 2.0, 1.0]),
-    ("Bass boost", [5.0, 4.5, 3.5, 2.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-    ("Voice clarity", [-4.0, -3.0, -1.5, 0.0, 1.0, 2.0, 3.0, 3.0, 2.0, 0.5, 0.0, -1.0]),
-    ("Loudness", [4.0, 3.0, 1.5, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 3.5, 3.0]),
-    ("Treble boost", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.5, 4.5]),
-    ("Dance", [4.5, 4.0, 2.0, 0.0, -1.0, -1.5, 0.0, 1.0, 2.0, 3.0, 2.5, 1.5]),
-    ("Rock", [3.0, 2.5, 1.0, -0.5, -1.0, 0.0, 1.5, 2.5, 3.0, 3.0, 2.5, 2.0]),
-    ("Talk / podcast", [-6.0, -4.0, -2.0, 0.0, 1.0, 2.0, 2.5, 2.0, 1.0, 0.0, -1.0, -2.0]),
-    ("Small speakers", [-3.0, -1.0, 2.0, 3.0, 2.0, 1.0, 0.0, 0.5, 1.0, 1.5, 1.0, 0.0]),
-];
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum SettingsPage {
@@ -162,6 +147,10 @@ mod adsui;
 mod aztool;
 #[path = "cleanupui.rs"]
 mod cleanupui;
+#[path = "controlsui.rs"]
+mod controlsui;
+#[path = "equi.rs"]
+mod equi;
 #[path = "panes.rs"]
 mod panes;
 #[path = "pltools.rs"]
@@ -263,6 +252,8 @@ pub struct App {
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
     eq_name: String,
+    /// the parametric EQ band picked on the curve
+    peq_sel: usize,
     notes: TrackNotes,
     notes_dirty: bool,
     info_pick: usize,
@@ -291,6 +282,11 @@ pub struct App {
     show_repeat: bool,
     show_find: bool,
     show_keys: bool,
+    /// keyboard shortcuts and MIDI bindings (this computer's)
+    controls: crate::controls::Controls,
+    keymap: HashMap<crate::controls::KeyCombo, String>,
+    cui: controlsui::ControlsUi,
+    midi: crate::midi::Midi,
     about_tab: usize,
     find_text: String,
     find_focus: bool,
@@ -534,6 +530,7 @@ fn vu(ui: &mut egui::Ui, level: f32, w: f32) {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, core: Arc<Mutex<Playout>>) -> Self {
         let workzones = WorkzoneSet::load();
+        let controls = crate::controls::Controls::load();
         crate::theme::apply(&cc.egui_ctx, workzones.dark, workzones.scale);
         crate::theme::install_fallback_fonts(&cc.egui_ctx);
         let mut audio = crate::audio::AudioManager::default();
@@ -598,6 +595,7 @@ impl App {
             layout_checked: std::time::Instant::now(),
             perf: None,
             eq_name: String::new(),
+            peq_sel: 0,
             notes: TrackNotes::load(),
             notes_dirty: false,
             info_pick: 1,
@@ -623,6 +621,10 @@ impl App {
             show_repeat: false,
             show_find: false,
             show_keys: false,
+            keymap: controls.keymap(),
+            midi: crate::midi::Midi::start(controls.midi_enabled, cc.egui_ctx.clone()),
+            controls,
+            cui: Default::default(),
             about_tab: 0,
             find_text: String::new(),
             find_focus: false,
@@ -936,14 +938,19 @@ impl App {
                 ui.menu_button(tr("View"), |ui| {
                     ui.menu_button(tr("Work zones"), |ui| {
                         for (n, text) in [(1u8, "1   (playlist only)"), (2, "2   (playlist + panel)"), (3, "3   (playlist + two panels)")] {
-                            let b = egui::Button::new(text).shortcut_text(format!("Ctrl+{n}")).selected(self.workzones.panels == n);
+                            let b = egui::Button::new(text)
+                                .shortcut_text(self.controls.key_label(&format!("panels{n}")))
+                                .selected(self.workzones.panels == n);
                             if ui.add(b).clicked() {
                                 self.workzones.panels = n;
                                 ui.close_menu();
                             }
                         }
                         ui.separator();
-                        if ui.add(egui::Button::new(tr("Additional (new window)")).shortcut_text("Ctrl+4")).clicked() {
+                        if ui
+                            .add(egui::Button::new(tr("Additional (new window)")).shortcut_text(self.controls.key_label("new_window")))
+                            .clicked()
+                        {
                             self.workzones.new_aux(Tab::AuxPlaylist);
                             ui.close_menu();
                         }
@@ -958,10 +965,11 @@ impl App {
                             }
                         }
                     });
-                    ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel")).on_hover_text(tr("Ctrl+L"));
+                    ui.add(egui::Checkbox::new(&mut self.workzones.show_left, "Left panel"))
+                        .on_hover_text(self.controls.key_label("left_panel"));
                     ui.separator();
-                    for (tab, key) in [(Tab::FileExplorer, "F1"), (Tab::Search, "F2")] {
-                        if ui.add(egui::Button::new(self.tab_name(tab)).shortcut_text(key)).clicked() {
+                    for (tab, key) in [(Tab::FileExplorer, "file_explorer"), (Tab::Search, "search")] {
+                        if ui.add(egui::Button::new(self.tab_name(tab)).shortcut_text(self.controls.key_label(key))).clicked() {
                             self.workzones.show_left = true;
                             self.workzones.left.add(tab);
                             ui.close_menu();
@@ -973,7 +981,14 @@ impl App {
                         self.workzones.dark = dark;
                         crate::theme::apply(ctx, dark, self.workzones.scale);
                     }
-                    if ui.add(egui::Button::new(tr("Full screen")).shortcut_text("F11").selected(self.fullscreen)).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(tr("Full screen"))
+                                .shortcut_text(self.controls.key_label("fullscreen"))
+                                .selected(self.fullscreen),
+                        )
+                        .clicked()
+                    {
                         self.fullscreen = !self.fullscreen;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
                         ui.close_menu();
@@ -996,11 +1011,11 @@ impl App {
                         ToolWin::Plugins,
                     ] {
                         let sc = match w {
-                            ToolWin::Generator => "Ctrl+G",
-                            ToolWin::Scheduler => "F3",
-                            ToolWin::AudioFx => "F4",
-                            ToolWin::Notepad => "T",
-                            _ => "",
+                            ToolWin::Generator => self.controls.key_label("generator"),
+                            ToolWin::Scheduler => self.controls.key_label("scheduler"),
+                            ToolWin::AudioFx => self.controls.key_label("audio_fx"),
+                            ToolWin::Notepad => self.controls.key_label("notepad"),
+                            _ => String::new(),
                         };
                         if ui
                             .add_enabled(
@@ -1043,7 +1058,8 @@ impl App {
                         core.trigger_cart(i);
                     }
                     ui.separator();
-                    if ui.add(egui::Button::new(tr("■ Stop all jingles")).shortcut_text("Ctrl+J")).clicked() {
+                    if ui.add(egui::Button::new(tr("■ Stop all jingles")).shortcut_text(self.controls.key_label("stop_jingles"))).clicked()
+                    {
                         core.stop_carts();
                         ui.close_menu();
                     }
@@ -1057,7 +1073,7 @@ impl App {
                     if !self.perm.settings {
                         ui.disable();
                     }
-                    if ui.add(egui::Button::new(tr("⚙ Settings…")).shortcut_text("Ctrl+,")).clicked() {
+                    if ui.add(egui::Button::new(tr("⚙ Settings…")).shortcut_text(self.controls.key_label("settings"))).clicked() {
                         self.show_settings = true;
                         ui.close_menu();
                     }
@@ -1071,11 +1087,19 @@ impl App {
                     }
                 });
                 ui.menu_button(tr("Help"), |ui| {
-                    if ui.add(egui::Button::new(tr("Performance")).shortcut_text("Ctrl+Shift+P").selected(self.perf.is_some())).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(tr("Performance"))
+                                .shortcut_text(self.controls.key_label("performance"))
+                                .selected(self.perf.is_some()),
+                        )
+                        .clicked()
+                    {
                         self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
                         ui.close_menu();
                     }
-                    if ui.add(egui::Button::new(tr("Keyboard shortcuts")).shortcut_text("Ctrl+/")).clicked() {
+                    if ui.add(egui::Button::new(tr("Shortcuts and MIDI…")).shortcut_text(self.controls.key_label("shortcuts"))).clicked()
+                    {
                         self.show_keys = true;
                         ui.close_menu();
                     }
@@ -1269,7 +1293,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(core.notify.lock().clone());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(Local::now().format("%a %d %b  %H:%M:%S").to_string());
+                    ui.label(core.now().format("%a %d %b  %H:%M:%S").to_string());
                     ui.separator();
                     let live = core.handles.iter().flatten().filter(|h| h.status.lock().state == EncState::Live).count();
                     ui.label(RichText::new(format!("● {live} stream(s) live")).color(if live > 0 { GREEN } else { GRAY }));
@@ -1286,7 +1310,7 @@ impl App {
     fn player(&mut self, ctx: &egui::Context, core: &mut Playout) {
         egui::TopBottomPanel::top("player").show(ctx, |ui| {
             ui.add_space(4.0);
-            let now = Local::now();
+            let now = core.now();
             let st = core.status.clone();
             let title = Some(core.on_air_text()).filter(|t| !t.is_empty()).unwrap_or_else(|| "No track playing".into());
             let next_i = core.current.map(|i| i + 1).unwrap_or(0);
@@ -1616,8 +1640,9 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.add_space(12.0);
             ui.label(RichText::new(tr("STUDIO CLOCK")).small().color(GRAY));
-            ui.label(RichText::new(Local::now().format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
-            ui.label(Local::now().format("%A, %d %B %Y").to_string());
+            let now = core.now();
+            ui.label(RichText::new(now.format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
+            ui.label(now.format("%A, %d %B %Y").to_string());
             if let Some(m) = core.secs_to_next_marker() {
                 ui.label(
                     RichText::new(format!("Next hour marker in {:02}:{:02}:{:02}", m / 3600, (m / 60) % 60, m % 60))
@@ -1789,6 +1814,12 @@ impl App {
                                     }
                                 });
                                 ui.small(tr("Make everything larger or smaller if the text is hard to read."));
+                                ui.add_space(4.0);
+                                ui.label(tr("On screens with other display scaling or resolutions"));
+                                for m in crate::theme::ScaleMode::ALL {
+                                    ui.radio_value(&mut self.workzones.scale_mode, m, tr(m.label()));
+                                }
+                                ui.small(tr("\"Fit each screen\" keeps the layout you see on a 1920×1080 screen, so moving the window to a laptop or a 1440p or 4K screen shows the same amount of everything. \"Same size in pixels\" ignores the display scaling set in Windows."));
                                 ui.separator();
                                 ui.horizontal(|ui| {
                                     ui.label(tr("Work zone"));
@@ -2391,7 +2422,7 @@ impl App {
         let mut del = None;
         let mut run_now = None;
         let opts = ActionOpts::of(core);
-        let now = Local::now();
+        let now = core.now();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if core.cfg.events.is_empty() {
                 ui.label(RichText::new(tr("No events yet.")).color(GRAY));
@@ -3203,70 +3234,7 @@ impl App {
 
     fn tab_dsp(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // ---- equalizer: sliders, exact values under them, presets
-            let mut save_preset = false;
-            let mut delete_preset: Option<usize> = None;
-            {
-                let custom = core.cfg.eq_presets.clone();
-                let d = &mut core.cfg.dsp;
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut d.eq_enabled, tr("12-band equalizer"));
-                    egui::ComboBox::from_id_salt("eq_preset").selected_text("Presets…").width(150.0).show_ui(ui, |ui| {
-                        for (name, g) in EQ_PRESETS {
-                            if ui.selectable_label(false, *name).clicked() {
-                                d.eq_gains = *g;
-                                d.eq_enabled = true;
-                            }
-                        }
-                        if !custom.is_empty() {
-                            ui.separator();
-                            for (k, (name, g)) in custom.iter().enumerate() {
-                                ui.horizontal(|ui| {
-                                    if ui.selectable_label(false, name).clicked() {
-                                        d.eq_gains = *g;
-                                        d.eq_enabled = true;
-                                    }
-                                    if ui.small_button("🗑").on_hover_text(tr("Delete this preset")).clicked() {
-                                        delete_preset = Some(k);
-                                    }
-                                });
-                            }
-                        }
-                    });
-                    ui.add(egui::TextEdit::singleline(&mut self.eq_name).hint_text(tr("preset name")).desired_width(110.0));
-                    save_preset = ui.add_enabled(!self.eq_name.trim().is_empty(), egui::Button::new(tr("Save preset"))).clicked();
-                    if ui.button(tr("Flat")).clicked() {
-                        d.eq_gains = [0.0; 12];
-                    }
-                });
-                ui.horizontal(|ui| {
-                    for i in 0..12 {
-                        ui.vertical(|ui| {
-                            ui.set_width(46.0);
-                            ui.add(egui::Slider::new(&mut d.eq_gains[i], -12.0..=12.0).vertical().show_value(false));
-                            // exact value in dB: drag it, or double-click to type
-                            ui.add_sized(
-                                [46.0, 20.0],
-                                egui::DragValue::new(&mut d.eq_gains[i]).range(-12.0..=12.0).speed(0.05).fixed_decimals(1),
-                            )
-                            .on_hover_text(tr("Drag, or double-click to type an exact value"));
-                            let f = EQ_FREQS[i];
-                            ui.label(RichText::new(if f >= 1000.0 { format!("{}k", f / 1000.0) } else { format!("{f}") }).small());
-                        });
-                    }
-                });
-            }
-            if save_preset {
-                let name = self.eq_name.trim().to_string();
-                let g = core.cfg.dsp.eq_gains;
-                core.cfg.eq_presets.retain(|(n, _)| *n != name);
-                core.cfg.eq_presets.push((name.clone(), g));
-                core.say(format!("EQ preset \"{name}\" saved"));
-                self.eq_name.clear();
-            }
-            if let Some(k) = delete_preset {
-                core.cfg.eq_presets.remove(k);
-            }
+            self.eq_ui(ui, core);
             let d = &mut core.cfg.dsp;
             ui.separator();
             ui.checkbox(&mut d.comp_enabled, tr("Compressor"));
@@ -3439,6 +3407,7 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::theme::fit_zoom(ctx, self.workzones.scale_mode);
         // redraw ~10×/s while audio is moving (VU meters, elapsed time), ~3×/s when idle (the clock)
         // (once a second while minimized with no Additional windows: nothing is on screen, and playback
         // runs on its own threads)
@@ -3495,14 +3464,12 @@ impl eframe::App for App {
         if let Some(msg) = self.audio.watchdog() {
             core.say(msg);
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
-            self.perf = if self.perf.is_some() { None } else { Some(Perf::default()) };
-        }
         self.handle_dialogs(&mut core);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && self.perm.edit_playlists {
             self.add_files_later(self.view_pl, None, dropped);
         }
+        self.midi_input(ctx, &mut core);
         if !self.show_settings {
             self.shortcuts(ctx, &mut core);
         }

@@ -354,6 +354,7 @@ pub struct Voice {
     pub line_pause_ms: u32,
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -378,6 +379,7 @@ pub fn spell_digits(text: &str) -> String {
 }
 
 /// SSML body: each line, with a pause between lines.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn ssml_body(text: &str, v: &Voice) -> String {
     let joined =
         speech_lines(text).iter().map(|l| xml_escape(l)).collect::<Vec<_>>().join(&format!("<break time=\"{}ms\"/>", v.line_pause_ms));

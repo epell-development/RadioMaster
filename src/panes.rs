@@ -28,7 +28,7 @@ impl App {
     }
 
     fn pane_tabs(&mut self, ui: &mut egui::Ui, pane: Pane) -> Option<Tab> {
-        let Some(pt) = self.workzones.pane(pane).cloned() else { return None };
+        let pt = self.workzones.pane(pane).cloned()?;
         let mut change: Option<usize> = None;
         let mut close: Option<usize> = None;
         let mut move_to: Option<(usize, Pane)> = None;
@@ -696,7 +696,7 @@ impl App {
                         let is_cur = on_air && playing && cur == Some(i);
                         row.set_selected(sel.contains(&i));
                         let st = starts.get(i);
-                        let col = row_text_color(e, is_cur, st.is_some_and(|s| s.skipped), dark);
+                        let col = row_text_color(e, is_cur, st.is_some_and(|s| s.skipped), dark, c.row_missing(e));
                         row.col(|ui| {
                             row_background(ui, e, is_cur);
                             ui.label(RichText::new(if is_cur { "▶".to_string() } else { (i + 1).to_string() }).color(col));
@@ -757,7 +757,8 @@ pub(super) fn ui_dark(w: &WorkzoneSet) -> bool {
 }
 
 /// Text colour of a playlist row.
-pub(super) fn row_text_color(e: &PlEntry, is_cur: bool, skipped: bool, dark: bool) -> Color32 {
+/// `missing`: the file isn't there (on the server, when connected to one).
+pub(super) fn row_text_color(e: &PlEntry, is_cur: bool, skipped: bool, dark: bool, missing: bool) -> Color32 {
     if matches!(e.kind, ItemKind::HourInfo { .. }) {
         return if dark { Color32::from_rgb(255, 150, 200) } else { Color32::from_rgb(170, 30, 110) };
     }
@@ -768,7 +769,7 @@ pub(super) fn row_text_color(e: &PlEntry, is_cur: bool, skipped: bool, dark: boo
     if skipped || e.played {
         return Color32::from_gray(140);
     }
-    if e.is_file() && crate::library::file_missing(&e.track.path) {
+    if missing {
         return Color32::from_rgb(200, 50, 50);
     }
     match e.kind {

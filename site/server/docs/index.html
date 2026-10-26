@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>RadioMaster Server Documentation: Install, HTTPS, Web Portal, Reverse Proxy and Service Setup</title>
+<meta name="description" content="Complete documentation for RadioMaster Server, the free headless radio automation server for Linux and Windows Server: install and setup, command-line options, systemd and Windows services, HTTPS with built-in Let&#x27;s Encrypt, the web portal, Cloudflare Tunnel, reverse proxies (nginx, Caddy, IIS), connecting from the app, security and troubleshooting.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/server/docs/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="RadioMaster Server documentation">
+<meta property="og:description" content="Install, options, services, HTTPS and Let&#x27;s Encrypt, the web portal, Cloudflare Tunnel, reverse proxies, security and troubleshooting.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/server/docs/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="RadioMaster: free, open-source radio automation for Windows, macOS and Linux">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="RadioMaster Server documentation">
+<meta name="twitter:description" content="Install, options, services, HTTPS and Let&#x27;s Encrypt, the web portal, Cloudflare Tunnel, reverse proxies, security and troubleshooting.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/social-card.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/server/docs/#article",
+      "headline": "RadioMaster Server documentation",
+      "description": "Complete documentation for RadioMaster Server, the free headless radio automation server for Linux and Windows Server: install and setup, command-line options, systemd and Windows services, HTTPS with built-in Let's Encrypt, the web portal, Cloudflare Tunnel, reverse proxies (nginx, Caddy, IIS), connecting from the app, security and troubleshooting.",
+      "image": "https://radiomaster.dovafm.com/img/social-card.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/server/docs/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "RadioMaster Server",
+          "item": "https://radiomaster.dovafm.com/server/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Documentation",
+          "item": "https://radiomaster.dovafm.com/server/docs/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a href="/guides/">Guides</a>
+      <a class="active" aria-current="page" href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/server/">RadioMaster Server</a> / Documentation</nav>
+    <p class="eyebrow">RadioMaster Server · Documentation</p>
+    <h1 class="page-h">RadioMaster Server documentation</h1>
+    <p class="lede" style="margin-top:16px">Everything about running RadioMaster Server: installing it, every option, running it as a service, HTTPS certificates (Let's Encrypt is built in), the web portal, Cloudflare Tunnel, putting it behind a reverse proxy, connecting from the desktop app, and fixing problems.</p>
+    <nav class="toc" aria-label="On this page"><a href="#install">Install</a><a href="#setup">Setup</a><a href="#options">Options</a><a href="#data">Data folder</a><a href="#service">Run as a service</a><a href="#network">Ports and firewall</a><a href="#https">HTTPS</a><a href="#portal">Web portal</a><a href="#tunnel">Cloudflare Tunnel</a><a href="#proxy">Reverse proxy</a><a href="#connect">Connect from the app</a><a href="#settings">Server settings</a><a href="#audio">Sound output</a><a href="#move">Move a station</a><a href="#security">Security</a><a href="#trouble">Troubleshooting</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="install" style="margin-top:0">Install</h2>
+      <p>Every <a href="https://github.com/epell-development/RadioMaster/releases/latest">release</a> has two server downloads:</p>
+      <div class="rundown-table"><table><thead><tr><th>Download</th><th>Contains</th></tr></thead><tbody><tr><td class="k">RadioMaster-Server-&lt;version&gt;-linux-x64.tar.gz</td><td><code>RadioMaster-Server</code>, the guide and a systemd unit. Needs <code>libasound2</code> (ALSA), which nearly every distribution has</td></tr><tr><td class="k">RadioMaster-Server-&lt;version&gt;-windows-x64.zip</td><td><code>RadioMaster-Server.exe</code> and the guide, for Windows Server or any 64-bit Windows</td></tr></tbody></table></div>
+      <p>Unpack it anywhere. On Linux, <code>/usr/local/bin</code> is a good home if you'll run it as a service.</p>
+
+      <h2 id="setup">Setup</h2>
+      <p>Run the setup once. It asks for:</p>
+      <ul>
+        <li>the <b>station name</b> shown in the app,</li>
+        <li>the <b>username and password</b> the desktop apps and the web portal sign in with (the password needs at least 12 characters),</li>
+        <li>the <b>port</b> (9259 unless you choose another),</li>
+        <li>whether to use <b>HTTPS</b>, and whether to turn on the <b>web portal</b> and its port (9260).</li>
+      </ul>
+      <div class="code"><pre>RadioMaster-Server --setup</pre></div>
+      <p>Without a terminal (a script, a container, a provisioning tool), give the answers as options. The password can come from the <code>RADIOMASTER_PASSWORD</code> environment variable so it stays out of your shell history:</p>
+      <div class="code"><pre>RADIOMASTER_PASSWORD=&#x27;a long password&#x27; RadioMaster-Server --setup --user studio --name &quot;My Station&quot; --https --portal</pre></div>
+      <p>Run <code>--setup</code> again at any time to change these answers. Then start the station:</p>
+      <div class="code"><pre>RadioMaster-Server</pre></div>
+      <p>It prints the address to connect to (and the web portal's, if it's on) and the station log goes to the console. <kbd>Ctrl+C</kbd>, or stopping the service, saves everything and stops the encoders.</p>
+
+      <h2 id="options">Options</h2>
+      <div class="rundown-table"><table><thead><tr><th>Option</th><th>What it does</th></tr></thead><tbody><tr><td class="k">--setup</td><td>Set the station name, username, password, port, HTTPS and web portal, then exit</td></tr><tr><td class="k">--user NAME, --password PASSWORD, --name NAME</td><td>Answers for <code>--setup</code> (the password can also come from <code>RADIOMASTER_PASSWORD</code>)</td></tr><tr><td class="k">--port N</td><td>The port to listen on (default 9259)</td></tr><tr><td class="k">--bind ADDRESS</td><td>The address to listen on (default <code>0.0.0.0</code>, every network). Use <code>127.0.0.1</code> behind a reverse proxy on the same machine</td></tr><tr><td class="k">--https, --no-https</td><td>Serve over <a href="#https">HTTPS</a>, or not</td></tr><tr><td class="k">--cert FILE, --key FILE</td><td>A PEM certificate (chain) and its private key for HTTPS. Without them the server makes its own</td></tr><tr><td class="k">--acme DOMAINS</td><td>Get a free <a href="#acme">Let's Encrypt certificate</a> for these domain names (comma-separated) and renew it by itself</td></tr><tr><td class="k">--acme-email ADDRESS</td><td>Your email for Let's Encrypt (optional, for expiry warnings)</td></tr><tr><td class="k">--acme-staging</td><td>Use Let's Encrypt's test service first (its certificates aren't trusted by browsers)</td></tr><tr><td class="k">--acme-http-port N</td><td>The port for Let's Encrypt's check (default 80; <code>0</code> when another program on port 80 passes the check on)</td></tr><tr><td class="k">--no-acme</td><td>Turn Let's Encrypt off and go back to your own or the self-signed certificate</td></tr><tr><td class="k">--portal, --no-portal</td><td>The <a href="#portal">web portal</a>, on or off</td></tr><tr><td class="k">--portal-port N</td><td>The web portal's port (default 9260). It must differ from the main port</td></tr><tr><td class="k">--tunnel, --no-tunnel</td><td>Put the web portal on the internet with a <a href="#tunnel">Cloudflare Tunnel</a>, or not</td></tr><tr><td class="k">--tunnel-token TOKEN</td><td>Your tunnel's token (or set <code>CLOUDFLARE_TUNNEL_TOKEN</code>). Without one you get a random trycloudflare.com address</td></tr><tr><td class="k">--cloudflared FILE</td><td>Where <code>cloudflared</code> is, if it isn't next to the server or on the PATH</td></tr><tr><td class="k">--data FOLDER</td><td>The <a href="#data">data folder</a></td></tr><tr><td class="k">--no-audio</td><td>Don't use a sound card: stream only</td></tr><tr><td class="k">--list-devices</td><td>List the sound cards and exit</td></tr><tr><td class="k">--version</td><td>Print the version and exit</td></tr><tr><td class="k">--help</td><td>Print every option</td></tr></tbody></table></div>
+      <p>With <code>--setup</code> the options are saved in <code>server.json</code>; without it they apply to that run only.</p>
+
+      <h2 id="data">Data folder</h2>
+      <p>The server keeps its own data folder, so it never mixes with a desktop RadioMaster on the same machine. By default it's <code>~/.config/RadioMaster-Server</code> on Linux and <code>%APPDATA%\RadioMaster-Server</code> on Windows; choose another with <code>--data</code>.</p>
+      <div class="rundown-table"><table><thead><tr><th>File</th><th>Holds</th></tr></thead><tbody><tr><td class="k">server.json</td><td>The station name, username, password hash, port, HTTPS, web portal and sound settings</td></tr><tr><td class="k">config.json</td><td>The station's settings: encoders, advert rules, events, generator templates and so on</td></tr><tr><td class="k">playlists.json</td><td>The playlist tabs</td></tr><tr><td class="k">library.json</td><td>The music library</td></tr><tr><td class="k">cues.json</td><td>Cue points and fades from the track editor</td></tr><tr><td class="k">plays.json</td><td>Play counts</td></tr><tr><td class="k">tls-cert.pem, tls-key.pem</td><td>The self-signed certificate, if the server made one</td></tr></tbody></table></div>
+      <p>Back up this folder to back up the station.</p>
+
+      <h2 id="service">Run as a service</h2>
+      <h3>Linux (systemd)</h3>
+      <p>The package includes <code>radiomaster-server.service</code>. It runs the server as its own unprivileged <code>radiomaster</code> account with its data in <code>/var/lib/radiomaster</code>:</p>
+      <div class="code"><pre>sudo useradd --system --create-home --home-dir /var/lib/radiomaster radiomaster
+sudo cp RadioMaster-Server /usr/local/bin/
+sudo -u radiomaster RadioMaster-Server --data /var/lib/radiomaster --setup
+sudo cp radiomaster-server.service /etc/systemd/system/
+sudo systemctl enable --now radiomaster-server</pre></div>
+      <p><code>journalctl -u radiomaster-server -f</code> shows the station log, and <code>sudo systemctl restart radiomaster-server</code> restarts it. The unit adds the account to the <code>audio</code> group so it can use a sound card.</p>
+      <h3>Windows Server</h3>
+      <ol>
+        <li>Run <code>RadioMaster-Server.exe --setup</code> once in a console.</li>
+        <li>Start it at boot with Task Scheduler: a new task, trigger <i>At startup</i>, <i>Run whether user is logged on or not</i>, action <i>Start a program</i> with the full path to <code>RadioMaster-Server.exe</code>. Or use a service wrapper such as <a href="https://nssm.cc/">NSSM</a>:
+          <div class="code"><pre>nssm install RadioMasterServer &quot;C:\RadioMaster-Server\RadioMaster-Server.exe&quot;
+nssm start RadioMasterServer</pre></div>
+        </li>
+        <li>Run the service under the same account you ran <code>--setup</code> with, or pass <code>--data</code> so both use the same data folder.</li>
+      </ol>
+
+      <h2 id="network">Ports and firewall</h2>
+      <div class="rundown-table"><table><thead><tr><th>Port</th><th>Used for</th></tr></thead><tbody><tr><td class="k">9259 (TCP)</td><td>The desktop apps (File → Connect to Server)</td></tr><tr><td class="k">9260 (TCP)</td><td>The web portal, if it's on</td></tr><tr><td class="k">80 (TCP)</td><td>Only for the built-in <a href="#acme">Let's Encrypt</a>: its domain check, and sending browsers on to the <code>https://</code> portal</td></tr></tbody></table></div>
+      <p>Allow them through the firewall, for example <code>sudo ufw allow 9259/tcp</code> on Ubuntu, or a new inbound rule in Windows Defender Firewall. To reach the server from outside your network, forward the ports on your router, use a VPN, or put the portal on a <a href="#tunnel">Cloudflare Tunnel</a> with nothing forwarded at all. The stream itself goes from the server to your Icecast or Shoutcast server, so listeners never connect to these ports.</p>
+
+      <h2 id="https">HTTPS</h2>
+      <p>Turn HTTPS on with <code>--setup --https</code> (setup also asks), or in the app with <b>File → Server settings… → Use HTTPS</b> (it takes effect when the server restarts). Everything between the apps, browsers and the server is then encrypted. A plain <code>http://</code> request to the port is answered with a redirect to the same address on <code>https://</code>, and an address typed without <code>https://</code> in the app still finds the server.</p>
+      <p>There are three ways to get a certificate:</p>
+      <ul>
+        <li><b><a href="#acme">Let's Encrypt, looked after by the server</a></b>: the easiest if you have a domain name and port 80 can reach the server.</li>
+        <li><b><a href="#letsencrypt">Your own certificate files</a></b>, for example from certbot or win-acme, with <code>--cert</code> and <code>--key</code>.</li>
+        <li><b>Self-signed</b>: nothing to set up; the apps check it by its fingerprint, but browsers warn about it.</li>
+      </ul>
+      <h3>No certificate: self-signed</h3>
+      <p>Without <code>--cert</code> and <code>--key</code>, the server makes a self-signed certificate the first time (<code>tls-cert.pem</code> and <code>tls-key.pem</code> in its data folder) and prints its SHA-256 fingerprint at start-up. The first time an app connects, it shows the fingerprint and asks you to trust it: check it against the one the server printed (it's also in Server settings). The app remembers it for that server and refuses a different certificate later, warning that it changed. Browsers show a warning for a self-signed certificate; use a real certificate to avoid it.</p>
+      <h3 id="acme">Let's Encrypt, built in</h3>
+      <p>The server can get its own certificate from <a href="https://letsencrypt.org/">Let's Encrypt</a> and renew it by itself 30 days before it runs out, so browsers and apps trust it with no warning. You need a domain name (for example <code>studio.example.com</code>) that points at the server, and <b>port 80</b> of that name must reach the server (forward it on your router), because Let's Encrypt checks the name by fetching a file from <code>http://studio.example.com/.well-known/acme-challenge/…</code>.</p>
+      <div class="code"><pre>RadioMaster-Server --setup --acme studio.example.com --acme-email you@example.com</pre></div>
+      <p>Or in the app: <b>File → Server settings… → Use HTTPS → Get a free certificate from Let's Encrypt</b>, with the domain names (comma-separated) and an optional email. Until the first certificate arrives the server uses its self-signed one; the new certificate is swapped in without a restart, and the settings window shows how it went and when the certificate runs out. Tick <i>staging</i> (or <code>--acme-staging</code>) to try it first: Let's Encrypt limits how often real certificates can be asked for, and staging certificates aren't trusted by browsers.</p>
+      <ul>
+        <li>On Linux, listening on port 80 needs root, or <code>sudo setcap cap_net_bind_service=+ep /usr/local/bin/RadioMaster-Server</code> once.</li>
+        <li>Port 80 also sends browsers on to the <code>https://</code> portal.</li>
+        <li>If another program (IIS, nginx) already uses port 80, have it pass <code>/.well-known/acme-challenge/</code> on to the server's port and start the server with <code>--acme-http-port 0</code>. Or let that program get the certificate and give the files to the server, below.</li>
+      </ul>
+      <h3 id="letsencrypt">Your own certificate files (certbot, win-acme)</h3>
+      <p>With a domain name pointing at the server you can get a free, trusted certificate from <a href="https://letsencrypt.org/">Let's Encrypt</a>. Apps and browsers then trust the server like any website.</p>
+      <p><b>Linux, with certbot:</b></p>
+      <div class="code"><pre>sudo certbot certonly --standalone -d studio.example.com
+sudo RadioMaster-Server --data /var/lib/radiomaster --setup --https \
+  --cert /etc/letsencrypt/live/studio.example.com/fullchain.pem \
+  --key /etc/letsencrypt/live/studio.example.com/privkey.pem</pre></div>
+      <p>The server account must be able to read both files (with the systemd unit, that's the <code>radiomaster</code> user; for example give a group read access to <code>/etc/letsencrypt/live</code> and <code>/etc/letsencrypt/archive</code>). The standalone challenge needs port 80 free for a moment. certbot renews the files by itself, and the server picks up the new certificate within a few minutes, with no restart.</p>
+      <p><b>Windows, with win-acme:</b> <a href="https://www.win-acme.com/">win-acme</a> (<code>wacs.exe</code>) can request the certificate and save it as PEM files. Choose a manual certificate for your domain, the PEM files store with a folder such as <code>C:\certs</code>, and point the server at them:</p>
+      <div class="code"><pre>RadioMaster-Server.exe --setup --https --cert C:\certs\studio.example.com-chain.pem --key C:\certs\studio.example.com-key.pem</pre></div>
+      <p>win-acme renews by itself on a schedule, and the server picks up the renewed files within a few minutes, with no restart. The file names depend on your win-acme settings; check them in the folder after the first run.</p>
+
+      <h2 id="portal">Web portal</h2>
+      <p>The web portal runs the station from a browser on any computer, tablet or phone. Turn it on with <code>--setup --portal</code> (choose the port with <code>--portal-port</code>, default 9260), or in the app with <b>File → Server settings… → Web portal</b> (after a restart). Open <code>http://&lt;server&gt;:9260</code>, or <code>https://</code> with HTTPS on, and sign in with the server's username and password.</p>
+      <p>It works on phones (the sections sit along the bottom of the screen) as well as computers:</p>
+      <ul>
+        <li><b>Studio</b>: what's on air with its progress and levels, play / pause / stop / next / previous, the volume, the playlists (double-click a row to play it, ✕ to take it out) and the streams with start and stop.</li>
+        <li><b>Library</b>: search the server's library and add songs to any playlist, at the end or to play next; rescan.</li>
+        <li><b>Carts</b>: the cart wall. Tap a pad to play it, or <i>Edit pads</i> to choose each pad's sound and name.</li>
+        <li><b>Generator</b>: make a playlist from a template, keep the on-air playlist filled, and edit the templates and categories (folders are the server's).</li>
+        <li><b>Adverts</b>: the advert and jingle rules. Switch them on and off, play one now, add and edit them.</li>
+        <li><b>AzuraCast</b>: the station's now playing and listeners, skip, restart, start and stop broadcasting and AutoDJ, switch AzuraCast playlists on and off, and the connection settings. The calls go through the server, with the API key from Settings → AzuraCast.</li>
+        <li><b>Log</b>: recently played and the station log.</li>
+      </ul>
+      <p>A banner says when a newer RadioMaster release is out than the server runs. The portal needs a port of its own; allow it through the firewall like the main port. Its pages refuse to be shown inside other sites.</p>
+
+      <h2 id="tunnel">Cloudflare Tunnel</h2>
+      <p>A <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/">Cloudflare Tunnel</a> puts the web portal on the internet with no port forwarding and no certificate to look after: the server connects out to Cloudflare, and Cloudflare serves your address over HTTPS. Install Cloudflare's <code>cloudflared</code> on the server (or put it next to <code>RadioMaster-Server</code>), then either:</p>
+      <ul>
+        <li><b>Your own domain</b>: in the Cloudflare dashboard, <i>Zero Trust → Networks → Tunnels → Create a tunnel</i>, add a public hostname (for example <code>studio.example.com</code>) with the service <code>http://localhost:9260</code>, and copy the tunnel's token. Start the server with <code>--tunnel-token &lt;token&gt;</code> (or set <code>CLOUDFLARE_TUNNEL_TOKEN</code>), or paste it in <b>Server settings → Cloudflare Tunnel</b>.</li>
+        <li><b>Just try it</b>: <code>--tunnel</code> with no token gives a random <code>https://….trycloudflare.com</code> address. It changes each time the tunnel starts, and it's printed in the log and shown in Server settings.</li>
+      </ul>
+      <div class="code"><pre>CLOUDFLARE_TUNNEL_TOKEN=&#x27;eyJh…&#x27; RadioMaster-Server --tunnel</pre></div>
+      <p>The server starts <code>cloudflared</code>, starts it again if it stops, and stops it on exit. Switching the tunnel on or off in Server settings takes effect at once. The desktop app can connect through the tunnel address too.</p>
+
+      <h2 id="proxy">Behind a reverse proxy</h2>
+      <p>You don't need a reverse proxy: the server's own HTTPS is enough. Use one if you already run a web server on 443 and want the portal at a normal address such as <code>https://studio.example.com</code>. A proxy that serves HTTPS itself can talk to the server over plain HTTP. Either:</p>
+      <ul>
+        <li><b>Turn the server's HTTPS off</b> and let the proxy do it (the simplest): <code>--setup --no-https</code>, and forward to <code>http://127.0.0.1:9260</code> (portal) or <code>:9259</code> (apps). Start the server with <code>--bind 127.0.0.1</code> if the proxy is on the same machine, so the plain ports aren't reachable from outside.</li>
+        <li><b>Keep it on</b>: plain requests from a proxy that says the browser used HTTPS (<code>X-Forwarded-Proto: https</code>, <code>Forwarded: proto=https</code>, IIS's <code>X-ARR-SSL</code> or Cloudflare's <code>CF-Visitor</code>) are served as they are instead of being sent to <code>https://</code>. You can also forward to <code>https://127.0.0.1:9260</code> and tell the proxy to accept the server's certificate.</li>
+      </ul>
+      <p class="tip warn"><b>"Too many redirects" (ERR_TOO_MANY_REDIRECTS)?</b> Before 0.2.9, a proxy sending plain <code>http://</code> to a server with HTTPS on got a redirect to <code>https://</code> every time, and the browser went round in a loop. Update the server to 0.2.9 or newer, or turn the server's HTTPS off.</p>
+      <h3>nginx</h3>
+      <div class="code"><pre>server {
+    listen 443 ssl;
+    server_name studio.example.com;
+    ssl_certificate     /etc/letsencrypt/live/studio.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/studio.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:9260;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+}</pre></div>
+      <p>Keep <code>proxy_buffering off;</code> for the apps' port (9259) so the station's sound reaches the app straight away.</p>
+      <h3>Caddy</h3>
+      <p>Caddy gets and renews the Let's Encrypt certificate by itself:</p>
+      <div class="code"><pre>studio.example.com {
+    reverse_proxy 127.0.0.1:9260 {
+        flush_interval -1
+    }
+}</pre></div>
+      <h3>IIS (Windows Server)</h3>
+      <ol>
+        <li>Install <b>URL Rewrite</b> and <b>Application Request Routing</b>, and in ARR's <i>Server Proxy Settings</i> tick <i>Enable proxy</i>. Set <i>Response buffer threshold</i> to 0 so audio isn't held back.</li>
+        <li>Make a site for <code>studio.example.com</code> with an HTTPS binding and your certificate (win-acme can set this up).</li>
+        <li>Add a <i>Reverse Proxy</i> rule (URL Rewrite → Add Rule → Reverse Proxy) that forwards to <code>127.0.0.1:9260</code>, with <i>Enable SSL Offloading</i> ticked, and keep <i>Reverse rewrite host in response headers</i> off. IIS then forwards plain <code>http://</code> and adds <code>X-ARR-SSL</code>, which the server (0.2.9 or newer) understands. You can also turn the server's HTTPS off and start it with <code>--bind 127.0.0.1</code>.</li>
+      </ol>
+      <p>The generated rule in <code>web.config</code> looks like this:</p>
+      <div class="code"><pre>&lt;rewrite&gt;
+  &lt;rules&gt;
+    &lt;rule name=&quot;RadioMaster portal&quot; stopProcessing=&quot;true&quot;&gt;
+      &lt;match url=&quot;(.*)&quot; /&gt;
+      &lt;action type=&quot;Rewrite&quot; url=&quot;http://127.0.0.1:9260/{R:1}&quot; /&gt;
+    &lt;/rule&gt;
+  &lt;/rules&gt;
+&lt;/rewrite&gt;</pre></div>
+
+      <h2 id="connect">Connect from the desktop app</h2>
+      <p><b>From the app:</b></p>
+      <ol>
+        <li><b>File → Connect to Server…</b>, type the server's address (for example <code>192.168.1.20:9259</code> or <code>studio.example.com:9259</code>), the username and the password.</li>
+        <li>RadioMaster asks whether to <b>save your local session</b> as a station profile. If you do, your own playlists and settings come back exactly as they were when you disconnect. If you don't, the server's playlists and settings stay in the app after you disconnect.</li>
+        <li>While connected, a green button with the station's name sits left of the RadioMaster logo (amber while the connection is being restored). Click it for the details or to disconnect; <b>File → Disconnect from Server</b> does the same.</li>
+      </ol>
+      <p><b>From the login screen:</b> <b>Connect to Remote Server…</b> below the sign-in box connects without a local account, using the server's username and password. Your local session is saved as the profile "Local session before remote sign-in" and comes back when you disconnect, which (like Log out) returns to the login screen. Managing local user accounts isn't available this way.</p>
+      <h3>While connected</h3>
+      <ul>
+        <li>Everything you do happens on the server: playlist edits, play/stop/next, carts, encoders, the scheduler, adverts, the generator and settings.</li>
+        <li>Your own playback and encoders stop while you're connected (one station on air at a time) and come back on disconnect.</li>
+        <li>Several apps can be connected at once. If two people change the same playlist at the same moment, the server's version wins and the app says so.</li>
+        <li>The app plays the server's on-air mix on your own outputs, about half a second behind. Untick <b>Hear the station here</b> in the connection window when you're in the same room as the server's speakers.</li>
+        <li>The <b>Mic</b> button sends your microphone to the server, which puts it on air with the station's mic settings. Studio monitor outputs on both machines go quiet while it's on.</li>
+        <li>Music files, folders and the library are the server's, so a library folder is typed as the server sees it (for example <code>/srv/music</code>).</li>
+        <li>These stay on your computer: the interface language, sound cards, the remote control API, plugins, update checks and ffmpeg. Previews and waveforms in the track editor need the files on your own computer and don't work while connected.</li>
+      </ul>
+
+      <h2 id="settings">Server settings</h2>
+      <p>While connected, <b>File → Server settings…</b> changes:</p>
+      <ul>
+        <li>the station name, and whether the server starts playing when it starts,</li>
+        <li>the sound output (below),</li>
+        <li><b>Use HTTPS</b>, the certificate's fingerprint and <b>Let's Encrypt</b> (domains, email, staging, and how the last request went), and the <b>Web portal</b> (HTTPS and the portal after a restart),</li>
+        <li>the <b>Cloudflare Tunnel</b>: on or off, the token, and the address it's using (at once),</li>
+        <li>the server password (you type the current one first).</li>
+      </ul>
+
+      <h2 id="audio">Sound output</h2>
+      <p>The server can play through its own sound cards (into a desk or an FM transmitter, for example) as well as stream. By default it uses its default sound card. In <b>Server settings</b>, switch <b>Play through the server's sound cards</b> on or off and tick which cards to use; the change takes effect at once and each card shows its status. <code>RadioMaster-Server --list-devices</code> lists the cards.</p>
+      <p>With no sound card, with it switched off, or with <code>--no-audio</code>, the server runs on a silent clock, so automation and streaming carry on as normal. That's the usual setup on a VPS.</p>
+
+      <h2 id="move">Move a station to the server</h2>
+      <ol>
+        <li>Close RadioMaster on the desktop.</li>
+        <li>Copy <code>config.json</code>, <code>playlists.json</code>, <code>library.json</code>, <code>cues.json</code> and <code>plays.json</code> from the desktop's data folder into the server's data folder.</li>
+        <li>Copy the music to the server, then fix the music folder paths: connect from the app and update the library folders, generator categories and advert rule folders to where the files are on the server.</li>
+        <li>Start the server, connect, and rescan the library.</li>
+      </ol>
+
+      <h2 id="security">Security</h2>
+      <ul>
+        <li>The password is checked with Argon2 and only its hash is stored, in <code>server.json</code>. Sign-ins expire after a day without use, and repeated wrong passwords are slowed down.</li>
+        <li>Whoever signs in can do everything the station can, including playlist <code>RUN</code> commands that start programs on the server. Use a strong password and run the server under its own unprivileged account (the systemd unit does).</li>
+        <li>On a network you don't trust, or over the internet, turn on <a href="#https">HTTPS</a>, or put the server behind an HTTPS <a href="#proxy">reverse proxy</a> or a VPN. Without it the password and everything else go over the network unencrypted.</li>
+        <li>The web portal uses the same sign-in, and its pages refuse to be shown inside other sites.</li>
+      </ul>
+
+      <h2 id="trouble">Troubleshooting</h2>
+      <div class="rundown-table"><table><thead><tr><th>Problem</th><th>What to check</th></tr></thead><tbody><tr><td class="it">The app can't connect</td><td>Is the server running (the console or <code>journalctl</code> says what it's listening on)? Is the port allowed through the firewall and forwarded on the router? Try the address from a browser: an answer of any kind means the network is fine</td></tr><tr><td class="it">"Type https:// as the address"</td><td>The server has HTTPS on. Type the address with <code>https://</code>, or leave it out and the app finds it</td></tr><tr><td class="it">The certificate changed</td><td>If you renewed or replaced the certificate, or deleted the self-signed one, check the new fingerprint against the server's start-up message and trust it again. If you didn't change anything, don't connect: something is in the way</td></tr><tr><td class="it">Too many redirects in the browser</td><td>A reverse proxy is sending <code>http://</code> to a server older than 0.2.9 with HTTPS on. Update the server or turn its HTTPS off. See <a href="#proxy">reverse proxy</a></td></tr><tr><td class="it">The browser warns about the certificate</td><td>That's the self-signed certificate. Use <a href="#acme">Let's Encrypt</a> or your own certificate</td></tr><tr><td class="it">Let's Encrypt fails</td><td>Server settings shows what Let's Encrypt answered. The domain must point at the server, and port 80 must reach it from the internet (check the router and firewall). On Linux, the server needs the <code>setcap</code> step above to use port 80. Try <i>staging</i> while you sort it out</td></tr><tr><td class="it">The tunnel doesn't start</td><td>Is <code>cloudflared</code> installed, next to the server, or given with <code>--cloudflared</code>? The log shows what it printed. With a token, the public hostname's service must be <code>http://localhost:9260</code></td></tr><tr><td class="it">"The web portal needs a port of its own"</td><td><code>--portal-port</code> is the same as <code>--port</code>; choose another</td></tr><tr><td class="it">No sound from the server's sound card</td><td>Run <code>--list-devices</code>, check the cards ticked in Server settings, and on Linux that the account is in the <code>audio</code> group</td></tr><tr><td class="it">Can't read the certificate</td><td>The server account needs read access to both the certificate and the key</td></tr><tr><td class="it">Songs missing after moving the station</td><td>The paths in the library and playlists are still the desktop's. Fix the folders and rescan</td></tr></tbody></table></div>
+      <p>Still stuck? Ask on the <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a> with the server's log, or <a href="https://github.com/epell-development/RadioMaster/issues">open an issue</a>.</p>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/broadcast-from-anywhere/"><span class="tag">Server and remote</span><b>Broadcast from anywhere</b><span>Put the station on a server and run it from the desktop app or a phone browser.</span></a>
+<a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
+<a class="guide-card" href="/guides/stream-to-icecast-shoutcast/"><span class="tag">Get started</span><b>Stream to Icecast or Shoutcast</b><span>Add an encoder, pick a format and bitrate, and send song titles to your listeners.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

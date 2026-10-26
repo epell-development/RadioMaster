@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="/img/icon.png">
+<link rel="apple-touch-icon" href="/img/icon.png">
+<title>How to Stream to Icecast, Shoutcast or AzuraCast with RadioMaster (MP3, AAC, Opus)</title>
+<meta name="description" content="Set up RadioMaster&#x27;s built-in encoder to stream your station to Icecast 2, Shoutcast 2 or an AzuraCast DJ port in MP3, AAC, Opus, Ogg Vorbis or FLAC, with song titles and automatic reconnect.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<link rel="canonical" href="https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/">
+<meta name="theme-color" content="#080e17">
+<meta name="author" content="DovaFM Digital Entertainment Group">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RadioMaster">
+<meta property="og:title" content="How to stream to Icecast or Shoutcast">
+<meta property="og:description" content="Add an encoder, pick a format and bitrate, send song titles and stay connected.">
+<meta property="og:url" content="https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/">
+<meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="780">
+<meta property="og:image:alt" content="RadioMaster radio automation software">
+<meta property="og:locale" content="en_GB">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to stream to Icecast or Shoutcast">
+<meta name="twitter:description" content="Add an encoder, pick a format and bitrate, send song titles and stay connected.">
+<meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "@id": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#article",
+      "headline": "How to stream to Icecast or Shoutcast",
+      "description": "Set up RadioMaster's built-in encoder to stream your station to Icecast 2, Shoutcast 2 or an AzuraCast DJ port in MP3, AAC, Opus, Ogg Vorbis or FLAC, with song titles and automatic reconnect.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "datePublished": "2026-10-25",
+      "dateModified": "2026-10-25",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/",
+      "author": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "DovaFM Digital Entertainment Group",
+        "url": "https://deg.dovafm.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://radiomaster.dovafm.com/img/icon.png"
+        }
+      },
+      "about": {
+        "@id": "https://radiomaster.dovafm.com/#app"
+      }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "RadioMaster",
+          "item": "https://radiomaster.dovafm.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Guides",
+          "item": "https://radiomaster.dovafm.com/guides/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Stream to Icecast or Shoutcast",
+          "item": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- NAV -->
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/img/icon.png" alt="RadioMaster logo" width="34" height="34"><span>Radio<b>Master</b></span></a>
+    <nav class="links" id="site-nav" aria-label="Main">
+      <a href="/#features">Features</a>
+      <a class="active" aria-current="page" href="/guides/">Guides</a>
+      <a href="/server/">Server</a>
+      <a href="/updates/">Updates</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support</a>
+    </nav>
+    <a class="btn primary small nav-dl" href="/#download">Download</a>
+    <button class="menu-btn" type="button" aria-controls="site-nav" aria-expanded="false" aria-label="Open menu"><span></span></button>
+  </div>
+</header>
+<script src="/site.js" defer></script>
+<!-- /NAV -->
+
+<main id="top">
+  <section class="wrap page-top">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Stream to Icecast or Shoutcast</nav>
+    <p class="eyebrow">Guide · Get started</p>
+    <h1 class="page-h">How to stream to Icecast or Shoutcast</h1>
+    <p class="lede" style="margin-top:16px">RadioMaster has its own encoder, so it can send your station straight to an Icecast or Shoutcast server with no extra software. You can run several streams at once, for example a high and a low quality one, and RadioMaster reconnects by itself if the connection drops.</p>
+    <nav class="toc" aria-label="On this page"><a href="#need">What you need</a><a href="#add">Add an encoder</a><a href="#formats">Formats and bitrates</a><a href="#azuracast">AzuraCast</a><a href="#fm">Sound cards and FM</a><a href="#trouble">Troubleshooting</a></nav>
+  </section>
+
+  <section class="block">
+    <article class="wrap prose">
+<h2 id="need" style="margin-top:0">What you need</h2>
+      <p>From your stream host or your own server, note the <b>host</b> (address), <b>port</b>, <b>mount point</b> (Icecast, for example <code>/live</code>), and the <b>source password</b>. Some hosts also give a username; on Icecast it's usually <code>source</code>. If you don't have a server yet, the <a href="/guides/start-an-internet-radio-station/">start a station guide</a> compares the options.</p>
+
+      <h2 id="add">Add an encoder</h2>
+      <ol>
+        <li>Open <b>Tools → Streams / encoders</b>.</li>
+        <li>Press <b>➕ Add encoder</b> and give it a name, for example <i>Main 128k</i>.</li>
+        <li>Choose the <b>Server type</b>: <b>Icecast</b>, or <b>Shoutcast (v2 DJ)</b>.</li>
+        <li>Fill in <b>Host</b>, <b>Port</b>, <b>Mount</b>, <b>Username</b> and <b>Password</b>.</li>
+        <li>Pick the <b>Format</b> and <b>Bitrate (kbps)</b>.</li>
+        <li>Fill in the station details listeners and directories see: <b>Stream name</b>, <b>Genre</b>, <b>Description</b> and <b>Website</b>. Tick <b>List publicly</b> if you want directories to list you.</li>
+        <li>Leave <b>Send track titles</b> on so players show the song, and tick <b>Connect on startup</b> to go on air as soon as RadioMaster opens.</li>
+        <li>Press <b>▶ Connect</b>. The encoder shows when it's connected, and <b>⏹ Disconnect</b> stops it.</li>
+      </ol>
+      <p>Add more encoders the same way. Each one runs on its own, so a problem with one stream doesn't touch the others.</p>
+      <p class="tip"><b>Permission:</b> starting, stopping and changing encoders needs the Streaming permission. See <a href="/guides/users-and-permissions/">users and permissions</a>.</p>
+
+      <h2 id="formats">Formats and bitrates</h2>
+      <div class="rundown-table"><table><thead><tr><th>Format</th><th>Needs</th><th>Good for</th></tr></thead><tbody><tr><td class="it">MP3</td><td>Built in</td><td>Plays everywhere. 128 kbps is the usual choice, 192–320 for music-first stations.</td></tr><tr><td class="it">AAC</td><td>ffmpeg</td><td>Better sound than MP3 at the same bitrate. 64–96 kbps sounds good on mobile.</td></tr><tr><td class="it">Opus</td><td>ffmpeg</td><td>The best quality at low bitrates (48–96 kbps). Icecast only.</td></tr><tr><td class="it">Ogg Vorbis</td><td>ffmpeg</td><td>Open format for Icecast. Some servers show titles only for MP3 and AAC.</td></tr><tr><td class="it">FLAC</td><td>ffmpeg</td><td>Lossless, for studio links. Uses a lot of bandwidth.</td></tr><tr><td class="it">Custom</td><td>Your encoder</td><td>Any program that reads PCM and writes a stream.</td></tr></tbody></table></div>
+      <p>Shoutcast only takes MP3 or AAC, and RadioMaster warns you if you pick something else.</p>
+      <h3>Getting ffmpeg</h3>
+      <p>AAC, Opus, Vorbis and FLAC are made by <a href="https://ffmpeg.org/download.html">ffmpeg</a>. RadioMaster looks for it next to itself, in its settings folder and on the PATH. If it isn't found, the Streams window says so: press <b>get ffmpeg</b> to download it, then <b>Choose…</b> to point at the program, or <b>Look again</b> after installing it.</p>
+      <h3>A custom encoder</h3>
+      <p>Choose <b>Custom</b> to use any encoder. RadioMaster starts your <b>Command</b>, feeds it 16-bit 44.1 kHz stereo PCM on its input, and sends whatever it writes to its output to the server with the <b>Content type</b> you give. <code>{bitrate}</code> in the command is replaced with the bitrate. For example:</p>
+      <div class="code"><pre>ffmpeg -f s16le -ar 44100 -ac 2 -i - -c:a libfdk_aac -profile:a aac_he -b:a {bitrate}k -f adts -</pre></div>
+
+      <h2 id="azuracast">Streaming to AzuraCast</h2>
+      <p>AzuraCast takes a live stream on its DJ port. In AzuraCast, add a Streamer/DJ account for the station (or do it from RadioMaster's <a href="/guides/azuracast/">AzuraCast tool</a>). Then add an encoder with:</p>
+      <ul>
+        <li>Server type <b>Icecast</b>, the AzuraCast server as the host and the station's <b>DJ port</b> (usually 8005) as the port.</li>
+        <li>Mount <code>/</code>, and the streamer's username and password.</li>
+      </ul>
+      <p>The AzuraCast tool's Streamers/DJs page can fill encoder 1 with a DJ's login for you. When you connect, AzuraCast switches from AutoDJ to your live stream.</p>
+
+      <h2 id="fm">Sound cards and FM transmitters</h2>
+      <p>Streams and sound cards run at the same time. In <b>Settings → Audio devices → Outputs</b>, tick every device that should play the on-air mix, each with its own volume: the studio speakers, headphones, or a sound card feeding an FM transmitter. Mark studio speakers as <b>Studio monitor</b> and they go quiet while the mic is on, while the stream and the other outputs keep playing.</p>
+
+      <h2 id="trouble">Troubleshooting</h2>
+      <ul>
+        <li><b>It won't connect</b>: check the host, port and mount, and that the password is the <i>source</i> password, not the admin one. The station log (bottom of the main window) says what the server answered.</li>
+        <li><b>It keeps dropping</b>: RadioMaster reconnects by itself and waits a little longer between each try. If it never stays up, another source may already be connected to that mount.</li>
+        <li><b>No song titles</b>: make sure <b>Send track titles</b> is on. With Ogg formats some servers only show titles for MP3 and AAC.</li>
+        <li><b>Sound is choppy for listeners</b>: lower the bitrate, or check the upload speed of the computer that streams.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="head" style="margin-bottom:22px">
+        <p class="eyebrow">Keep going</p>
+        <h2>More guides</h2>
+      </div>
+<!-- GUIDES:related -->
+<div class="guide-grid">
+<a class="guide-card" href="/guides/start-an-internet-radio-station/"><span class="tag">Get started</span><b>Start an internet radio station</b><span>Music and licences, a streaming server, playlists and going live, step by step.</span></a>
+<a class="guide-card" href="/guides/playlist-generator/"><span class="tag">Run the station</span><b>Use the playlist generator</b><span>Categories, templates and patterns that build hours of programming in one click.</span></a>
+<a class="guide-card" href="/guides/advertisement-scheduler/"><span class="tag">Run the station</span><b>Schedule adverts and jingles</b><span>Rules for every N songs, every N minutes or set times, with run dates for each advert.</span></a>
+</div>
+<!-- /GUIDES:related -->
+      <div class="related" style="margin-top:22px"><a class="btn ghost" href="/guides/">All guides</a></div>
+    </div>
+  </section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a class="brand" href="/" style="font-size:1.2rem"><img src="/img/icon.png" alt="" style="width:24px;height:24px;border-radius:6px"><span>Radio<b>Master</b></span></a>
+      <a href="/guides/">Guides</a>
+      <a href="/server/">RadioMaster Server</a>
+      <a href="/server/docs/">Server docs</a>
+      <a href="/updates/">Updates</a>
+      <a href="/#faq">FAQ</a>
+      <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
+      <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
+      <a href="https://github.com/epell-development/RadioMaster/releases">Releases</a>
+      <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
+      <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
+    </div>
+    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
+  </div>
+</footer>
+<!-- /FOOTER -->
+
+</body>
+</html>

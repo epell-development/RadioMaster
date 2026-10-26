@@ -112,6 +112,8 @@ pub struct Live {
     pub scanning: bool,
     pub scan_progress: usize,
     pub notify: String,
+    /// the server's clock when this was sent (unix ms; 0 from older servers)
+    pub now_ms: i64,
 }
 
 /// One poll's answer. The lists come only when they changed since the revision the app has.
@@ -129,6 +131,39 @@ pub struct Snapshot {
     pub history: Option<Vec<HistWire>>,
     /// the library is fetched on its own when this changes
     pub lib_ver: u64,
+    /// playlist files the server can't find (sent when the list changed)
+    pub missing_rev: u64,
+    pub missing: Option<Vec<PathBuf>>,
+}
+
+/// A waveform for the track editor of an app (levels 0..1 scaled to 0..65535), with the cues the
+/// server uses for that file.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct WaveWire {
+    pub peaks: Vec<u16>,
+    pub rms: Vec<u16>,
+    pub cues: Option<Cues>,
+}
+
+impl WaveWire {
+    pub fn of(w: &Waveform, cues: Option<Cues>) -> WaveWire {
+        let q = |v: &[f32]| v.iter().map(|x| (x.clamp(0.0, 1.0) * 65535.0).round() as u16).collect();
+        WaveWire { peaks: q(&w.peaks), rms: q(&w.rms), cues }
+    }
+
+    pub fn waveform(&self) -> Waveform {
+        let f = |v: &[u16]| v.iter().map(|&x| x as f32 / 65535.0).collect();
+        Waveform { peaks: f(&self.peaks), rms: f(&self.rms) }
+    }
+}
+
+/// The answer to an app asking for a waveform: it, or "still analysing, ask again".
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WaveReply {
+    pub wave: Option<WaveWire>,
+    pub pending: bool,
 }
 
 /// The server's own settings, as the app's Server settings window shows them.
@@ -175,6 +210,20 @@ pub struct ServerUpdate {
     pub https: bool,
     pub portal: bool,
     pub portal_port: u16,
+}
+
+/// Playlist files that are missing (on the server, which is the machine that plays them).
+pub fn missing_in(t: &TabsWire) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = t
+        .tabs
+        .iter()
+        .flat_map(|t| t.entries.iter())
+        .filter(|e| e.is_file() && library::file_missing(&e.track.path))
+        .map(|e| e.track.path.clone())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// How many log lines and history items a client is sent.
@@ -366,6 +415,7 @@ impl Playout {
             scanning: self.scanning,
             scan_progress: self.scan_progress,
             notify: self.notify.lock().clone(),
+            now_ms: chrono::Utc::now().timestamp_millis(),
         }
     }
 
@@ -375,7 +425,19 @@ impl Playout {
             "paused" => PlayState::Paused,
             _ => PlayState::Stopped,
         };
-        self.status = Status { has_track: l.has_track, pos: l.pos, total: l.total, peak_l: l.peak_l, peak_r: l.peak_r };
+        // the position is counted on here between polls, so it ticks with the clocks instead of in
+        // uneven steps; it only jumps when it is more than a moment out (a seek or a new track)
+        let playing = self.state == PlayState::Playing && l.has_track;
+        let age = if l.now_ms > 0 { ((self.now().timestamp_millis() - l.now_ms).clamp(0, 2000)) as f32 / 1000.0 } else { 0.0 };
+        let est = if playing { (l.pos + age).min(l.total.max(l.pos)) } else { l.pos };
+        let same = self.on_air.as_ref().map(|t| &t.path) == l.on_air.as_ref().map(|t| &t.path);
+        self.mirror_pos = match self.mirror_pos {
+            Some((p, t)) if playing && same && (p + t.elapsed().as_secs_f32() - est).abs() < 0.3 => Some((p, t)),
+            _ if playing => Some((est, Instant::now())),
+            _ => None,
+        };
+        self.status = Status { has_track: l.has_track, pos: est, total: l.total, peak_l: l.peak_l, peak_r: l.peak_r };
+        self.follow_mirror_pos();
         self.on_air = l.on_air;
         self.on_air_label = l.on_air_label;
         self.wait_until = l.wait_until.and_then(|t| Local.timestamp_opt(t, 0).single());
@@ -398,6 +460,56 @@ impl Playout {
         self.mirror_carts = l.carts;
         self.scanning = l.scanning;
         self.scan_progress = l.scan_progress;
+    }
+
+    /// Move a mirror's on-air position on to now.
+    pub(super) fn follow_mirror_pos(&mut self) {
+        if let Some((p, t)) = self.mirror_pos {
+            if self.state == PlayState::Playing {
+                self.status.pos = (p + t.elapsed().as_secs_f32()).min(self.status.total.max(p));
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ files on the server
+    pub fn set_missing(&mut self, v: Vec<PathBuf>) {
+        self.mirror_missing = v.into_iter().collect();
+    }
+
+    /// A file in the library or a playlist (apps may only ask about those).
+    pub fn knows_file(&self, p: &Path) -> bool {
+        self.lib_index.contains_key(p)
+            || self.playlist.iter().chain(self.tabs.iter().flat_map(|t| t.entries.iter())).any(|e| e.track.path == p)
+    }
+
+    /// The waveform and cues of a file, if it has been analysed.
+    pub fn wave_wire(&self, p: &Path) -> Option<WaveWire> {
+        self.waves.get(p).map(|w| WaveWire::of(w, self.cues.get(p).copied()))
+    }
+
+    /// From now on this mirror asks the server for waveforms (see `link`).
+    pub fn set_wave_source(&mut self, tx: crossbeam_channel::Sender<PathBuf>) {
+        self.remote_waves = Some(tx);
+        self.pending.clear();
+    }
+
+    /// A waveform the server sent, or why it couldn't.
+    pub fn put_remote_wave(&mut self, path: PathBuf, r: Result<WaveWire, String>) {
+        self.pending.remove(&path);
+        match r {
+            Ok(w) => {
+                // cues set by hand here meanwhile win; otherwise the server's (or worked out here)
+                let wave = w.waveform();
+                if !self.cues.get(&path).is_some_and(|c| c.manual) {
+                    let c = w.cues.unwrap_or_else(|| smart_cues(&wave, &self.cfg.fade));
+                    self.cues.insert(path.clone(), c);
+                }
+                self.keep_wave(path, wave);
+            }
+            Err(e) => {
+                self.wave_errors.insert(path, e);
+            }
+        }
     }
 
     pub fn log_wire(&self) -> Vec<LogWire> {
@@ -512,6 +624,69 @@ mod tests {
         // nothing played or moved here
         assert_eq!(m.state, PlayState::Stopped);
         assert_eq!(m.playing_tab, 0);
+    }
+
+    #[test]
+    fn waveforms_survive_the_trip() {
+        let w = Waveform { peaks: vec![0.0, 0.5, 1.0, 2.0], rms: vec![0.0, 0.25, 0.7, 0.001] };
+        let back = serde_json::from_str::<WaveWire>(&serde_json::to_string(&WaveWire::of(&w, None)).unwrap()).unwrap().waveform();
+        assert_eq!(back.peaks.len(), 4);
+        for (a, b) in w.rms.iter().zip(&back.rms) {
+            assert!((a - b).abs() < 1e-4);
+        }
+        assert_eq!(back.peaks[3], 1.0); // (levels are 0..1)
+    }
+
+    #[test]
+    fn mirror_counts_the_position_on_between_polls() {
+        let local = Playout::new(Engine::new_detached(), Config::default());
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut m = Playout::mirror_of(&local, tx);
+        let track = Track { path: PathBuf::from("/music/a.mp3"), ..Default::default() };
+        let live = |pos: f32| Live {
+            state: "playing".into(),
+            has_track: true,
+            pos,
+            total: 200.0,
+            on_air: Some(track.clone()),
+            now_ms: chrono::Utc::now().timestamp_millis(),
+            ..Default::default()
+        };
+        m.apply_live(live(10.0));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        m.tick();
+        assert!(m.status.pos > 10.2 && m.status.pos < 10.6, "{}", m.status.pos);
+        // a poll that is a little behind doesn't pull it back (no stutter)…
+        let before = m.status.pos;
+        m.apply_live(live(10.2));
+        assert!(m.status.pos >= before);
+        // …but a seek does
+        m.apply_live(live(90.0));
+        assert!((m.status.pos - 90.0).abs() < 0.1);
+        // paused: shown as the server has it
+        let mut p = live(42.0);
+        p.state = "paused".into();
+        m.apply_live(p);
+        m.tick();
+        assert_eq!(m.status.pos, 42.0);
+    }
+
+    #[test]
+    fn mirror_keeps_hand_set_cues_it_sent() {
+        let local = Playout::new(Engine::new_detached(), Config::default());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut m = Playout::mirror_of(&local, tx);
+        let p = PathBuf::from("/music/a.mp3");
+        m.set_manual_cues(&p, Cues::plain(100.0), 100.0);
+        assert!(matches!(rx.try_recv(), Ok(Cmd::SetCues { .. })));
+        assert!(m.manual_cues_for(&p));
+        // a waveform arriving later doesn't overwrite them
+        let w = Waveform { peaks: vec![0.5; 100], rms: vec![0.3; 100] };
+        m.put_remote_wave(p.clone(), Ok(WaveWire::of(&w, None)));
+        assert!(m.manual_cues_for(&p));
+        assert!(m.waves.contains_key(&p));
+        m.put_remote_wave(PathBuf::from("/music/b.mp3"), Err("nope".into()));
+        assert_eq!(m.wave_error(Path::new("/music/b.mp3")), Some("nope"));
     }
 
     #[test]

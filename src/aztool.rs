@@ -1116,12 +1116,7 @@ impl App {
             for h in &items {
                 ui.label(when_any(h, &["played_at"]));
                 ui.label(song_text(h));
-                let src = if vb(h, "is_request") {
-                    "Request".to_string()
-                } else {
-                    let s = first(h, &["streamer", "playlist"]);
-                    s
-                };
+                let src = if vb(h, "is_request") { "Request".to_string() } else { first(h, &["streamer", "playlist"]) };
                 ui.label(RichText::new(src).small().color(GRAY));
                 ui.label(first(h, &["listeners_start", "listeners"]));
                 ui.end_row();
