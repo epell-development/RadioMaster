@@ -685,8 +685,19 @@ impl App {
                     };
                     ui.label(RichText::new(badge).small().color(col));
                     if wave.is_none() {
-                        ui.spinner();
-                        ui.label(RichText::new(tr("analysing…")).small().color(GRAY));
+                        match core.wave_error(&fe.path) {
+                            Some(e) => {
+                                ui.label(
+                                    RichText::new(format!("{}: {e}", tr("Can't show the waveform")))
+                                        .small()
+                                        .color(Color32::from_rgb(200, 60, 60)),
+                                );
+                            }
+                            None => {
+                                ui.spinner();
+                                ui.label(RichText::new(tr("analysing…")).small().color(GRAY));
+                            }
+                        }
                     }
                     // zoom buttons follow the text and wrap onto a new line when narrow (never overlap it)
                     ui.separator();
@@ -781,10 +792,11 @@ impl App {
                     let nl = 10f32.powf(nc.gain_db / 20.0);
                     draw_lane(lane_b, w, &|t| t - off, &|t| nc.gain_at(t) * nl, Color32::from_rgb(120, 220, 140));
                 } else if has_next {
+                    let failed = next.as_ref().is_some_and(|(np, _, _)| core.wave_error(np).is_some());
                     p.text(
                         lane_b.center(),
                         Align2::CENTER_CENTER,
-                        "analysing next track…",
+                        if failed { tr("can't analyse the next track") } else { tr("analysing next track…") },
                         FontId::proportional(12.0),
                         Color32::from_gray(120),
                     );
