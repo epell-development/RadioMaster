@@ -214,7 +214,8 @@ pub struct Starts<'a> {
 
 impl Starts<'_> {
     /// When row `r` starts. Exact: an hour marker can skip the rows before it, so rows are worked
-    /// out up to the first marker at or after `r`.
+    /// out up to the first marker at or after `r`. Rows already worked out are kept, so use one
+    /// `Starts` for all the rows of a frame rather than a new one per row.
     pub fn get(&mut self, r: usize) -> Option<Start> {
         self.fill(r);
         self.out.get(r).copied().flatten()
