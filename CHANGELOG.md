@@ -1,10 +1,5 @@
 # Changelog
 
-## v0.2.10 — 2026-10-26
-**Fixed**
-- The app froze when connecting to a RadioMaster Server, and when opening a file or folder picker while
-  connected (v0.2.9). Only the app needs this update; servers on v0.2.9 are fine
-
 ## v0.2.9 — 2026-10-26
 **New**
 - Playlist generator: inserts after N songs, every N minutes (on the clock) or at set times, with hour
@@ -37,6 +32,8 @@
   same size in pixels, or fit each screen like 1920×1080)
 
 **Fixed**
+- Connecting to a server or opening a file or folder picker while connected froze the app (fixed in the
+  re-released v0.2.9 build)
 - Connected to a server: playlist rows were all red; now they're red only when the file is missing on the
   server
 - Connected to a server: the track editor stayed on "analysing…"; it now shows the waveform and cues
