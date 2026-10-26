@@ -242,7 +242,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut r.folder).desired_width(280.0).hint_text(tr("folder")));
                             if ui.button("…").on_hover_text(tr("Choose a folder")).clicked() {
-                                self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::RotFolder(i, p)));
+                                self.pick(Pick::Folder, tr("Choose a folder"), move |_, v| Some(Dlg::RotFolder(i, v.into_iter().next()?)));
                             }
                         });
                     }
@@ -269,9 +269,7 @@ impl App {
                     }
                     ui.horizontal(|ui| {
                         if ui.button(if r.files.is_empty() { tr("…or choose files") } else { tr("➕ Add files") }).clicked() {
-                            self.dlg(move || {
-                                rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(|v| Dlg::RotFiles(i, v))
-                            });
+                            self.pick(Pick::Files(AUDIO.0, AUDIO.1), tr("Choose files"), move |_, v| Some(Dlg::RotFiles(i, v)));
                         }
                         if !r.files.is_empty() {
                             ui.label(RichText::new(tr("(chosen files are used instead of the folder)")).small().color(GRAY));
@@ -431,8 +429,8 @@ impl App {
                         });
                         ui.add(egui::TextEdit::singleline(&mut a.path).desired_width(260.0).hint_text(tr("audio file")));
                         if ui.button("…").on_hover_text(tr("Pick the audio file")).clicked() {
-                            self.dlg(move || {
-                                rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_file().map(|p| Dlg::AdPath(i, p))
+                            self.pick(Pick::File(AUDIO.0, AUDIO.1), tr("Pick the audio file"), move |_, v| {
+                                Some(Dlg::AdPath(i, v.into_iter().next()?))
                             });
                         }
                         if delete_button(ui, ("advert", i), tr("this advert")) {

@@ -108,7 +108,7 @@ impl App {
                                 ui.label(tr("folder"));
                                 ui.add(egui::TextEdit::singleline(&mut c.folder).desired_width(240.0).hint_text(tr("any")));
                                 if ui.button("…").on_hover_text(tr("Browse")).clicked() {
-                                    self.dlg(move || rfd::FileDialog::new().pick_folder().map(|p| Dlg::CatFolder(i, p)));
+                                    self.pick(Pick::Folder, tr("Category folder"), move |_, v| Some(Dlg::CatFolder(i, v.into_iter().next()?)));
                                 }
                                 if delete_button(ui, ("category", i), tr("this category")) {
                                     del = Some(i);

@@ -209,7 +209,7 @@ impl App {
                 }
                 TabOp::LoadM3u(i) => {
                     self.view_pl = i;
-                    self.dlg(|| rfd::FileDialog::new().add_filter("Playlist", &["m3u", "m3u8"]).pick_file().map(Dlg::load_m3u));
+                    self.pick(Pick::File(M3U.0, M3U.1), tr("Open playlist"), |fs, v| Some(Dlg::load_m3u(fs, v.into_iter().next()?)));
                 }
                 TabOp::Rows(i, rows) => core.append_to_tab(i, rows),
                 TabOp::CopyInto(from, rows, to, at) => {

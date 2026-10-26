@@ -1,7 +1,7 @@
 //! RadioMaster Server's HTTP API: what the desktop app's File → Connect to Server talks to.
 //!
 //!   GET  /api/v1/ping                      who is this (no sign-in needed)
-//!   POST /api/v1/login   {user, password}  → {token, name, version, protocol}
+//!   POST /api/v1/login   {user, password}  → {token, name, version, protocol, admin, perms}
 //!   POST /api/v1/logout
 //!   GET  /api/v1/state?rev=&cfg=&log=&hist=&miss=  → sync::Snapshot (lists only when they changed)
 //!   POST /api/v1/wave {path}                 → sync::WaveReply (202 while the server analyses it)
@@ -11,20 +11,33 @@
 //!   POST /api/v1/config  {base, cfg}       → {rev}, or 409
 //!   GET  /api/v1/server                    → sync::ServerInfo (name, sound cards, …)
 //!   POST /api/v1/server  sync::ServerUpdate → sync::ServerInfo
+//!   POST /api/v1/server/update             download the latest release, install it and restart
+//!   POST /api/v1/server/restart | /stop
+//!   GET  /api/v1/users                     → [sync::UserWire]
+//!   POST /api/v1/users   sync::UserOp      → [sync::UserWire]
+//!   POST /api/v1/fs/list {path, all}       → sync::FsList (a folder on the server)
+//!   POST /api/v1/fs/expand [path]          → [path]: the audio files, folders listed
+//!   POST /api/v1/fs/m3u  {path}            → [M3uRow]
+//!   GET  /api/v1/fs/file?path=             → the file itself
+//!   POST /api/v1/fs/upload?dir=&name=      file bytes → {path}
+//!   GET  /api/v1/plays                     → {csv}: the play history, for Reports
 //!   GET  /api/v1/listen                    → the on-air mix as an endless MP3 stream (what the app hears)
 //!   POST /api/v1/mic     MP3 bytes         the app's mic, a slice at a time; heard on air until mic/off
 //!   POST /api/v1/mic/off
 //!   POST /api/v1/azuracast {method, path, body}  a call to the station's AzuraCast, with the server's key
 //!
-//! Every call but ping and login needs `Authorization: Bearer <token>`.
+//! Every call but ping and login needs `Authorization: Bearer <token>`. The accounts are the server's
+//! operators.json (auth::Accounts); each call is checked against the signed-in account's permissions,
+//! and only administrators change the server itself, its accounts and its program.
 //!
 //! With HTTPS on, the same API is served over TLS (see tls.rs), with a certificate that is given, made
 //! by the server, or got from Let's Encrypt (acme.rs). The optional web portal is a page on its own
 //! port that signs in and uses this same API from the browser; it can be put on the internet with a
 //! Cloudflare Tunnel (tunnel.rs).
 
+use crate::auth::{Accounts, Operator, Perms};
 use crate::config::data_dir;
-use crate::playout::sync::{self, digest, Cmd, ServerInfo, ServerUpdate, Snapshot, TabsWire};
+use crate::playout::sync::{self, digest, Cmd, ServerInfo, ServerUpdate, Snapshot, TabsWire, UserOp, UserWire};
 use crate::playout::Playout;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
@@ -44,8 +57,11 @@ use std::{
 pub struct ServerCfg {
     /// shown in the app when it connects
     pub name: String,
+    /// (before v0.2.9 the server had one account: it moves to operators.json as an administrator)
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub user: String,
     /// Argon2id; the password itself is never stored
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub password_hash: String,
     pub bind: String,
     pub port: u16,
@@ -80,6 +96,8 @@ pub struct ServerCfg {
     pub tunnel_token: String,
     /// the cloudflared program (empty: next to the server, or on the PATH)
     pub cloudflared: String,
+    /// look for a newer RadioMaster Server release on GitHub (administrators can then update it from the app)
+    pub check_updates: bool,
 }
 
 impl Default for ServerCfg {
@@ -106,6 +124,7 @@ impl Default for ServerCfg {
             tunnel: false,
             tunnel_token: String::new(),
             cloudflared: String::new(),
+            check_updates: true,
         }
     }
 }
@@ -130,8 +149,29 @@ impl ServerCfg {
         }
         std::fs::write(Self::path(), serde_json::to_string_pretty(self).unwrap_or_default())
     }
+    /// Someone can sign in as an administrator.
     pub fn ready(&self) -> bool {
-        !self.user.is_empty() && !self.password_hash.is_empty()
+        (!self.user.is_empty() && !self.password_hash.is_empty()) || Accounts::load().has_admin()
+    }
+
+    /// The one account of a server set up before v0.2.9 becomes an administrator in `accounts`.
+    /// True when there was one to move.
+    pub fn move_user(&mut self, accounts: &mut Accounts) -> bool {
+        if self.user.is_empty() || self.password_hash.is_empty() {
+            return false;
+        }
+        if !accounts.users.iter().any(|u| u.name == self.user) {
+            accounts.users.push(Operator {
+                name: std::mem::take(&mut self.user),
+                password_hash: std::mem::take(&mut self.password_hash),
+                admin: true,
+                perms: Perms::default(),
+                disabled: false,
+            });
+        }
+        self.user.clear();
+        self.password_hash.clear();
+        true
     }
 
     /// What to ask Let's Encrypt for (None: switched off, or no domain name).
@@ -200,8 +240,17 @@ impl Revs {
     }
 }
 
+/// Asked of the server program by an administrator.
+pub enum Control {
+    Stop,
+    /// stop and start again (after an update: the new version)
+    Restart,
+}
+
 /// What the server program does for the API: its sound cards live on its main thread.
 pub struct Host {
+    /// stop or restart the whole server (saving everything first)
+    pub control: Box<dyn Fn(Control) + Send + Sync>,
     /// open the sound cards again from `audio_devices` and `ServerCfg::audio`
     pub reapply_audio: Box<dyn Fn() + Send + Sync>,
     /// (device, status) as last opened
@@ -210,13 +259,24 @@ pub struct Host {
     pub forced_silent: bool,
 }
 
+/// The server's own update: the release found, and what is happening.
+#[derive(Default)]
+struct UpdateState {
+    latest: Option<crate::selfupdate::Release>,
+    /// e.g. "Downloading… 40%" (empty: nothing going on)
+    state: String,
+    busy: bool,
+}
+
 struct Api {
     core: Arc<Mutex<Playout>>,
     cfg: Mutex<ServerCfg>,
     host: Host,
     revs: Mutex<Revs>,
+    accounts: Mutex<Accounts>,
     /// token → (user, last used)
     tokens: Mutex<HashMap<String, (String, Instant)>>,
+    update: Mutex<UpdateState>,
     failures: Mutex<(u32, Instant)>,
     /// what is running now (server.json may have changed since): (https, portal, portal port, Let's Encrypt)
     running: (bool, bool, u16, bool),
@@ -231,8 +291,6 @@ struct Api {
     tunnel: Mutex<Option<crate::tunnel::Tunnel>>,
     tunnel_status: crate::tunnel::Shared,
     origin: String,
-    /// a newer RadioMaster release
-    updates: crate::updater::Shared,
     /// waveforms being worked out for apps' track editors
     waves: Arc<Mutex<HashMap<PathBuf, WaveJob>>>,
 }
@@ -286,8 +344,15 @@ const MIC_IDLE: Duration = Duration::from_secs(3);
 /// Mic audio waits for this many decoded MP3 frames (about 26 ms each) before it plays.
 const MIC_PREBUFFER: usize = 6;
 
+/// How often the server looks for a newer release.
+const UPDATE_EVERY: Duration = Duration::from_secs(6 * 3600);
+
 /// Start listening. Returns the addresses actually bound (port 0 picks a free one).
-pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Listening, String> {
+pub fn spawn(core: Arc<Mutex<Playout>>, mut cfg: ServerCfg, host: Host) -> Result<Listening, String> {
+    let mut accounts = Accounts::load();
+    if cfg.move_user(&mut accounts) {
+        accounts.save()?;
+    }
     let tls = if cfg.https { Some(crate::tls::server_tls(&cfg.cert_file, &cfg.key_file, &data_dir(), cfg.acme)?) } else { None };
     let (server, addr) = listen(&cfg.bind, cfg.port, tls.as_ref())?;
     let portal = if cfg.portal {
@@ -318,11 +383,14 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
     let host_ip = if web.ip().is_unspecified() { "127.0.0.1".to_string() } else { web.ip().to_string() };
     let origin =
         format!("http://{}:{}", if web.is_ipv6() && !web.ip().is_unspecified() { format!("[{host_ip}]") } else { host_ip }, web.port());
+    let check_updates = cfg.check_updates;
     let api = Arc::new(Api {
         core,
         host,
         revs: Mutex::new(revs),
+        accounts: Mutex::new(accounts),
         tokens: Mutex::new(HashMap::new()),
+        update: Default::default(),
         failures: Mutex::new((0, Instant::now())),
         running,
         certs: tls.as_ref().map(|t| t.certs.clone()),
@@ -332,7 +400,6 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
         tunnel: Mutex::new(None),
         tunnel_status: Default::default(),
         origin,
-        updates: Default::default(),
         cfg: Mutex::new(cfg.clone()),
         waves: Default::default(),
     });
@@ -363,24 +430,33 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
     if cfg.tunnel {
         api.start_tunnel();
     }
-    if !cfg!(test) {
-        let api = Arc::downgrade(&api);
-        thread::spawn(move || {
-            thread::sleep(Duration::from_secs(5));
-            while let Some(a) = api.upgrade() {
-                if a.core.lock().cfg.check_updates {
-                    crate::updater::check(a.updates.clone(), || {}, false);
-                }
-                drop(a);
-                thread::sleep(Duration::from_secs(6 * 3600));
-            }
-        });
-    }
     {
         let api = api.clone();
         thread::spawn(move || loop {
             thread::sleep(Duration::from_millis(250));
             api.revs.lock().refresh(&api.core);
+        });
+    }
+    if check_updates && !cfg!(test) {
+        let api = api.clone();
+        thread::spawn(move || loop {
+            match crate::selfupdate::latest() {
+                Ok(r) => {
+                    let mut u = api.update.lock();
+                    if crate::selfupdate::is_newer(&r.tag_name, crate::selfupdate::CURRENT)
+                        && u.latest.as_ref().is_none_or(|o| o.tag_name != r.tag_name)
+                    {
+                        api.core.lock().say(format!(
+                            "Server: RadioMaster Server {} is available (this is {})",
+                            r.version(),
+                            crate::selfupdate::CURRENT
+                        ));
+                    }
+                    u.latest = Some(r);
+                }
+                Err(e) => api.core.lock().say(format!("Server: couldn't check for updates: {e}")),
+            }
+            thread::sleep(UPDATE_EVERY);
         });
     }
     let portal_addr = portal.as_ref().map(|p| p.1);
@@ -471,9 +547,7 @@ impl Api {
                 return respond_file(req, data, ct, self.hsts());
             }
         }
-        let param = |k: &str| -> u64 {
-            query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).and_then(|(_, b)| b.parse().ok())).unwrap_or(0)
-        };
+        let param = |k: &str| -> u64 { query_str(query, k).and_then(|v| v.parse().ok()).unwrap_or(0) };
         let header = |name: &str| {
             req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name)).map(|h| h.value.as_str().to_string())
         };
@@ -481,14 +555,34 @@ impl Api {
         let token = header("Authorization").and_then(|v| v.strip_prefix("Bearer ").map(|t| t.trim().to_string()));
         let post = *req.method() == tiny_http::Method::Post;
         if path == "/api/v1/listen" && !post {
-            match token.filter(|t| self.check(t)) {
+            match token.filter(|t| self.check(t).is_some()) {
                 Some(t) => self.listen(req, t),
                 None => respond(req, error(401, "sign in first"), false),
             }
             return;
         }
+        if path == "/api/v1/fs/file" && !post {
+            let me = token.as_deref().and_then(|t| self.check(t));
+            return match me {
+                Some(me) => self.send_file(req, &me, &query_str(query, "path").unwrap_or_default()),
+                None => respond(req, error(401, "sign in first"), false),
+            };
+        }
+        if path == "/api/v1/fs/upload" && post {
+            // (straight to disk, and only once signed in)
+            let me = token.as_deref().and_then(|t| self.check(t));
+            let reply = match me {
+                Some(me) if me.effective().edit_playlists || me.effective().jingles => {
+                    let (dir, name) = (query_str(query, "dir").unwrap_or_default(), query_str(query, "name").unwrap_or_default());
+                    self.upload(&dir, &name, req.as_reader(), &me)
+                }
+                Some(me) => error(403, &format!("your account ({}) may not upload files", me.name)),
+                None => error(401, "sign in first"),
+            };
+            return respond(req, reply, false);
+        }
         let mut body = Vec::new();
-        if req.as_reader().take(256 * 1024 * 1024).read_to_end(&mut body).is_err() {
+        if req.as_reader().take(64 * 1024 * 1024).read_to_end(&mut body).is_err() {
             return respond(req, error(400, "unreadable request"), false);
         }
         let reply = match (path, post) {
@@ -497,9 +591,9 @@ impl Api {
                 serde_json::json!({ "app": "RadioMaster Server", "name": self.cfg.lock().name, "version": env!("CARGO_PKG_VERSION"), "protocol": sync::PROTOCOL }),
             ),
             ("/api/v1/login", true) => self.login(&body),
-            _ => match token.as_deref().map(|t| self.check(t)) {
-                Some(true) => self.call(path, post, &body, &param, token.as_deref().unwrap_or("")),
-                _ => error(401, "sign in first"),
+            _ => match token.as_deref().and_then(|t| self.check(t)) {
+                Some(me) => self.call(path, post, &body, &param, token.as_deref().unwrap_or(""), &me),
+                None => error(401, "sign in first"),
             },
         };
         respond(req, reply, gzip_ok);
@@ -517,17 +611,14 @@ impl Api {
             }
         };
         thread::sleep(Duration::from_secs(wait as u64));
-        let (user, hash) = {
-            let c = self.cfg.lock();
-            (c.user.clone(), c.password_hash.clone())
-        };
-        if l.user != user || !crate::auth::verify(&hash, &l.password) {
+        let found = self.accounts.lock().login(&l.user, &l.password);
+        let Some(me) = found else {
             let mut f = self.failures.lock();
             f.0 = if f.1.elapsed() > Duration::from_secs(600) { 1 } else { f.0 + 1 };
             f.1 = Instant::now();
             self.core.lock().say(format!("Server: failed sign-in as '{}'", l.user));
             return error(401, "wrong username or password");
-        }
+        };
         *self.failures.lock() = (0, Instant::now());
         let token: String = {
             use rand::Rng;
@@ -536,27 +627,39 @@ impl Api {
         };
         let mut t = self.tokens.lock();
         t.retain(|_, (_, used)| used.elapsed() < TOKEN_IDLE);
-        t.insert(token.clone(), (l.user.clone(), Instant::now()));
+        t.insert(token.clone(), (me.name.clone(), Instant::now()));
         drop(t);
-        self.core.lock().say(format!("Server: {} connected", l.user));
+        self.core.lock().say(format!("Server: {} connected", me.name));
         json(
             200,
-            serde_json::json!({ "ok": true, "token": token, "name": self.cfg.lock().name.clone(), "version": env!("CARGO_PKG_VERSION"), "protocol": sync::PROTOCOL }),
+            serde_json::json!({ "ok": true, "token": token, "name": self.cfg.lock().name.clone(), "version": env!("CARGO_PKG_VERSION"),
+                "protocol": sync::PROTOCOL, "admin": me.admin, "perms": me.effective() }),
         )
     }
 
-    fn check(&self, token: &str) -> bool {
+    /// The account signed in with `token`, as it is now (None: not signed in, or the account was
+    /// deleted or disabled since).
+    fn check(&self, token: &str) -> Option<Operator> {
         let mut t = self.tokens.lock();
-        match t.get_mut(token) {
-            Some((_, used)) if used.elapsed() < TOKEN_IDLE => {
+        let user = match t.get_mut(token) {
+            Some((user, used)) if used.elapsed() < TOKEN_IDLE => {
                 *used = Instant::now();
-                true
+                user.clone()
             }
-            _ => false,
+            _ => return None,
+        };
+        let me = self.accounts.lock().active(&user).cloned();
+        if me.is_none() {
+            t.remove(token);
         }
+        me
     }
 
-    fn call(self: &Arc<Self>, path: &str, post: bool, body: &[u8], param: &dyn Fn(&str) -> u64, token: &str) -> Reply {
+    #[allow(clippy::too_many_arguments)]
+    fn call(self: &Arc<Self>, path: &str, post: bool, body: &[u8], param: &dyn Fn(&str) -> u64, token: &str, me: &Operator) -> Reply {
+        let p = me.effective();
+        let files_ok = p.edit_playlists || p.jingles || p.settings || p.tool(crate::auth::tool::FILE_EXPLORER);
+        let denied = |what: &str| error(403, &format!("your account ({}) may not {what}", me.name));
         match (path, post) {
             ("/api/v1/logout", true) => {
                 if let Some((user, _)) = self.tokens.lock().remove(token) {
@@ -594,12 +697,21 @@ impl Api {
             ("/api/v1/cmd", true) => {
                 let Ok(cmds) = serde_json::from_slice::<Vec<Cmd>>(body) else { return error(400, "bad command") };
                 let mut c = self.core.lock();
+                let mut refused = 0;
                 for cmd in cmds {
-                    c.run_cmd(cmd);
+                    if cmd.allowed(&p) {
+                        c.run_cmd(cmd);
+                    } else {
+                        refused += 1;
+                        c.say(format!("Server: {} may not {cmd:?}", me.name));
+                    }
                 }
-                json(200, serde_json::json!({ "ok": true }))
+                json(200, serde_json::json!({ "ok": true, "refused": refused }))
             }
             ("/api/v1/tabs", true) => {
+                if !p.edit_playlists {
+                    return denied("change playlists");
+                }
                 let Ok(p) = serde_json::from_slice::<TabsPush>(body) else { return error(400, "bad playlists") };
                 let mut r = self.revs.lock();
                 if p.base != r.rev {
@@ -616,36 +728,271 @@ impl Api {
                 json(200, serde_json::json!({ "ok": true, "rev": r.rev }))
             }
             ("/api/v1/config", true) => {
-                let Ok(p) = serde_json::from_slice::<CfgPush>(body) else { return error(400, "bad settings") };
+                let Ok(push) = serde_json::from_slice::<CfgPush>(body) else { return error(400, "bad settings") };
                 let mut r = self.revs.lock();
-                if p.base != r.cfg_rev {
+                if push.base != r.cfg_rev {
                     return error(409, "the settings changed on the server");
                 }
                 let mut c = self.core.lock();
-                if digest(&sync::station_cfg(&c.cfg)) != r.cfg_hash {
+                let now = sync::station_cfg(&c.cfg);
+                if digest(&now) != r.cfg_hash {
                     return error(409, "the settings changed on the server");
                 }
-                c.set_station_cfg(p.cfg);
+                if let Some(part) = sync::cfg_denied(&now, &sync::station_cfg(&push.cfg), &p) {
+                    return denied(&format!("change these settings ({part})"));
+                }
+                c.set_station_cfg(push.cfg);
                 c.save_all();
                 drop(c);
                 r.refresh(&self.core);
                 json(200, serde_json::json!({ "ok": true, "rev": r.cfg_rev }))
             }
             ("/api/v1/wave", true) => self.wave(body),
+            ("/api/v1/mic", true) if !p.playback => denied("use the mic"),
             ("/api/v1/mic", true) => self.mic(token, body.to_vec()),
             ("/api/v1/mic/off", true) => {
                 // the mic's thread ends once its audio runs out
                 self.mics.lock().remove(token);
                 json(200, serde_json::json!({ "ok": true }))
             }
+            ("/api/v1/azuracast", true) if !p.azuracast => denied("use AzuraCast"),
             ("/api/v1/azuracast", true) => self.azuracast(body),
-            ("/api/v1/server", false) => json(200, self.info()),
+            ("/api/v1/server" | "/api/v1/server/update" | "/api/v1/server/restart" | "/api/v1/server/stop" | "/api/v1/users", _)
+                if !me.admin =>
+            {
+                denied("manage the server")
+            }
+            ("/api/v1/server", false) => json(200, self.info(me)),
             ("/api/v1/server", true) => {
                 let Ok(u) = serde_json::from_slice::<ServerUpdate>(body) else { return error(400, "bad server settings") };
-                self.update(u)
+                self.update(u, me)
+            }
+            ("/api/v1/server/update", true) => self.self_update(me),
+            ("/api/v1/server/restart", true) | ("/api/v1/server/stop", true) => {
+                let restart = path.ends_with("restart");
+                self.core.lock().say(format!("Server: {} asked it to {}", me.name, if restart { "restart" } else { "stop" }));
+                self.update.lock().state = if restart { "Restarting…" } else { "Stopping…" }.into();
+                let api = self.clone();
+                // after this answer has gone out
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(300));
+                    (api.host.control)(if restart { Control::Restart } else { Control::Stop });
+                });
+                json(200, self.info(me))
+            }
+            ("/api/v1/users", false) => json(200, self.users()),
+            ("/api/v1/users", true) => {
+                let Ok(op) = serde_json::from_slice::<UserOp>(body) else { return error(400, "bad request") };
+                match self.user_op(op, me) {
+                    Ok(()) => json(200, self.users()),
+                    Err(e) => error(400, &e),
+                }
+            }
+            ("/api/v1/fs/list" | "/api/v1/fs/expand" | "/api/v1/fs/m3u", true) if !files_ok => denied("browse the server's files"),
+            ("/api/v1/fs/list", true) => {
+                #[derive(Deserialize)]
+                struct Ask {
+                    #[serde(default)]
+                    path: std::path::PathBuf,
+                    #[serde(default)]
+                    all: bool,
+                }
+                let Ok(a) = serde_json::from_slice::<Ask>(body) else { return error(400, "bad request") };
+                let folders = self.core.lock().cfg.library_folders.clone();
+                if p.settings {
+                    return json(200, sync::list_folder(a.path, a.all, &folders));
+                }
+                // everyone else stays in the library folders
+                let roots = self.library_roots();
+                if roots.is_empty() {
+                    return error(403, "the server has no library folders to browse yet: ask one of its administrators");
+                }
+                if !a.path.as_os_str().is_empty() && !within(&roots, &a.path) {
+                    return denied("browse outside the library folders");
+                }
+                let mut list = sync::list_folder(a.path, a.all, &folders);
+                list.places.retain(|f| within(&roots, f));
+                list.parent = list.parent.filter(|f| within(&roots, f));
+                json(200, list)
+            }
+            ("/api/v1/fs/expand", true) => {
+                let Ok(mut paths) = serde_json::from_slice::<Vec<std::path::PathBuf>>(body) else { return error(400, "bad request") };
+                if !p.settings {
+                    let roots = self.library_roots();
+                    paths.retain(|f| within(&roots, f));
+                }
+                json(200, crate::library::expand_paths(paths))
+            }
+            ("/api/v1/fs/m3u", true) => {
+                #[derive(Deserialize)]
+                struct Ask {
+                    path: std::path::PathBuf,
+                }
+                let Ok(a) = serde_json::from_slice::<Ask>(body) else { return error(400, "bad request") };
+                if !p.settings && !within(&self.library_roots(), &a.path) {
+                    return denied("open playlists outside the library folders");
+                }
+                json(200, crate::playout::parse_m3u(&a.path))
+            }
+            ("/api/v1/plays", false) => {
+                use crate::auth::tool;
+                if !(p.tool(tool::REPORTS) || p.tool(tool::HISTORY)) {
+                    return denied("see the play history");
+                }
+                json(200, serde_json::json!({ "csv": std::fs::read_to_string(data_dir().join("history.csv")).unwrap_or_default() }))
             }
             _ => error(404, "unknown call"),
         }
+    }
+
+    fn users(&self) -> Vec<UserWire> {
+        self.accounts
+            .lock()
+            .users
+            .iter()
+            .map(|u| UserWire { name: u.name.clone(), admin: u.admin, perms: u.perms, disabled: u.disabled })
+            .collect()
+    }
+
+    fn user_op(&self, op: UserOp, me: &Operator) -> Result<(), String> {
+        let mut a = self.accounts.lock();
+        let what = match op {
+            UserOp::Add { name, password, admin, perms } => {
+                a.add_with(&name, &password, admin, perms)?;
+                format!("added {}", name.trim())
+            }
+            UserOp::Update { name, admin, perms, disabled } => {
+                if name == me.name && (disabled || !admin) && me.admin {
+                    return Err("You can't take away your own administrator access or disable yourself".into());
+                }
+                a.update(&name, admin, perms, disabled)?;
+                format!("changed {name}")
+            }
+            UserOp::Password { name, password } => {
+                a.set_password(&name, &password)?;
+                format!("set a new password for {name}")
+            }
+            UserOp::Delete { name } => {
+                if name == me.name {
+                    return Err("You can't delete your own account".into());
+                }
+                a.delete(&name)?;
+                format!("deleted {name}")
+            }
+        };
+        drop(a);
+        self.core.lock().say(format!("Server: {} {what}", me.name));
+        Ok(())
+    }
+
+    /// Download and install the newer release, then start again (in the background).
+    fn self_update(self: &Arc<Self>, me: &Operator) -> Reply {
+        let asset = {
+            let mut u = self.update.lock();
+            if u.busy {
+                return error(409, "an update is already running");
+            }
+            let Some(r) = u.latest.clone().filter(|r| crate::selfupdate::is_newer(&r.tag_name, crate::selfupdate::CURRENT)) else {
+                return error(400, "this server is up to date");
+            };
+            let Some(a) = r.server_asset().cloned() else {
+                return error(400, &format!("release {} has no RadioMaster Server package for this system", r.version()));
+            };
+            u.busy = true;
+            u.state = "Downloading…".into();
+            a
+        };
+        self.core.lock().say(format!("Server: {} started the update to {}", me.name, asset.name));
+        let api = self.clone();
+        thread::spawn(move || {
+            let r = crate::selfupdate::install(&asset, &|s| api.update.lock().state = s);
+            match r {
+                Ok(()) => {
+                    api.core.lock().say("Server: update installed, restarting");
+                    api.update.lock().state = "Installed: restarting…".into();
+                    (api.host.control)(Control::Restart);
+                }
+                Err(e) => {
+                    api.core.lock().say(format!("Server: the update failed: {e}"));
+                    let mut u = api.update.lock();
+                    u.busy = false;
+                    u.state = format!("The update failed: {e}");
+                }
+            }
+        });
+        json(200, self.info(me))
+    }
+
+    /// A file from this computer, put in a folder on the server (never over a file that is there).
+    fn upload(&self, dir: &str, name: &str, body: &mut dyn Read, me: &Operator) -> Reply {
+        use std::path::Path;
+        let name = Path::new(name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if dir.is_empty() || name.is_empty() || name.starts_with('.') {
+            return error(400, "a folder and a file name are needed");
+        }
+        let dir = Path::new(dir);
+        if !dir.is_dir() {
+            return error(400, &format!("{} is not a folder on the server", dir.display()));
+        }
+        if !me.admin && !within(&self.library_roots(), dir) {
+            return error(403, &format!("your account ({}) may only upload into the library folders", me.name));
+        }
+        let playlist = Path::new(&name).extension().is_some_and(|e| ["m3u", "m3u8"].contains(&e.to_string_lossy().to_lowercase().as_str()));
+        if !me.admin && !(crate::library::is_audio(Path::new(&name)) || playlist) {
+            return error(403, &format!("your account ({}) may only upload audio files and playlists", me.name));
+        }
+        let max = if me.admin { UPLOAD_MAX } else { UPLOAD_MAX_STAFF };
+        let mut target = dir.join(&name);
+        let (stem, ext) = (
+            target.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            target.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default(),
+        );
+        let mut n = 2;
+        while target.exists() {
+            target = dir.join(format!("{stem} ({n}){ext}"));
+            n += 1;
+        }
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).and_then(|mut f| {
+            let r = std::io::copy(&mut body.take(max + 1), &mut f)
+                .and_then(|n| (n <= max).then_some(()).ok_or_else(|| std::io::Error::other(format!("the file is over {} GB", max >> 30))));
+            if r.is_err() {
+                drop(f);
+                let _ = std::fs::remove_file(&target);
+            }
+            r
+        });
+        match written {
+            Ok(()) => {
+                self.core.lock().say(format!("Server: {} uploaded {}", me.name, target.display()));
+                json(200, serde_json::json!({ "ok": true, "path": target }))
+            }
+            Err(e) => error(500, &format!("could not write {}: {e}", target.display())),
+        }
+    }
+
+    /// A file's bytes, for previews, waveforms and copies. Others than administrators only get files
+    /// in the library folders.
+    fn send_file(&self, req: tiny_http::Request, me: &Operator, path: &str) {
+        let path = std::path::PathBuf::from(path);
+        // (not "any file a playlist names": a presenter could name any file in one)
+        let ok = me.admin || within(&self.library_roots(), &path);
+        if !ok {
+            return respond(req, error(403, "only the server's administrators can fetch files outside its library folders"), false);
+        }
+        match std::fs::File::open(&path) {
+            Ok(f) if path.is_file() => {
+                let ct = header("Content-Type", "application/octet-stream");
+                let _ = req.respond(tiny_http::Response::from_file(f).with_header(ct));
+            }
+            _ => respond(req, error(404, "no such file on the server"), false),
+        }
+    }
+
+    /// The library folders as the disk has them (links and `..` resolved), for keeping accounts
+    /// other than administrators inside them.
+    fn library_roots(&self) -> Vec<std::path::PathBuf> {
+        let folders = self.core.lock().cfg.library_folders.clone();
+        folders.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect()
     }
 
     /// A track's waveform for an app's track editor. The file is analysed here (the app doesn't have
@@ -855,16 +1202,27 @@ impl Api {
         ));
     }
 
-    fn info(&self) -> ServerInfo {
+    fn info(&self, me: &Operator) -> ServerInfo {
         let c = self.cfg.lock().clone();
+        let (latest, can_update, update_state) = {
+            let u = self.update.lock();
+            match u.latest.as_ref().filter(|r| crate::selfupdate::is_newer(&r.tag_name, crate::selfupdate::CURRENT)) {
+                Some(r) => (r.version(), r.server_asset().is_some(), u.state.clone()),
+                None => (String::new(), false, u.state.clone()),
+            }
+        };
         let cert = self.certs.as_ref().map(|c| c.info()).unwrap_or_default();
-        let latest = self.updates.lock().available.clone();
+        let release_page = self.update.lock().latest.as_ref().map(|r| r.html_url.clone()).unwrap_or_default();
         let acme = self.acme.lock().clone();
         let tunnel = self.tunnel_status.lock().clone();
         ServerInfo {
             name: c.name,
-            user: c.user,
+            user: me.name.clone(),
+            admin: me.admin,
             version: env!("CARGO_PKG_VERSION").into(),
+            latest,
+            can_update,
+            update_state,
             port: c.port,
             autoplay: c.autoplay,
             audio: c.audio,
@@ -874,8 +1232,7 @@ impl Api {
             portal_port: c.portal_port,
             restart_needed: (c.https, c.portal, c.portal_port, c.acme && c.https)
                 != (self.running.0, self.running.1, self.running.2, self.running.3 && self.running.0),
-            latest: latest.as_ref().map(|a| a.version.clone()).unwrap_or_default(),
-            release_page: latest.map(|a| a.page).unwrap_or_default(),
+            release_page,
             cert_expires: cert.not_after.unwrap_or(0),
             acme: c.acme,
             acme_domains: c.acme_domains,
@@ -895,15 +1252,15 @@ impl Api {
         }
     }
 
-    fn update(self: &Arc<Self>, u: ServerUpdate) -> Reply {
+    fn update(self: &Arc<Self>, u: ServerUpdate, me: &Operator) -> Reply {
         let mut c = self.cfg.lock().clone();
         if let Some((current, new)) = &u.password {
-            if !crate::auth::verify(&c.password_hash, current) {
+            // your own password
+            if !crate::auth::verify(&me.password_hash, current) {
                 return error(403, "the current password is wrong");
             }
-            match crate::auth::hash(new) {
-                Ok(h) => c.password_hash = h,
-                Err(e) => return error(400, &e),
+            if let Err(e) = self.accounts.lock().set_password(&me.name, new) {
+                return error(400, &e);
             }
         }
         if !u.name.trim().is_empty() {
@@ -962,8 +1319,27 @@ impl Api {
             thread::sleep(Duration::from_millis(700));
         }
         self.core.lock().say("Server: settings changed");
-        json(200, self.info())
+        json(200, self.info(me))
     }
+}
+
+/// The biggest file an administrator may upload…
+const UPLOAD_MAX: u64 = 4 * 1024 * 1024 * 1024;
+/// …and anyone else.
+const UPLOAD_MAX_STAFF: u64 = 1024 * 1024 * 1024;
+
+/// `path` is in one of `roots` (canonical folders) once links and `..` are resolved; a path that
+/// isn't there is in none.
+fn within(roots: &[std::path::PathBuf], path: &std::path::Path) -> bool {
+    std::fs::canonicalize(path).is_ok_and(|p| roots.iter().any(|r| p.starts_with(r)))
+}
+
+/// A value from a query string, URL-decoded.
+fn query_str(query: &str, k: &str) -> Option<String> {
+    query
+        .split('&')
+        .find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k))
+        .map(|(_, v)| urlencoding::decode(&v.replace('+', " ")).map(|s| s.into_owned()).unwrap_or_default())
 }
 
 fn header(name: &str, value: &str) -> tiny_http::Header {
@@ -1104,7 +1480,8 @@ mod tests {
             port: 0,
             ..Default::default()
         };
-        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
         let addr = spawn(station.clone(), cfg, host).unwrap().addr;
         let s = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "dj", "a long enough password", "").unwrap();
         let token = Arc::new(Mutex::new(s.token.clone()));
@@ -1177,7 +1554,8 @@ mod tests {
             port: 0,
             ..Default::default()
         };
-        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
         let addr = spawn(station.clone(), cfg, host).unwrap().addr;
         let address = format!("127.0.0.1:{}", addr.port());
 
@@ -1271,7 +1649,8 @@ mod tests {
             port: 0,
             ..Default::default()
         };
-        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
         let addr = spawn(station.clone(), cfg, host).unwrap().addr;
         let session = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "studio", "correct horse battery", "").unwrap();
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
@@ -1308,6 +1687,164 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn start_plain(station: Arc<Mutex<Playout>>, user: &str, password: &str) -> (String, Arc<std::sync::atomic::AtomicU8>) {
+        crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
+        let cfg = ServerCfg {
+            user: user.into(),
+            password_hash: crate::auth::hash(password).unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        };
+        // what the server program was asked to do: 1 stop, 2 restart
+        let asked = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let a = asked.clone();
+        let host = Host {
+            control: Box::new(move |c| a.store(if matches!(c, Control::Stop) { 1 } else { 2 }, Ordering::Relaxed)),
+            reapply_audio: Box::new(|| {}),
+            audio_report: Default::default(),
+            forced_silent: true,
+        };
+        (format!("127.0.0.1:{}", spawn(station, cfg, host).unwrap().addr.port()), asked)
+    }
+
+    /// An administrator adds a presenter on the server; the server holds the presenter to their
+    /// permissions, and only administrators manage accounts and the server itself.
+    #[test]
+    fn server_accounts_and_permissions() {
+        use crate::playout::sync::UserOp;
+        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        station.lock().append_to_tab(0, vec![row("one")]);
+        let (address, asked) = start_plain(station.clone(), "chief", "the chief's password");
+        let admin = crate::link::login(&address, "chief", "the chief's password", "").unwrap();
+        assert!(admin.admin);
+        let presenter = crate::auth::Perms::presenter();
+        let users = crate::link::Link::user_op(
+            &admin,
+            &UserOp::Add { name: "night dj".into(), password: "a presenter password".into(), admin: false, perms: presenter },
+        )
+        .unwrap();
+        assert!(users.iter().any(|u| u.name == "night dj" && !u.admin));
+        let dj = crate::link::login(&address, "night dj", "a presenter password", "").unwrap();
+        assert!(!dj.admin && !dj.perms.settings && dj.perms.edit_playlists);
+
+        // the presenter can't manage the server or its accounts
+        assert!(crate::link::Link::users(&dj).unwrap_err().contains("may not"));
+        assert!(crate::link::Link::server_control(&dj, "stop").is_err());
+        assert_eq!(asked.load(Ordering::Relaxed), 0);
+        // …but can run the playlists, through a mirror like the app's
+        let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
+        let link = crate::link::Link::start(mirror.clone(), dj.clone(), rx, Box::new(|| {}));
+        // (other tests may have left playlists in the shared data folder)
+        let n = station.lock().playlist.len();
+        wait_for("the first copy", || mirror.lock().playlist.len() == n);
+        mirror.lock().append_to_tab(0, vec![row("two")]);
+        wait_for("the presenter's edit on the server", || station.lock().playlist.len() == n + 1);
+        // a setting the presenter may not change is refused, and the server's value comes back
+        mirror.lock().cfg.crossfade_secs = 11.0;
+        wait_for("the refusal", || mirror.lock().notify.lock().contains("may not change these settings"));
+        wait_for("the server's value again", || mirror.lock().cfg.crossfade_secs != 11.0);
+        assert_ne!(station.lock().cfg.crossfade_secs, 11.0);
+        link.stop();
+        // (stopping the link signs that session out, in the background)
+        let dj = crate::link::login(&address, "night dj", "a presenter password", "").unwrap();
+        // starting an encoder is refused; Next goes through
+        let r: serde_json::Value = ureq::post(&format!("{}/api/v1/cmd", dj.base))
+            .set("Authorization", &format!("Bearer {}", dj.token))
+            .send_json(serde_json::json!([{ "cmd": "encoder_start", "i": 0 }, { "cmd": "next" }]))
+            .unwrap()
+            .into_json()
+            .unwrap();
+        assert_eq!(r["refused"], 1);
+
+        // disabled: signed out at once, and can't sign in again
+        crate::link::Link::user_op(&admin, &UserOp::Update { name: "night dj".into(), admin: false, perms: presenter, disabled: true })
+            .unwrap();
+        assert!(crate::link::Link::server_info(&dj).is_err());
+        assert!(crate::link::login(&address, "night dj", "a presenter password", "").is_err());
+        // administrators can't lock themselves out
+        assert!(crate::link::Link::user_op(&admin, &UserOp::Delete { name: "chief".into() }).is_err());
+        // restart goes to the server program
+        let info = crate::link::Link::server_control(&admin, "restart").unwrap();
+        assert!(info.admin && info.update_state.contains("Restarting"));
+        wait_for("the restart request", || asked.load(Ordering::Relaxed) == 2);
+    }
+
+    /// The app browses the server's folders, uploads into them and fetches a file back.
+    #[test]
+    fn server_files() {
+        let station = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        let music = std::env::temp_dir().join(format!("rm-server-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&music);
+        std::fs::create_dir_all(music.join("Jingles")).unwrap();
+        std::fs::write(music.join("a song.mp3"), b"not really audio").unwrap();
+        std::fs::write(music.join("notes.txt"), b"hello").unwrap();
+        std::fs::write(music.join("Jingles").join("id.mp3"), b"jingle").unwrap();
+        station.lock().cfg.library_folders = vec![music.to_string_lossy().to_string()];
+        let (address, _) = start_plain(station.clone(), "files admin", "the files password");
+        let s = crate::link::login(&address, "files admin", "the files password", "").unwrap();
+        let fs = crate::link::Fs::Server(s.clone());
+
+        // browsing starts in the first library folder
+        let list = fs.list(std::path::Path::new(""), false, &[]);
+        assert_eq!(list.path, music);
+        let names: Vec<String> = list.entries.iter().map(|e| e.path.file_name().unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(names, vec!["Jingles", "a song.mp3"], "folders first, audio only");
+        assert!(list.places.contains(&music));
+        assert_eq!(fs.list(&music, true, &[]).entries.len(), 3, "every file");
+        assert_eq!(fs.audio_files_in(&music).len(), 2);
+
+        // an upload lands in the folder, never over a file that's there
+        let local = std::env::temp_dir().join(format!("rm-upload-{}.mp3", std::process::id()));
+        std::fs::write(&local, b"from this computer").unwrap();
+        let up = fs.upload(&local, &music.join("Jingles")).unwrap();
+        assert_eq!(std::fs::read(&up).unwrap(), b"from this computer");
+        let again = fs.upload(&local, &music.join("Jingles")).unwrap();
+        assert_ne!(up, again);
+        assert!(fs.upload(&local, &music.join("no such folder")).is_err());
+
+        // a file comes back as it is
+        let url = format!("{}/api/v1/fs/file?path={}", s.base, urlencoding::encode(&music.join("a song.mp3").to_string_lossy()));
+        let r = ureq::get(&url).set("Authorization", &format!("Bearer {}", s.token)).call().unwrap();
+        assert_eq!(r.into_string().unwrap(), "not really audio");
+        assert!(ureq::get(&url).call().is_err(), "only when signed in");
+        assert!(crate::link::Link::plays(&s).is_ok());
+
+        // a presenter stays inside the library folders: no `..`, no other folders
+        let presenter = crate::auth::Perms::presenter();
+        let op = crate::playout::sync::UserOp::Add {
+            name: "files dj".into(),
+            password: "a files dj password".into(),
+            admin: false,
+            perms: presenter,
+        };
+        crate::link::Link::user_op(&s, &op).unwrap();
+        let dj = crate::link::login(&address, "files dj", "a files dj password", "").unwrap();
+        let dfs = crate::link::Fs::Server(dj.clone());
+        assert_eq!(dfs.list(&music, false, &[]).entries.len(), 2);
+        assert!(dfs.list(&music, false, &[]).places.iter().all(|p| p.starts_with(&music)));
+        assert!(!dfs.list(&std::env::temp_dir(), true, &[]).error.is_empty(), "outside the library");
+        let fetch = |p: &std::path::Path| {
+            let url = format!("{}/api/v1/fs/file?path={}", dj.base, urlencoding::encode(&p.to_string_lossy()));
+            ureq::get(&url).set("Authorization", &format!("Bearer {}", dj.token)).call().map(|r| r.into_string().unwrap())
+        };
+        assert_eq!(fetch(&music.join("Jingles").join("id.mp3")).unwrap(), "jingle");
+        let outside = std::env::temp_dir().join(format!("rm-outside-{}.mp3", std::process::id()));
+        std::fs::write(&outside, b"private").unwrap();
+        let sneaky = music.join("..").join(outside.file_name().unwrap());
+        assert!(fetch(&sneaky).is_err(), "`..` doesn't leave the library");
+        assert!(fetch(&outside).is_err());
+        assert!(dfs.upload(&local, &music.join("Jingles")).is_ok());
+        assert!(dfs.upload(&local, &music.join("..")).is_err(), "uploads stay in the library");
+        assert!(dfs.upload(&local, &std::env::temp_dir()).is_err());
+        assert!(dfs.upload(&music.join("notes.txt"), &music).unwrap_err().contains("audio files"));
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&music);
+        let _ = std::fs::remove_file(&local);
+    }
+
     /// HTTPS with the server's own certificate: the app has to trust it once, finds the https://
     /// address by itself, and refuses a different certificate later. The web portal is served too.
     #[test]
@@ -1327,7 +1864,8 @@ mod tests {
             portal_port: 0,
             ..Default::default()
         };
-        let host = || Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let host =
+            || Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
         let l = spawn(station.clone(), cfg.clone(), host()).unwrap();
         assert!(l.self_signed);
         let fp = l.fingerprint.clone().unwrap();
@@ -1439,7 +1977,8 @@ mod tests {
             https: true,
             ..Default::default()
         };
-        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
         let tls = crate::tls::server_tls("", "", &dir, true).unwrap();
         assert!(tls.info().self_signed, "self-signed until Let's Encrypt has answered");
         let l = spawn(station, cfg, host).unwrap();
@@ -1477,7 +2016,8 @@ mod tests {
             https: true,
             ..Default::default()
         };
-        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
         let l = spawn(station, cfg, host).unwrap();
         let s =
             crate::link::login(&format!("127.0.0.1:{}", l.addr.port()), "dj", "a long enough password", &l.fingerprint.unwrap()).unwrap();

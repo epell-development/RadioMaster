@@ -19,10 +19,11 @@ pub(super) enum ToolWin {
     Plugins,
     Scheduler,
     Cleanup,
+    FileExplorer,
 }
 
 impl ToolWin {
-    pub(super) const ALL: [ToolWin; 12] = [
+    pub(super) const ALL: [ToolWin; 13] = [
         ToolWin::FadeEditor,
         ToolWin::Generator,
         ToolWin::Ads,
@@ -35,6 +36,7 @@ impl ToolWin {
         ToolWin::Plugins,
         ToolWin::Scheduler,
         ToolWin::Cleanup,
+        ToolWin::FileExplorer,
     ];
     /// Whether an operator with these permissions may open this tool.
     pub(super) fn allowed(self, p: &crate::auth::Perms) -> bool {
@@ -52,6 +54,7 @@ impl ToolWin {
             ToolWin::History => p.tool(tool::HISTORY),
             ToolWin::Notepad => p.tool(tool::NOTEPAD),
             ToolWin::Cleanup => p.tool(tool::LIBRARY_CLEANUP),
+            ToolWin::FileExplorer => p.tool(tool::FILE_EXPLORER),
         }
     }
 
@@ -69,6 +72,7 @@ impl ToolWin {
             ToolWin::Plugins => "Plugins",
             ToolWin::Scheduler => "Event scheduler",
             ToolWin::Cleanup => "Library cleanup",
+            ToolWin::FileExplorer => "File explorer",
         }
     }
     pub(super) fn icon(self) -> &'static str {
@@ -85,6 +89,7 @@ impl ToolWin {
             ToolWin::Plugins => "🔌",
             ToolWin::Scheduler => "⏰",
             ToolWin::Cleanup => "✨",
+            ToolWin::FileExplorer => "📁",
         }
     }
     fn size(self) -> [f32; 2] {
@@ -101,6 +106,7 @@ impl ToolWin {
             ToolWin::Plugins => [720.0, 520.0],
             ToolWin::Scheduler => [900.0, 560.0],
             ToolWin::Cleanup => [900.0, 600.0],
+            ToolWin::FileExplorer => [640.0, 600.0],
         }
     }
 }
@@ -376,6 +382,12 @@ impl App {
                         self.tab_cleanup(ui, core); // its lists scroll on their own
                         return;
                     }
+                    if w == ToolWin::FileExplorer {
+                        egui::ScrollArea::vertical().id_salt("fx_window").auto_shrink([false, false]).show(ui, |ui| {
+                            self.tab_file_explorer(ui, "window".into(), core);
+                        });
+                        return;
+                    }
                     egui::ScrollArea::both().id_salt(("tool_scroll", w as u8)).auto_shrink([false, false]).show(ui, |ui| match w {
                         ToolWin::Generator => self.tab_generator(ui, core),
                         ToolWin::Ads => self.tab_ads(ui, core),
@@ -387,7 +399,7 @@ impl App {
                         ToolWin::AzuraCast => {}
                         ToolWin::Reports => self.tab_reports(ui, core),
                         ToolWin::History => self.tab_history(ui, core),
-                        ToolWin::FadeEditor | ToolWin::Cleanup => {}
+                        ToolWin::FadeEditor | ToolWin::Cleanup | ToolWin::FileExplorer => {}
                     });
                 },
             );

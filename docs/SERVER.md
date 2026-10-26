@@ -11,8 +11,9 @@ Each release has:
 - **`RadioMaster-Server-<version>-windows-x64.zip`** — `RadioMaster-Server.exe` and this guide.
 
 ## Set it up
-Run the setup once. It asks for the station name, the **username and password** desktop apps sign in with
-(at least 12 characters), and the port (9259 unless you choose another):
+Run the setup once. It asks for the station name, the **username and password** of the first administrator
+(at least 12 characters; more accounts are added from the app, see [Accounts](#accounts-and-permissions)),
+and the port (9259 unless you choose another):
 
 ```
 RadioMaster-Server --setup
@@ -36,8 +37,8 @@ encoders. Run `RadioMaster-Server --help` for every option.
 
 | Option | What it does |
 |---|---|
-| `--setup` | set the station name, username, password and port, then exit |
-| `--user`, `--password`, `--name` | answers for `--setup` |
+| `--setup` | set the station name, an administrator's username and password, and the port, then exit |
+| `--user`, `--password`, `--name` | answers for `--setup` (running it again with another `--user` adds that administrator; with the same one, it sets a new password) |
 | `--port N`, `--bind ADDRESS` | where to listen (default `0.0.0.0:9259`) |
 | `--data FOLDER` | the data folder (default `~/.config/RadioMaster-Server`, or `%APPDATA%\RadioMaster-Server` on Windows) |
 | `--https`, `--no-https` | serve over HTTPS (see [HTTPS](#https)) |
@@ -46,6 +47,7 @@ encoders. Run `RadioMaster-Server --help` for every option.
 | `--portal`, `--no-portal`, `--portal-port N` | the [web portal](#web-portal) and its port (default 9260) |
 | `--tunnel`, `--no-tunnel`, `--tunnel-token TOKEN`, `--cloudflared FILE` | put the portal on the internet with a [Cloudflare Tunnel](#cloudflare-tunnel) |
 | `--no-audio` | don't use a sound card: stream only |
+| `--no-update-check` | don't look for newer releases on GitHub |
 | `--list-devices` | list the sound cards |
 
 With `--setup` these options are saved in `server.json`; without it they apply to that run only.
@@ -60,11 +62,42 @@ switches "Play through the server's sound cards" on or off and ticks which cards
 effect at once and is shown with each card's status. With no sound card (or with it switched off, or with
 `--no-audio`) the server runs on a silent clock, so automation and streaming carry on as normal.
 
-**File → Server settings…** also changes the station name, whether the server starts playing when it starts,
-and the server password (you type the current one first).
+**File → Server settings…** (administrators only) also changes the station name, whether the server starts
+playing when it starts, and your own password (you type the current one first).
+
+## Accounts and permissions
+The server has its own accounts, kept in `operators.json` in its data folder (a server set up before v0.2.9
+turns its one account into the first administrator). In the app, an administrator opens **File → Server
+users…** to add accounts, set or reset passwords, disable or delete them, and choose what each may do: the same
+permissions and per-tool access as the app's own Users window (playback, jingles, editing playlists, streaming,
+settings, and tools such as the generator, adverts, scheduler, track editor and file explorer).
+
+The server checks every action against the account that sent it, so a presenter account can play and edit
+playlists but can't, say, change the station's settings or start encoders, whatever app or browser it uses;
+a change it isn't allowed to make is refused and the app shows the server's version again. Only
+administrators change the server's own settings, its accounts, and update, restart or stop it. A disabled or
+deleted account is signed out straight away. While connected, the app shows only what both your own app
+account and your server account allow.
+
+## Updating, restarting and stopping
+The server looks for a newer release on GitHub at start-up and every six hours (`--no-update-check` turns this
+off). When it is behind (or older than the app connecting to it), the app shows a blue **⬆ Server** button next
+to the connection button, like its own update button, and opens the update window once for administrators.
+**⬇ Update the server** downloads the RadioMaster Server package for the server's system (Linux x64 or Windows
+x64), puts the new program in place of the old one and restarts; the apps reconnect by themselves after a few
+seconds of silence. **Restart** and **Stop** are there too (and under **File → Server info…**), each asking
+once more before it goes ahead. A stopped server stays off air until it is started again on that computer.
+
+- Under **systemd** the server leaves the restart to the service (`Restart=on-failure` in the unit). The
+  service account must be allowed to replace the program: install it in a folder that account owns, as the
+  unit file shows (`/opt/radiomaster`). If it can't, the update says so and changes nothing.
+- Under **NSSM** or another service manager that starts the program again when it ends, set
+  `RADIOMASTER_SUPERVISED=1` in its environment. Otherwise (a console, Task Scheduler) the server starts a new
+  copy of itself.
 
 ### Run it as a service
 **Linux (systemd):** the package includes `radiomaster-server.service`; the steps are at the top of that file.
+They put the program in `/opt/radiomaster`, owned by the service account, so it can update itself.
 `journalctl -u radiomaster-server -f` shows the station log.
 
 **Windows Server:** run `RadioMaster-Server.exe --setup` once in a console, then start it at boot, for
@@ -144,7 +177,7 @@ or off in Server settings takes effect at once. The desktop app can connect thro
 The web portal runs the station from a browser on any computer, tablet or phone, with nothing to install.
 Turn it on with `--setup --portal` (choose the port with `--portal-port`, default 9260), or in the app with
 **File → Server settings… → Web portal** (after a restart). Open `http://<server>:9260` (or `https://` with
-HTTPS on) and sign in with the server's username and password.
+HTTPS on) and sign in with a server account; it can do what that account may do.
 
 It works on phones (the sections sit along the bottom of the screen) as well as computers:
 
@@ -193,15 +226,31 @@ station's mic settings (lower, mute or pause the music); Studio monitor outputs 
 it is on. Wear headphones rather than speakers, and expect to hear your own voice come back slightly late.
 
 Things that stay on your computer: the interface language, sound cards, the remote-control API, plugins,
-update checks and ffmpeg. The music files, folders and library are the server's, so a library folder is typed
-as the server sees it (e.g. `/srv/music`). Previews and waveforms in the fade editor need the files on your own
-computer and don't work while connected.
+update checks and ffmpeg.
+
+**Files on the server:** the music files, folders and library are the server's. While connected, every place
+that picks a file or folder (adding files or a folder to a playlist, library folders, generator categories, the
+jingle cart wall, adverts and rules, events, playlists to open or insert, sounds for speech rows…) shows the
+server's folders instead of your computer's. **Upload from this computer…** in that browser copies files from
+your computer into the folder shown; files dragged onto the playlist from your computer, and recorded voice
+tracks, are uploaded the same way (you choose the folder). The **File explorer** (a panel, or its own window
+from **Tools → File explorer**) browses the server's folders too, and **All files** shows every file, not only
+audio. **Reports** use the server's play history. **Library cleanup** works on the files of the computer it
+runs on, so it is only available when you're not connected. Accounts that aren't administrators (or allowed
+to change settings) only see, open and upload into the server's library folders.
+
+**Station profiles onto the server:** with **File → Station profiles…** while connected, **Load** puts a
+profile's settings on the server (and, if you tick it, the playlists saved with it). The profile's folders are
+listed so you can say where each one is on the server (type it or browse with **…**); every path under it is
+changed to match, for example `C:\Users\DJ\Music\Jingles\id.mp3` → `/srv/music/Jingles/id.mp3`. The server
+keeps its own sound cards and other machine settings. **Import…** adds a profile file from your computer.
 
 ## Security
-The username and password are checked with Argon2 (only the hash is stored, in `server.json`), sign-ins
-expire after a day without use, and repeated wrong passwords are slowed down. Whoever signs in can do everything the station can, including playlist
-`RUN` commands that start programs on the server, so use a strong password and run the server under its own
-unprivileged account (the systemd unit does). On a network you don't trust, or over the internet, turn on
+Passwords are checked with Argon2 (only the hashes are stored, in `operators.json`), sign-ins expire after a
+day without use, and repeated wrong passwords are slowed down. Each account can do only what its permissions
+allow, but an account that may edit playlists can add `RUN` commands that start programs on the server, so give
+that only to people you trust, use strong passwords and run the server under its own unprivileged account (the
+systemd unit does). Non-administrators can only download, browse and upload files in the library folders. On a network you don't trust, or over the internet, turn on
 [HTTPS](#https) (or put the server behind an HTTPS reverse proxy such as Caddy or nginx, or a VPN). Without it
 the password and everything else go over the network unencrypted. The web portal uses the same sign-in, and
 its pages refuse to be shown inside other sites. With nginx, switch response buffering off
