@@ -55,6 +55,7 @@ fn behind(info: &ServerInfo) -> Option<String> {
     } else if crate::updater::is_newer(app, &info.version) {
         Some(app.to_string())
     } else if !info.latest.is_empty() {
+        // (the server only sends `latest` when it is newer than the server itself)
         Some(info.latest.clone())
     } else {
         None

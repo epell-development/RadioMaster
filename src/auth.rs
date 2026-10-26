@@ -175,7 +175,7 @@ impl Perms {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Operator {
     pub name: String,
     pub password_hash: String,
@@ -185,6 +185,18 @@ pub struct Operator {
     /// a disabled account can't sign in
     #[serde(default)]
     pub disabled: bool,
+}
+
+// (never the password hash, should an account end up in a log)
+impl std::fmt::Debug for Operator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Operator")
+            .field("name", &self.name)
+            .field("admin", &self.admin)
+            .field("perms", &self.perms)
+            .field("disabled", &self.disabled)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Operator {
