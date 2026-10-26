@@ -14,11 +14,14 @@
 //!   GET  /api/v1/listen                    → the on-air mix as an endless MP3 stream (what the app hears)
 //!   POST /api/v1/mic     MP3 bytes         the app's mic, a slice at a time; heard on air until mic/off
 //!   POST /api/v1/mic/off
+//!   POST /api/v1/azuracast {method, path, body}  a call to the station's AzuraCast, with the server's key
 //!
 //! Every call but ping and login needs `Authorization: Bearer <token>`.
 //!
-//! With HTTPS on, the same API is served over TLS (see tls.rs). The optional web portal is a page on
-//! its own port that signs in and uses this same API from the browser.
+//! With HTTPS on, the same API is served over TLS (see tls.rs), with a certificate that is given, made
+//! by the server, or got from Let's Encrypt (acme.rs). The optional web portal is a page on its own
+//! port that signs in and uses this same API from the browser; it can be put on the internet with a
+//! Cloudflare Tunnel (tunnel.rs).
 
 use crate::config::data_dir;
 use crate::playout::sync::{self, digest, Cmd, ServerInfo, ServerUpdate, Snapshot, TabsWire};
@@ -58,6 +61,25 @@ pub struct ServerCfg {
     /// the web portal: a browser page for running the station
     pub portal: bool,
     pub portal_port: u16,
+    /// HTTPS with a free certificate from Let's Encrypt for these domain names (comma-separated)
+    pub acme: bool,
+    pub acme_domains: String,
+    /// where Let's Encrypt writes about the certificate (optional)
+    pub acme_email: String,
+    /// Let's Encrypt's staging server (for trying it out: browsers don't trust its certificates)
+    pub acme_staging: bool,
+    /// another ACME authority's directory address (empty: Let's Encrypt)
+    pub acme_directory: String,
+    /// the plain-HTTP port for Let's Encrypt's checks (0: none, e.g. a proxy in front passes them on)
+    pub acme_http_port: u16,
+    /// put the web portal on the internet through a Cloudflare Tunnel
+    pub tunnel: bool,
+    /// the tunnel's token from the Cloudflare dashboard (empty: a quick *.trycloudflare.com tunnel).
+    /// Kept in its own owner-only file, tunnel-token, not in server.json.
+    #[serde(skip)]
+    pub tunnel_token: String,
+    /// the cloudflared program (empty: next to the server, or on the PATH)
+    pub cloudflared: String,
 }
 
 impl Default for ServerCfg {
@@ -75,6 +97,15 @@ impl Default for ServerCfg {
             key_file: String::new(),
             portal: false,
             portal_port: sync::DEFAULT_PORTAL_PORT,
+            acme: false,
+            acme_domains: String::new(),
+            acme_email: String::new(),
+            acme_staging: false,
+            acme_directory: String::new(),
+            acme_http_port: 80,
+            tunnel: false,
+            tunnel_token: String::new(),
+            cloudflared: String::new(),
         }
     }
 }
@@ -83,14 +114,40 @@ impl ServerCfg {
     pub fn path() -> std::path::PathBuf {
         data_dir().join("server.json")
     }
+    fn token_path() -> std::path::PathBuf {
+        data_dir().join("tunnel-token")
+    }
     pub fn load() -> Option<Self> {
-        std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok())
+        let mut c: Self = std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+        c.tunnel_token = std::fs::read_to_string(Self::token_path()).map(|t| t.trim().to_string()).unwrap_or_default();
+        Some(c)
     }
     pub fn save(&self) -> std::io::Result<()> {
+        if self.tunnel_token.is_empty() {
+            let _ = std::fs::remove_file(Self::token_path());
+        } else {
+            crate::tls::write_private(&Self::token_path(), &self.tunnel_token)?;
+        }
         std::fs::write(Self::path(), serde_json::to_string_pretty(self).unwrap_or_default())
     }
     pub fn ready(&self) -> bool {
         !self.user.is_empty() && !self.password_hash.is_empty()
+    }
+
+    /// What to ask Let's Encrypt for (None: switched off, or no domain name).
+    pub fn acme_order(&self) -> Option<crate::acme::Order> {
+        let domains = crate::acme::domains(&self.acme_domains);
+        (self.https && self.acme && !domains.is_empty()).then(|| crate::acme::Order {
+            domains,
+            email: self.acme_email.trim().to_string(),
+            directory: if !self.acme_directory.trim().is_empty() {
+                self.acme_directory.trim().to_string()
+            } else if self.acme_staging {
+                crate::acme::LETS_ENCRYPT_STAGING.into()
+            } else {
+                crate::acme::LETS_ENCRYPT.into()
+            },
+        })
     }
 }
 
@@ -161,15 +218,21 @@ struct Api {
     /// token → (user, last used)
     tokens: Mutex<HashMap<String, (String, Instant)>>,
     failures: Mutex<(u32, Instant)>,
-    /// what is running now (server.json may have changed since): (https, portal, portal port)
-    running: (bool, bool, u16),
-    /// of the certificate in use (empty without HTTPS)
-    fingerprint: String,
-    /// HTTPS with a certificate browsers trust: the portal tells them to use only HTTPS. (Not with a
-    /// self-signed one, where HSTS would stop browsers from letting the user past their warning.)
-    hsts: bool,
+    /// what is running now (server.json may have changed since): (https, portal, portal port, Let's Encrypt)
+    running: (bool, bool, u16, bool),
+    /// the certificate in use (None without HTTPS)
+    certs: Option<Arc<crate::tls::CertSwap>>,
     /// token → the mic audio of that app, while its mic is on
     mics: Mutex<HashMap<String, Sender<Vec<u8>>>>,
+    /// Let's Encrypt's checks being answered, and how getting the certificate went
+    challenges: crate::acme::Challenges,
+    acme: crate::acme::Shared,
+    /// the Cloudflare Tunnel while it is on, and the address it points at
+    tunnel: Mutex<Option<crate::tunnel::Tunnel>>,
+    tunnel_status: crate::tunnel::Shared,
+    origin: String,
+    /// a newer RadioMaster release
+    updates: crate::updater::Shared,
     /// waveforms being worked out for apps' track editors
     waves: Arc<Mutex<HashMap<PathBuf, WaveJob>>>,
 }
@@ -225,7 +288,7 @@ const MIC_PREBUFFER: usize = 6;
 
 /// Start listening. Returns the addresses actually bound (port 0 picks a free one).
 pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Listening, String> {
-    let tls = if cfg.https { Some(crate::tls::server_tls(&cfg.cert_file, &cfg.key_file, &data_dir())?) } else { None };
+    let tls = if cfg.https { Some(crate::tls::server_tls(&cfg.cert_file, &cfg.key_file, &data_dir(), cfg.acme)?) } else { None };
     let (server, addr) = listen(&cfg.bind, cfg.port, tls.as_ref())?;
     let portal = if cfg.portal {
         let (s, a) =
@@ -249,20 +312,70 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
         ticks: 0,
     };
     revs.refresh(&core);
-    let running = (cfg.https, cfg.portal, cfg.portal_port);
+    let running = (cfg.https, cfg.portal, cfg.portal_port, cfg.acme);
+    // the tunnel goes to the portal (which serves the API too), over plain HTTP on this machine
+    let web = portal.as_ref().map(|p| p.1).unwrap_or(addr);
+    let host_ip = if web.ip().is_unspecified() { "127.0.0.1".to_string() } else { web.ip().to_string() };
+    let origin =
+        format!("http://{}:{}", if web.is_ipv6() && !web.ip().is_unspecified() { format!("[{host_ip}]") } else { host_ip }, web.port());
     let api = Arc::new(Api {
         core,
-        cfg: Mutex::new(cfg),
         host,
         revs: Mutex::new(revs),
         tokens: Mutex::new(HashMap::new()),
         failures: Mutex::new((0, Instant::now())),
         running,
-        fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()).unwrap_or_default(),
-        hsts: tls.as_ref().is_some_and(|t| !t.self_signed),
+        certs: tls.as_ref().map(|t| t.certs.clone()),
         mics: Mutex::new(HashMap::new()),
+        challenges: Default::default(),
+        acme: Default::default(),
+        tunnel: Mutex::new(None),
+        tunnel_status: Default::default(),
+        origin,
+        updates: Default::default(),
+        cfg: Mutex::new(cfg.clone()),
         waves: Default::default(),
     });
+    if let Some(t) = &tls {
+        let info = t.info();
+        if cfg.acme {
+            let weak = Arc::downgrade(&api);
+            let (c1, c2) = (api.core.clone(), api.core.clone());
+            crate::acme::keep(
+                t.certs.clone(),
+                data_dir(),
+                Box::new(move || weak.upgrade().and_then(|a| a.cfg.lock().acme_order())),
+                api.challenges.clone(),
+                api.acme.clone(),
+                Box::new(move |m| c1.lock().say(m)),
+            );
+            if cfg.acme_http_port != 0 {
+                let https_port = if cfg.portal { web.port() } else { addr.port() };
+                if let Err(e) = crate::acme::serve_http(&cfg.bind, cfg.acme_http_port, api.challenges.clone(), https_port) {
+                    c2.lock().say(format!("Let's Encrypt: can't answer its checks on {e} (run the server with the right to use it, or pass the checks on from a proxy)"));
+                }
+            }
+        } else if !info.self_signed {
+            // a renewed certificate (certbot, win-acme…) is picked up without a restart
+            t.certs.watch();
+        }
+    }
+    if cfg.tunnel {
+        api.start_tunnel();
+    }
+    if !cfg!(test) {
+        let api = Arc::downgrade(&api);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(5));
+            while let Some(a) = api.upgrade() {
+                if a.core.lock().cfg.check_updates {
+                    crate::updater::check(a.updates.clone(), || {}, false);
+                }
+                drop(a);
+                thread::sleep(Duration::from_secs(6 * 3600));
+            }
+        });
+    }
     {
         let api = api.clone();
         thread::spawn(move || loop {
@@ -288,8 +401,8 @@ pub fn spawn(core: Arc<Mutex<Playout>>, cfg: ServerCfg, host: Host) -> Result<Li
     Ok(Listening {
         addr,
         portal: portal_addr,
-        fingerprint: tls.as_ref().map(|t| t.fingerprint.clone()),
-        self_signed: tls.as_ref().is_some_and(|t| t.self_signed),
+        fingerprint: tls.as_ref().map(|t| t.info().fingerprint),
+        self_signed: tls.as_ref().is_some_and(|t| t.info().self_signed),
     })
 }
 
@@ -300,6 +413,8 @@ struct Reply(u16, String);
 const PORTAL_HTML: &str = include_str!("../assets/portal/index.html");
 const PORTAL_JS: &str = include_str!("../assets/portal/portal.js");
 const PORTAL_CSS: &str = include_str!("../assets/portal/portal.css");
+const FAVICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
+const FAVICON_ICO: &[u8] = include_bytes!("../assets/icon.ico");
 
 fn json(code: u16, v: impl Serialize) -> Reply {
     Reply(code, serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()))
@@ -332,15 +447,28 @@ impl Api {
     fn handle(self: &Arc<Self>, mut req: tiny_http::Request, portal: bool) {
         let url = req.url().to_string();
         let (path, query) = url.split_once('?').unwrap_or((url.as_str(), ""));
+        if *req.method() == tiny_http::Method::Get {
+            // Let's Encrypt's check, passed on by a proxy in front or by the HTTPS port
+            if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
+                let answer = self.challenges.lock().get(token).cloned();
+                let _ = req.respond(match answer {
+                    Some(a) => tiny_http::Response::from_string(a),
+                    None => tiny_http::Response::from_string("Not found").with_status_code(404),
+                });
+                return;
+            }
+        }
         if portal && *req.method() == tiny_http::Method::Get {
-            let file = match path {
-                "/" | "/index.html" => Some((PORTAL_HTML, "text/html; charset=utf-8")),
-                "/portal.js" => Some((PORTAL_JS, "text/javascript; charset=utf-8")),
-                "/portal.css" => Some((PORTAL_CSS, "text/css; charset=utf-8")),
+            let file: Option<(&'static [u8], &str)> = match path {
+                "/" | "/index.html" => Some((PORTAL_HTML.as_bytes(), "text/html; charset=utf-8")),
+                "/portal.js" => Some((PORTAL_JS.as_bytes(), "text/javascript; charset=utf-8")),
+                "/portal.css" => Some((PORTAL_CSS.as_bytes(), "text/css; charset=utf-8")),
+                "/favicon.png" | "/apple-touch-icon.png" => Some((FAVICON_PNG, "image/png")),
+                "/favicon.ico" => Some((FAVICON_ICO, "image/x-icon")),
                 _ => None,
             };
-            if let Some((text, ct)) = file {
-                return respond_file(req, text, ct, self.hsts);
+            if let Some((data, ct)) = file {
+                return respond_file(req, data, ct, self.hsts());
             }
         }
         let param = |k: &str| -> u64 {
@@ -510,6 +638,7 @@ impl Api {
                 self.mics.lock().remove(token);
                 json(200, serde_json::json!({ "ok": true }))
             }
+            ("/api/v1/azuracast", true) => self.azuracast(body),
             ("/api/v1/server", false) => json(200, self.info()),
             ("/api/v1/server", true) => {
                 let Ok(u) = serde_json::from_slice::<ServerUpdate>(body) else { return error(400, "bad server settings") };
@@ -671,8 +800,67 @@ impl Api {
         }
     }
 
+    /// HTTPS with a certificate browsers trust: the portal tells them to use only HTTPS. (Not with a
+    /// self-signed one, where HSTS would stop browsers from letting the user past their warning.)
+    fn hsts(&self) -> bool {
+        self.certs.as_ref().is_some_and(|c| !c.info().self_signed)
+    }
+
+    /// A call to the station's AzuraCast (Settings → AzuraCast), for the web portal.
+    fn azuracast(&self, body: &[u8]) -> Reply {
+        #[derive(Deserialize)]
+        struct Call {
+            method: String,
+            path: String,
+            #[serde(default)]
+            body: Option<serde_json::Value>,
+        }
+        let Ok(c) = serde_json::from_slice::<Call>(body) else { return error(400, "bad request") };
+        let method = c.method.to_ascii_uppercase();
+        if !["GET", "POST", "PUT", "DELETE"].contains(&method.as_str()) {
+            return error(400, "unknown method");
+        }
+        // the station's own calls and now-playing (not the whole AzuraCast administration)
+        let p = c.path.as_str();
+        let allowed = p.starts_with("/station/{st}") || p.starts_with("/nowplaying") || p == "/status" || p == "/stations";
+        if !allowed || p.contains("..") {
+            return error(403, "that AzuraCast call isn't available here");
+        }
+        let az = self.core.lock().cfg.azuracast.clone();
+        if az.base_url.trim().is_empty() || az.station.trim().is_empty() {
+            return error(400, "set up AzuraCast first (its address and station)");
+        }
+        match crate::azuracast::Client::new(&az).call(&method, p, c.body) {
+            Ok(v) => json(200, v),
+            Err(e) => error(502, &e.to_string()),
+        }
+    }
+
+    /// Start (or restart) the Cloudflare Tunnel with the saved settings.
+    fn start_tunnel(self: &Arc<Self>) {
+        let (program, token) = {
+            let c = self.cfg.lock();
+            (crate::tunnel::find(&c.cloudflared), c.tunnel_token.clone())
+        };
+        let core = self.core.clone();
+        let mut t = self.tunnel.lock();
+        *t = None;
+        *self.tunnel_status.lock() = Default::default();
+        *t = Some(crate::tunnel::start(
+            program,
+            token,
+            self.origin.clone(),
+            self.tunnel_status.clone(),
+            Arc::new(move |m| core.lock().say(m)),
+        ));
+    }
+
     fn info(&self) -> ServerInfo {
         let c = self.cfg.lock().clone();
+        let cert = self.certs.as_ref().map(|c| c.info()).unwrap_or_default();
+        let latest = self.updates.lock().available.clone();
+        let acme = self.acme.lock().clone();
+        let tunnel = self.tunnel_status.lock().clone();
         ServerInfo {
             name: c.name,
             user: c.user,
@@ -681,10 +869,25 @@ impl Api {
             autoplay: c.autoplay,
             audio: c.audio,
             https: c.https,
-            fingerprint: self.fingerprint.clone(),
+            fingerprint: cert.fingerprint,
             portal: c.portal,
             portal_port: c.portal_port,
-            restart_needed: (c.https, c.portal, c.portal_port) != self.running,
+            restart_needed: (c.https, c.portal, c.portal_port, c.acme && c.https)
+                != (self.running.0, self.running.1, self.running.2, self.running.3 && self.running.0),
+            latest: latest.as_ref().map(|a| a.version.clone()).unwrap_or_default(),
+            release_page: latest.map(|a| a.page).unwrap_or_default(),
+            cert_expires: cert.not_after.unwrap_or(0),
+            acme: c.acme,
+            acme_domains: c.acme_domains,
+            acme_email: c.acme_email,
+            acme_staging: c.acme_staging,
+            acme_state: acme.state,
+            acme_message: acme.message,
+            tunnel: c.tunnel,
+            tunnel_token_set: !c.tunnel_token.is_empty(),
+            tunnel_state: if c.tunnel { tunnel.state } else { String::new() },
+            tunnel_url: if c.tunnel { tunnel.url } else { String::new() },
+            tunnel_message: if c.tunnel { tunnel.message } else { String::new() },
             devices: crate::audio::list_outputs(),
             outputs: self.core.lock().cfg.audio_devices.outputs.clone(),
             report: self.host.audio_report.lock().clone(),
@@ -692,7 +895,7 @@ impl Api {
         }
     }
 
-    fn update(&self, u: ServerUpdate) -> Reply {
+    fn update(self: &Arc<Self>, u: ServerUpdate) -> Reply {
         let mut c = self.cfg.lock().clone();
         if let Some((current, new)) = &u.password {
             if !crate::auth::verify(&c.password_hash, current) {
@@ -713,12 +916,41 @@ impl Api {
         if u.portal_port != 0 {
             c.portal_port = u.portal_port;
         }
+        if let Some(v) = u.acme {
+            c.acme = v;
+        }
+        if let Some(v) = u.acme_domains {
+            c.acme_domains = crate::acme::domains(&v).join(", ");
+        }
+        if let Some(v) = u.acme_email {
+            c.acme_email = v.trim().to_string();
+        }
+        if let Some(v) = u.acme_staging {
+            c.acme_staging = v;
+        }
+        let tunnel_was = (c.tunnel, c.tunnel_token.clone());
+        if let Some(v) = u.tunnel {
+            c.tunnel = v;
+        }
+        if let Some(v) = u.tunnel_token {
+            c.tunnel_token = v.trim().to_string();
+        }
+        let tunnel_changed = tunnel_was != (c.tunnel, c.tunnel_token.clone());
         let audio_changed = c.audio != u.audio || self.core.lock().cfg.audio_devices.outputs != u.outputs;
         c.audio = u.audio;
         if let Err(e) = c.save() {
             return error(500, &format!("could not save server.json: {e}"));
         }
+        let tunnel_on = c.tunnel;
         *self.cfg.lock() = c;
+        // the tunnel starts and stops at once
+        if tunnel_changed {
+            if tunnel_on {
+                self.start_tunnel();
+            } else {
+                *self.tunnel.lock() = None;
+            }
+        }
         if audio_changed {
             {
                 let mut p = self.core.lock();
@@ -739,8 +971,8 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
 }
 
 /// One of the portal's own files, with headers that keep it from being framed or mixed with other sites.
-fn respond_file(req: tiny_http::Request, text: &'static str, content_type: &str, hsts: bool) {
-    let mut r = tiny_http::Response::from_string(text)
+fn respond_file(req: tiny_http::Request, data: &'static [u8], content_type: &str, hsts: bool) {
+    let mut r = tiny_http::Response::from_data(data)
         .with_header(header("Content-Type", content_type))
         .with_header(header("Cache-Control", "no-cache"))
         .with_header(header("X-Content-Type-Options", "nosniff"))
@@ -817,8 +1049,15 @@ mod tests {
     /// A station with just these rows. (The data folder is shared by the tests running at the same
     /// time, so the playlists another test saved there are replaced, not added to.)
     fn station_with(rows: Vec<PlEntry>) -> Arc<Mutex<Playout>> {
-        let mut p = Playout::new(Engine::new_detached(), crate::config::Config::default());
-        p.set_tabs(TabsWire { tabs: vec![sync::TabWire { name: "Main".into(), entries: rows, current: None }], playing: 0 });
+        let station = station_on(Engine::new_detached());
+        station.lock().set_tabs(TabsWire { tabs: vec![sync::TabWire { name: "Main".into(), entries: rows, current: None }], playing: 0 });
+        station
+    }
+
+    /// The same with no rows, on this engine.
+    fn station_on(engine: Engine) -> Arc<Mutex<Playout>> {
+        let mut p = Playout::new(engine, crate::config::Config::default());
+        p.set_tabs(TabsWire { tabs: vec![sync::TabWire { name: "Main".into(), ..Default::default() }], playing: 0 });
         Arc::new(Mutex::new(p))
     }
 
@@ -857,7 +1096,7 @@ mod tests {
         crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
         let station_engine = Engine::new_detached();
         let _clock = station_engine.start_null_driver();
-        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let station = station_on(station_engine.clone());
         let cfg = ServerCfg {
             user: "dj".into(),
             password_hash: crate::auth::hash("a long enough password").unwrap(),
@@ -1139,9 +1378,84 @@ mod tests {
         assert_eq!(r.status(), 301);
         assert!(r.header("Location").unwrap().starts_with("https://127.0.0.1:"));
 
+        // behind a reverse proxy that took the HTTPS off itself (IIS, nginx, Cloudflare…): served as it
+        // is, not sent to https:// again (which looped: URL_TOO_MANY_REDIRECTS)
+        for (name, value) in
+            [("X-ARR-SSL", "2048|256|CN=R11|CN=radio.example.com"), ("X-Forwarded-Proto", "https"), ("CF-Visitor", r#"{"scheme":"https"}"#)]
+        {
+            let r = plain.get(&format!("http://127.0.0.1:{}/", l.portal.unwrap().port())).set(name, value).call().unwrap();
+            assert_eq!(r.status(), 200, "{name}");
+            assert!(r.into_string().unwrap().contains("RadioMaster Web Portal"));
+        }
+        let r = plain.get(&format!("http://127.0.0.1:{}/api/v1/ping", l.addr.port())).set("X-Forwarded-Proto", "https").call().unwrap();
+        assert_eq!(r.into_json::<serde_json::Value>().unwrap()["app"], "RadioMaster Server");
+        // a proxy that says the browser used plain HTTP still gets the redirect
+        // (a new connection: a proxy's connection stays passed through)
+        let fresh = ureq::AgentBuilder::new().redirects(0).build();
+        let r = fresh.get(&format!("http://127.0.0.1:{}/", l.portal.unwrap().port())).set("X-Forwarded-Proto", "http").call().unwrap();
+        assert_eq!(r.status(), 301);
+        // the icon
+        let icon = agent.get(&format!("{portal}/favicon.png")).call().unwrap();
+        assert_eq!(icon.content_type(), "image/png");
+
         // the certificate is kept: the same one after a restart
         let again = spawn(station, cfg, host()).unwrap();
         assert_eq!(again.fingerprint.unwrap(), fp);
+    }
+
+    /// The tunnel token is a secret: it stays out of server.json, in a file of its own.
+    #[test]
+    fn tunnel_token_is_kept_apart() {
+        let dir = std::env::temp_dir().join(format!("rm-server-token-test-{}", std::process::id()));
+        crate::config::set_data_dir(dir);
+        let cfg = ServerCfg {
+            user: "a".into(),
+            password_hash: "x".into(),
+            tunnel: true,
+            tunnel_token: "secret-token".into(),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        assert!(!std::fs::read_to_string(ServerCfg::path()).unwrap().contains("secret-token"));
+        assert_eq!(ServerCfg::load().unwrap().tunnel_token, "secret-token");
+        ServerCfg { tunnel_token: String::new(), ..cfg }.save().unwrap();
+        assert!(!ServerCfg::token_path().exists());
+    }
+
+    /// Let's Encrypt's checks are answered on every port, over plain HTTP, before signing in; a
+    /// certificate written over the old one is picked up without a restart.
+    #[test]
+    fn acme_checks_and_certificate_swap() {
+        let dir = std::env::temp_dir().join(format!("rm-server-acme-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::config::set_data_dir(dir.clone());
+        let station = station_on(Engine::new_detached());
+        let cfg = ServerCfg {
+            user: "studio".into(),
+            password_hash: crate::auth::hash("correct horse battery").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            https: true,
+            ..Default::default()
+        };
+        let host = Host { reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let tls = crate::tls::server_tls("", "", &dir, true).unwrap();
+        assert!(tls.info().self_signed, "self-signed until Let's Encrypt has answered");
+        let l = spawn(station, cfg, host).unwrap();
+        let plain = ureq::AgentBuilder::new().redirects(0).build();
+        let url = format!("http://127.0.0.1:{}/.well-known/acme-challenge/abc", l.addr.port());
+        assert_eq!(plain.get(&url).call().err().map(|e| matches!(e, ureq::Error::Status(404, _))), Some(true));
+
+        // a certificate swapped in while connections keep coming
+        let ck = rcgen::generate_simple_self_signed(vec!["radio.example.com".into()]).unwrap();
+        let (c, k) = (dir.join("other-cert.pem"), dir.join("other-key.pem"));
+        std::fs::write(&c, ck.cert.pem()).unwrap();
+        std::fs::write(&k, ck.signing_key.serialize_pem()).unwrap();
+        let fp = crate::tls::fingerprint(ck.cert.der());
+        let info = tls.certs.load(&c, &k, false).unwrap();
+        assert_eq!(info.fingerprint, fp);
+        assert_eq!(tls.info().fingerprint, fp);
     }
 
     /// The station's sound reaches the app over HTTPS too, through the pinned certificate, and keeps
@@ -1154,7 +1468,7 @@ mod tests {
         crate::config::set_data_dir(dir);
         let station_engine = Engine::new_detached();
         let _clock = station_engine.start_null_driver();
-        let station = Arc::new(Mutex::new(Playout::new(station_engine.clone(), crate::config::Config::default())));
+        let station = station_on(station_engine.clone());
         let cfg = ServerCfg {
             user: "dj".into(),
             password_hash: crate::auth::hash("a long enough password").unwrap(),
