@@ -248,7 +248,7 @@ impl App {
         self.save_session_window(ctx, core);
         self.server_status_window(ctx, core);
         self.server_settings_window(ctx);
-        self.server_picker_window(ctx);
+        self.server_picker_window(ctx, core);
         self.server_admin_windows(ctx);
     }
 
@@ -454,9 +454,11 @@ impl App {
         core.save_all();
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut local = Playout::mirror_of(core, tx);
+        let waves = local.wave_requests();
         std::mem::swap(core, &mut local);
         let ctx = self.ctx.clone();
-        let link = Link::start(self.core.clone(), s.clone(), rx, Box::new(move || ctx.request_repaint()));
+        // (`core` is the locked playout: Link::start must not lock it again, or the app hangs)
+        let link = Link::start(self.core.clone(), s.clone(), rx, waves, Box::new(move || ctx.request_repaint()));
         if !s.pin.is_empty() {
             self.srv.pins.insert(pin_key(&s.base), s.pin.clone());
         }

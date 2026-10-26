@@ -123,7 +123,7 @@ impl App {
         });
     }
 
-    pub(super) fn server_picker_window(&mut self, ctx: &egui::Context) {
+    pub(super) fn server_picker_window(&mut self, ctx: &egui::Context, core: &Playout) {
         if let Some(p) = self.files.asked.get_mut().take() {
             self.files.picker = Some(p);
         }
@@ -152,8 +152,7 @@ impl App {
         }
         if p.list.is_none() && p.loading.is_none() {
             let (tx, rx) = mpsc::channel();
-            let (fs, dir, all, ctx, folders) =
-                (fs.clone(), p.dir.clone(), p.all, ctx.clone(), self.core.lock().cfg.library_folders.clone());
+            let (fs, dir, all, ctx, folders) = (fs.clone(), p.dir.clone(), p.all, ctx.clone(), core.cfg.library_folders.clone());
             thread::spawn(move || {
                 let _ = tx.send(fs.list(&dir, all, &folders));
                 ctx.request_repaint();

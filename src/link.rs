@@ -258,8 +258,16 @@ pub struct Link {
 
 impl Link {
     /// Keep `core` (a mirror made with `Playout::mirror_of`) in step with the server.
-    /// `cmds` is the receiving end of the mirror's link; `repaint` wakes the UI after each update.
-    pub fn start(core: Arc<Mutex<Playout>>, session: Session, cmds: Receiver<Cmd>, repaint: Box<dyn Fn() + Send>) -> Link {
+    /// `cmds` is the receiving end of the mirror's link, `waves` the mirror's `wave_requests`;
+    /// `repaint` wakes the UI after each update.
+    /// It never locks `core` itself: the app calls it with the playout locked.
+    pub fn start(
+        core: Arc<Mutex<Playout>>,
+        session: Session,
+        cmds: Receiver<Cmd>,
+        waves: Receiver<std::path::PathBuf>,
+        repaint: Box<dyn Fn() + Send>,
+    ) -> Link {
         let stop = Arc::new(AtomicBool::new(false));
         let token = Arc::new(Mutex::new(session.token.clone()));
         let new_password = Arc::new(Mutex::new(None));
@@ -285,11 +293,9 @@ impl Link {
             queued: vec![],
         };
         // the track editor's waveforms come from the server, which has the files
-        let (wtx, wrx) = crossbeam_channel::unbounded();
-        s.core.lock().set_wave_source(wtx);
         {
             let (core, base, pin, token, stop) = (s.core.clone(), session.base.clone(), session.pin.clone(), token.clone(), stop.clone());
-            thread::spawn(move || fetch_waves(core, base, pin, token, wrx, &stop));
+            thread::spawn(move || fetch_waves(core, base, pin, token, waves, &stop));
         }
         let st = stop.clone();
         thread::spawn(move || s.run(&st, repaint));

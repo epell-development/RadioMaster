@@ -1541,6 +1541,43 @@ mod tests {
         assert!(sound_after(&on_air, 1.5).is_none(), "silent once the mic is off");
     }
 
+    /// Connecting the way the app does: the UI thread holds the playout's lock while it swaps in the
+    /// mirror and starts the link. Starting the link must not lock it again (v0.2.9 hung there).
+    #[test]
+    fn connecting_with_the_playout_locked() {
+        crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
+        let station = station_with(vec![row("one"), row("two")]);
+        let cfg = ServerCfg {
+            user: "studio".into(),
+            password_hash: crate::auth::hash("correct horse battery").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let addr = spawn(station.clone(), cfg, host).unwrap().addr;
+        let session = crate::link::login(&format!("127.0.0.1:{}", addr.port()), "studio", "correct horse battery", "").unwrap();
+
+        let app = Arc::new(Mutex::new(Playout::new(Engine::new_detached(), crate::config::Config::default())));
+        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+        let shared = app.clone();
+        thread::spawn(move || {
+            let mut core = shared.lock();
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let mut local = Playout::mirror_of(&core, tx);
+            let waves = local.wave_requests();
+            std::mem::swap(&mut *core, &mut local);
+            let link = crate::link::Link::start(shared.clone(), session, rx, waves, Box::new(|| {}));
+            drop(core);
+            let _ = done_tx.send((link, local));
+        });
+        let (link, _local) = done_rx.recv_timeout(Duration::from_secs(10)).expect("connecting hung with the playout locked");
+        wait_for("the first copy", || app.lock().playlist.len() == 2);
+        assert!(link.state.lock().online);
+        link.stop();
+    }
+
     /// A server and a desktop mirror talking over HTTP: sign-in, both directions of playlist sync,
     /// settings, and forwarded actions.
     #[test]
@@ -1566,7 +1603,8 @@ mod tests {
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
         let (tx, rx) = crossbeam_channel::unbounded();
         let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
-        let link = crate::link::Link::start(mirror.clone(), session, rx, Box::new(|| {}));
+        let waves = mirror.lock().wave_requests();
+        let link = crate::link::Link::start(mirror.clone(), session, rx, waves, Box::new(|| {}));
 
         // the server's playlist reaches the app
         wait_for("the first copy", || mirror.lock().playlist.len() == 2);
@@ -1656,7 +1694,8 @@ mod tests {
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
         let (tx, rx) = crossbeam_channel::unbounded();
         let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
-        let link = crate::link::Link::start(mirror.clone(), session, rx, Box::new(|| {}));
+        let waves = mirror.lock().wave_requests();
+        let link = crate::link::Link::start(mirror.clone(), session, rx, waves, Box::new(|| {}));
         wait_for("the first copy", || mirror.lock().playlist.len() == 2);
 
         // missing is what the server says, whatever this machine has
@@ -1736,7 +1775,8 @@ mod tests {
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
         let (tx, rx) = crossbeam_channel::unbounded();
         let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
-        let link = crate::link::Link::start(mirror.clone(), dj.clone(), rx, Box::new(|| {}));
+        let waves = mirror.lock().wave_requests();
+        let link = crate::link::Link::start(mirror.clone(), dj.clone(), rx, waves, Box::new(|| {}));
         // (other tests may have left playlists in the shared data folder)
         let n = station.lock().playlist.len();
         wait_for("the first copy", || mirror.lock().playlist.len() == n);
@@ -1887,7 +1927,8 @@ mod tests {
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
         let (tx, rx) = crossbeam_channel::unbounded();
         let mirror = Arc::new(Mutex::new(Playout::mirror_of(&local, tx)));
-        let link = crate::link::Link::start(mirror.clone(), session, rx, Box::new(|| {}));
+        let waves = mirror.lock().wave_requests();
+        let link = crate::link::Link::start(mirror.clone(), session, rx, waves, Box::new(|| {}));
         wait_for("the playlist over HTTPS", || mirror.lock().playlist.len() == 1);
         mirror.lock().append_to_tab(0, vec![row("two")]);
         wait_for("the edit on the server over HTTPS", || station.lock().playlist.len() == 2);
