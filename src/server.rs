@@ -1058,7 +1058,7 @@ impl Api {
             };
             let engine = api.core.lock().engine.clone();
             let mut w = req.into_writer();
-            let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nCache-Control: no-cache, no-store\r\nConnection: close\r\n\r\n";
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nCache-Control: no-cache, no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n\r\n";
             if w.write_all(head.as_bytes()).and_then(|_| w.flush()).is_err() {
                 return;
             }
@@ -1498,6 +1498,7 @@ mod tests {
         station_engine.play_source(sine(440.0), None, 0.0, crate::engine::CueSpec::default(), None, true);
         let delay = sound_after(&heard, 10.0).expect("the app should hear the station");
         assert!(delay < Duration::from_secs(2), "heard {delay:?} late");
+        assert_eq!(*listener.state.lock(), crate::link::Hearing::Playing);
         drop(listener);
         drain(&heard);
         assert!(sound_after(&heard, 1.5).is_none(), "silent again once it stops listening");
@@ -2073,5 +2074,86 @@ mod tests {
         station_engine.play_source(sine(440.0), None, 0.0, crate::engine::CueSpec::default(), None, true);
         assert!(sound_after(&heard, 10.0).is_some(), "the app should hear the station over HTTPS");
         drop(listener);
+    }
+
+    /// A reverse proxy (IIS, for one) may hold the first seconds of the sound back. The app used to
+    /// give up after 10 s and start over, again and again, so the station was never heard.
+    #[test]
+    fn hears_the_station_through_a_proxy_that_holds_the_start_back() {
+        use std::io::{Read, Write};
+        crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-proxy-{}", std::process::id())));
+        let station_engine = Engine::new_detached();
+        let _clock = station_engine.start_null_driver();
+        let station = station_on(station_engine.clone());
+        let cfg = ServerCfg {
+            user: "dj".into(),
+            password_hash: crate::auth::hash("a long enough password").unwrap(),
+            bind: "127.0.0.1".into(),
+            port: 0,
+            ..Default::default()
+        };
+        let host =
+            Host { control: Box::new(|_| {}), reapply_audio: Box::new(|| {}), audio_report: Default::default(), forced_silent: true };
+        let server = spawn(station, cfg, host).unwrap().addr;
+        // the proxy: requests go straight through, answers are held back for the first 12 s
+        let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_port = proxy.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for app in proxy.incoming().flatten() {
+                let up = std::net::TcpStream::connect(server).unwrap();
+                let (mut app_r, mut up_w) = (app.try_clone().unwrap(), up.try_clone().unwrap());
+                thread::spawn(move || {
+                    let _ = std::io::copy(&mut app_r, &mut up_w);
+                });
+                let (mut up_r, mut app_w) = (up, app);
+                thread::spawn(move || {
+                    let start = Instant::now();
+                    let (mut held, mut buf) = (Vec::new(), [0u8; 8192]);
+                    while let Ok(n) = up_r.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        held.extend_from_slice(&buf[..n]);
+                        if start.elapsed() > Duration::from_secs(12) {
+                            if app_w.write_all(&held).is_err() {
+                                break;
+                            }
+                            held.clear();
+                        }
+                    }
+                });
+            }
+        });
+        let s = crate::link::login(&format!("127.0.0.1:{}", server.port()), "dj", "a long enough password", "").unwrap();
+        let here = Engine::new_detached();
+        let _cards = here.start_null_driver();
+        let (tx, heard) = crossbeam_channel::bounded(512);
+        here.add_tap(tx);
+        station_engine.set_volume(1.0);
+        station_engine.play_source(sine(440.0), None, 0.0, crate::engine::CueSpec::default(), None, true);
+        let base = format!("http://127.0.0.1:{proxy_port}");
+        let listener = crate::link::Listener::start(here, base, String::new(), Arc::new(Mutex::new(s.token)), Box::new(|_| {}));
+        assert!(sound_after(&heard, 20.0).is_some(), "the app should hear the station once the proxy lets it through");
+        assert_eq!(*listener.state.lock(), crate::link::Hearing::Playing);
+    }
+
+    /// When the station can't be heard, the connection window says why instead of staying silent.
+    #[test]
+    fn says_why_the_station_cant_be_heard() {
+        // nothing listens on this port
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let said = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log = said.clone();
+        let listener = crate::link::Listener::start(
+            Engine::new_detached(),
+            format!("http://127.0.0.1:{port}"),
+            String::new(),
+            Default::default(),
+            Box::new(move |m| log.lock().push(m)),
+        );
+        thread::sleep(Duration::from_secs(5));
+        assert!(matches!(&*listener.state.lock(), crate::link::Hearing::Trouble(_)), "{:?}", listener.state.lock());
+        // reported once, not on every retry
+        assert_eq!(said.lock().len(), 1, "{:?}", said.lock());
     }
 }

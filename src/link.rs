@@ -465,7 +465,26 @@ const MIC_SLICE: Duration = Duration::from_millis(100);
 pub struct Listener {
     stop: Arc<AtomicBool>,
     engine: crate::engine::Engine,
+    /// what it is doing now, for the connection window
+    pub state: Arc<Mutex<Hearing>>,
 }
+
+/// What "Hear the station here" is doing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Hearing {
+    Connecting,
+    Playing,
+    /// the sound stopped after playing: connecting again
+    Reconnecting,
+    /// the sign-in expired: waiting for the syncer to sign in again
+    SigningIn,
+    /// why the station can't be heard
+    Trouble(String),
+}
+
+/// How long the station's sound may stall before the app connects again. Generous, because a
+/// reverse proxy in front of the server (IIS, for one) can hold the first ten seconds or more back.
+const LISTEN_STALL: Duration = Duration::from_secs(30);
 
 impl Listener {
     /// `say` reports trouble in the station log.
@@ -480,32 +499,58 @@ impl Listener {
         let (feed, src) = crate::engine::net_feed(LISTEN_PREBUFFER);
         engine.set_feed(Some(src));
         let stop = Arc::new(AtomicBool::new(false));
-        let st = stop.clone();
+        let state = Arc::new(Mutex::new(Hearing::Connecting));
+        let (st, shown) = (stop.clone(), state.clone());
         thread::spawn(move || {
             // (no overall time limit: the answer never ends)
             let agent = ureq::AgentBuilder::new()
                 .timeout_connect(Duration::from_secs(5))
-                .timeout_read(Duration::from_secs(10))
+                .timeout_read(LISTEN_STALL)
                 .tls_config(crate::tls::client_config(&pin, Default::default()))
                 .build();
-            let mut told = false;
+            // the last trouble put in the log, so a server that stays away isn't reported every 2 s
+            let mut told = String::new();
+            let mut trouble = |e: String| {
+                if e != told {
+                    say(format!("Can't hear the station here: {e}"));
+                    told = e.clone();
+                }
+                *shown.lock() = Hearing::Trouble(e);
+            };
             while !st.load(Ordering::Relaxed) {
                 let t = token.lock().clone();
                 match agent.get(&format!("{base}/api/v1/listen")).set("Authorization", &format!("Bearer {t}")).call() {
                     Ok(r) => {
-                        told = false;
                         let mime = r.content_type().to_string();
-                        let _ = crate::live::decode_stream(r.into_reader(), &mime, Some("mp3"), &mut |s| {
+                        let mut playing = false;
+                        let res = crate::live::decode_stream(r.into_reader(), &mime, Some("mp3"), &mut |s| {
+                            if !playing {
+                                playing = true;
+                                *shown.lock() = Hearing::Playing;
+                            }
                             let _ = feed.try_send(s.to_vec());
                             !st.load(Ordering::Relaxed)
                         });
+                        if !st.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        match res {
+                            Err(e) => trouble(format!("the server's sound couldn't be played ({e})")),
+                            Ok(()) if !playing => trouble(format!(
+                                "no sound arrived for {} s (a proxy in front of the server may be holding it back)",
+                                LISTEN_STALL.as_secs()
+                            )),
+                            // the connection dropped after playing: connect again quietly
+                            Ok(()) => *shown.lock() = Hearing::Reconnecting,
+                        }
                     }
-                    Err(ureq::Error::Status(404, _)) if !told => {
-                        told = true;
-                        say("This server doesn't send its audio to the app: update RadioMaster Server to this app's version".into());
+                    Err(ureq::Error::Status(404, _)) => {
+                        trouble("this server doesn't send its audio to the app: update RadioMaster Server to this app's version".into())
                     }
-                    // offline or signed out: the syncer signs in again, then this tries again
-                    Err(_) => {}
+                    // signed out: the syncer signs in again, then this tries again
+                    Err(ureq::Error::Status(401, _)) => *shown.lock() = Hearing::SigningIn,
+                    Err(ureq::Error::Status(code, _)) => trouble(format!("the server answered HTTP {code}")),
+                    Err(e) => trouble(e.to_string()),
                 }
                 for _ in 0..20 {
                     if st.load(Ordering::Relaxed) {
@@ -515,7 +560,7 @@ impl Listener {
                 }
             }
         });
-        Listener { stop, engine }
+        Listener { stop, engine, state }
     }
 }
 
