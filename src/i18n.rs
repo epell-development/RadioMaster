@@ -46,8 +46,12 @@ pub fn tr(english: &'static str) -> &'static str {
 /// Folders that may hold language files: next to the program, then the data folder.
 pub fn folders() -> Vec<PathBuf> {
     let mut v = vec![];
-    if let Some(d) = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.join("lang"))) {
-        v.push(d);
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())) {
+        v.push(exe_dir.join("lang"));
+        // RadioMaster.app keeps them in Contents/Resources (code signing allows only programs in Contents/MacOS)
+        if cfg!(target_os = "macos") {
+            v.push(exe_dir.join("../Resources/lang"));
+        }
     }
     v.push(PathBuf::from("lang")); // running from the source folder
     v.push(crate::config::data_dir().join("lang"));
