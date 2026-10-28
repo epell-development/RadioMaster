@@ -30,6 +30,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
+      # Code signing turns "Unknown publisher" into the publisher's name in Windows SmartScreen. It runs
+      # once Azure Artifact Signing is set up (docs/CODE-SIGNING.md); without it the files ship unsigned.
+      - name: Sign RadioMaster.exe and RadioMaster-Server.exe
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: Azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          # the top level of target\release holds just the two programs
+          files-folder: ${{ github.workspace }}\target\release
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: RadioMaster
+          description-url: https://radiomaster.dovafm.com
       - name: Package
         shell: pwsh
         run: |
@@ -55,6 +75,23 @@ jobs:
           $ver = "${{ github.ref_name }}".TrimStart('v')
           & $iscc "/DAppVersion=$ver" installer\RadioMaster.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign the installer
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
+        uses: Azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: RadioMaster Setup
+          description-url: https://radiomaster.dovafm.com
       - name: Release notes from CHANGELOG.md
         shell: pwsh
         run: python tools/changelog_section.py "${{ github.ref_name }}" notes.md
@@ -115,39 +152,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked
-      - name: Package RadioMaster.app
-        run: |
-          app=RadioMaster.app
-          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          cp target/release/RadioMaster "$app/Contents/MacOS/RadioMaster"
-          cp -r lang "$app/Contents/MacOS/lang"
-          mkdir icon.iconset
-          for s in 16 32 64 128 256; do
-            sips -z $s $s assets/icon.png --out icon.iconset/icon_${s}x${s}.png >/dev/null
-            d=$((s*2)); sips -z $d $d assets/icon.png --out icon.iconset/icon_${s}x${s}@2x.png >/dev/null
-          done
-          iconutil -c icns icon.iconset -o "$app/Contents/Resources/RadioMaster.icns"
-          ver="${GITHUB_REF_NAME#v}"
-          cat > "$app/Contents/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-            <key>CFBundleName</key><string>RadioMaster</string>
-            <key>CFBundleDisplayName</key><string>RadioMaster</string>
-            <key>CFBundleIdentifier</key><string>com.dovafm.radiomaster</string>
-            <key>CFBundleVersion</key><string>$ver</string>
-            <key>CFBundleShortVersionString</key><string>$ver</string>
-            <key>CFBundleExecutable</key><string>RadioMaster</string>
-            <key>CFBundleIconFile</key><string>RadioMaster</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>NSMicrophoneUsageDescription</key><string>RadioMaster uses the microphone for live talk-overs and voice tracks.</string>
-            <key>NSHighResolutionCapable</key><true/>
-          </dict></plist>
-          PLIST
-          sed -i '' 's/^          //' "$app/Contents/Info.plist"
-          codesign --force --deep --sign - "$app" || true
-          ditto -c -k --keepParent "$app" "RadioMaster-${GITHUB_REF_NAME}-macos.zip"
+      # A universal app for Apple Silicon and Intel Macs. Developer ID signing and notarization run when
+      # the Apple secrets are set (docs/CODE-SIGNING.md); otherwise the app is ad-hoc signed.
+      - name: Build and package RadioMaster.app
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: tools/package_macos.sh "${GITHUB_REF_NAME#v}" "RadioMaster-${GITHUB_REF_NAME}-macos.zip"
       - uses: softprops/action-gh-release@v2
         with:
           files: RadioMaster-*-macos.zip

@@ -24,15 +24,18 @@ Everything is on the [latest release](../../releases/latest) page.
 ### Windows 10 / 11
 1. Download **`RadioMaster-Setup-<version>.exe`** and run it. You can install just for yourself (no admin
    needed) or for all users; you get Start-menu and desktop shortcuts and an uninstaller.
+   If Windows SmartScreen says *Windows protected your PC*, click **More info** → **Run anyway**: the
+   downloads aren't code-signed yet (see [docs/CODE-SIGNING.md](docs/CODE-SIGNING.md)).
 2. Prefer no installer? Download **`RadioMaster-<version>-windows-x64.zip`**, unzip it anywhere (a USB stick
    works) and run `RadioMaster.exe`.
 
 Embedded web panels use the Microsoft Edge WebView2 runtime, which Windows 10/11 already include.
 
-### macOS 12 or later
+### macOS 12 or later (Apple Silicon and Intel)
 Download **`RadioMaster-<version>-macos.zip`**, unzip it and drag **RadioMaster.app** to Applications. The app
-isn't signed by Apple, so the first time right-click it → **Open** → **Open**. Allow the microphone when asked
-if you use the mic for talk-overs.
+isn't signed by Apple yet, so the first time macOS says it can't check it: open **System Settings → Privacy &
+Security**, scroll down and click **Open Anyway** (on macOS 14 or older, right-click the app → **Open** → **Open**
+also works). Allow the microphone when asked if you use the mic for talk-overs.
 
 ### Linux (x64)
 Download **`RadioMaster-<version>-linux-x64.tar.gz`**, then:

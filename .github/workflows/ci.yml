@@ -100,6 +100,13 @@ jobs:
       - name: Clippy (warnings are errors)
         run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      # the same universal (Apple Silicon + Intel) app the release builds, ad-hoc signed
+      - name: Package RadioMaster.app
+        run: tools/package_macos.sh "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" RadioMaster-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RadioMaster-macos
+          path: RadioMaster-macos.zip
 
   build-windows:
     runs-on: windows-latest
