@@ -2,7 +2,7 @@
 //! The local session (playlists, settings, encoders) is put aside while connected, optionally saved
 //! as a station profile first, and comes back on disconnect.
 use super::*;
-use crate::link::{Link, Listener, LoginError, Session};
+use crate::link::{Hearing, Link, Listener, LoginError, Session};
 use crate::playout::sync;
 
 /// The last server used (server_link.json; the password is never kept).
@@ -542,6 +542,7 @@ impl App {
         let st = c.link.state.lock().clone();
         let s = c.link.session.clone();
         let profile = c.profile.clone();
+        let hearing = c.listen.as_ref().map(|l| l.state.lock().clone());
         let mut open = true;
         let mut off = false;
         Self::window_for(ctx, "Server connection", [460.0, 320.0]).collapsible(false).open(&mut open).show(ctx, |ui| {
@@ -581,9 +582,34 @@ impl App {
                     }
                     ui.end_row();
                     ui.label(tr("Station audio"));
-                    ui.checkbox(&mut core.cfg.hear_server, tr("Hear the station here"))
-                        .on_hover_text(tr("Play the server's on-air mix on this computer's outputs (Settings → Audio). Turn it off when the server's speakers are in the same room."));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut core.cfg.hear_server, tr("Hear the station here"))
+                            .on_hover_text(tr("Play the server's on-air mix on this computer's outputs (Settings → Audio). Turn it off when the server's speakers are in the same room."));
+                        match &hearing {
+                            Some(Hearing::Playing) => {
+                                ui.colored_label(GREEN, tr("Playing"));
+                            }
+                            Some(Hearing::Connecting) => {
+                                ui.colored_label(GRAY, tr("Connecting…"));
+                            }
+                            Some(Hearing::Reconnecting) => {
+                                ui.colored_label(GRAY, tr("Reconnecting…"));
+                            }
+                            Some(Hearing::SigningIn) => {
+                                ui.colored_label(GRAY, tr("Signing in again…"));
+                            }
+                            Some(Hearing::Trouble(_)) => {
+                                ui.colored_label(AMBER, tr("Not playing"));
+                            }
+                            None => {}
+                        }
+                    });
                     ui.end_row();
+                    if let Some(Hearing::Trouble(why)) = &hearing {
+                        ui.label("");
+                        ui.add(egui::Label::new(RichText::new(why).small().color(AMBER)).wrap());
+                        ui.end_row();
+                    }
                     ui.label(tr("Local session"));
                     ui.label(match &profile {
                         Some(p) => format!("saved as profile \"{p}\", restored on disconnect"),

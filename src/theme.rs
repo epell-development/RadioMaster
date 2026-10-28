@@ -44,13 +44,19 @@ pub fn fit_zoom(ctx: &egui::Context, mode: ScaleMode) {
         scale = (scale * ctx.zoom_factor() / last).clamp(0.5, 3.0);
         ctx.data_mut(|d| d.insert_temp(scale_id(), scale));
     }
+    // The monitor size is given in points, measured before this pass began, so at the zoom the
+    // previous pass had. A new zoom only takes effect when a pass begins, so converting it back with
+    // this pass's zoom is wrong right after every change, and each change then caused the next one:
+    // the window kept growing and shrinking. Convert it with the zoom it was measured at instead.
+    let zoom_now = ctx.zoom_factor();
+    let measured_at = ctx.data(|d| d.get_temp::<f32>(seen_zoom_id())).unwrap_or(zoom_now);
+    ctx.data_mut(|d| d.insert_temp(seen_zoom_id(), zoom_now));
     let (native, monitor) = ctx.input(|i| (i.viewport().native_pixels_per_point.unwrap_or(1.0), i.viewport().monitor_size));
     let native = if native.is_finite() && native > 0.0 { native } else { 1.0 };
     let ppp = match (mode, monitor) {
         (ScaleMode::Follow, _) => native * scale,
         (ScaleMode::Fixed, _) => scale,
-        // (the monitor size is given in points at the current zoom)
-        (ScaleMode::Fit, Some(m)) if m.y > 100.0 => (m.y * ctx.pixels_per_point()).round() / FIT_HEIGHT * scale,
+        (ScaleMode::Fit, Some(m)) if m.y > 100.0 => (m.y * native * measured_at).round() / FIT_HEIGHT * scale,
         (ScaleMode::Fit, _) => native * scale,
     };
     let zoom = (ppp / native).clamp(0.4, 3.0);
@@ -62,6 +68,11 @@ pub fn fit_zoom(ctx: &egui::Context, mode: ScaleMode) {
 
 fn last_zoom_id() -> egui::Id {
     egui::Id::new("radiomaster_ui_zoom")
+}
+
+/// The zoom the previous pass ran at (the one the screen size was measured with).
+fn seen_zoom_id() -> egui::Id {
+    egui::Id::new("radiomaster_ui_zoom_seen")
 }
 
 pub fn apply(ctx: &egui::Context, dark: bool, scale: f32) {
@@ -176,5 +187,45 @@ pub fn install_fallback_fonts(ctx: &egui::Context) {
     }
     if added > 0 {
         ctx.set_fonts(defs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One frame the way eframe runs it: the screen is measured in points at the zoom in effect
+    /// before the frame, and a zoom set during a pass only takes effect when the next pass begins.
+    fn frame(ctx: &egui::Context, native: f32, screen_px: egui::Vec2, discard: bool) -> f32 {
+        let mut input = egui::RawInput::default();
+        let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        info.native_pixels_per_point = Some(native);
+        info.monitor_size = Some(screen_px / (native * ctx.zoom_factor()));
+        let _ = ctx.run(input, |ctx| {
+            fit_zoom(ctx, ScaleMode::Fit);
+            if discard {
+                ctx.request_discard("layout changed");
+            }
+        });
+        ctx.zoom_factor()
+    }
+
+    fn settles(native: f32, screen_px: egui::Vec2, discard: bool) {
+        let ctx = egui::Context::default();
+        let zooms: Vec<f32> = (0..12).map(|_| frame(&ctx, native, screen_px, discard)).collect();
+        let want = screen_px.y / FIT_HEIGHT / native;
+        for z in &zooms[3..] {
+            assert!((z - want).abs() < 0.01, "{native}× on {screen_px:?}: zoom went {zooms:?}, should stay at {want}");
+        }
+    }
+
+    #[test]
+    fn fit_each_screen_settles_instead_of_resizing_over_and_over() {
+        for discard in [false, true] {
+            settles(1.0, egui::vec2(1920.0, 1080.0), discard);
+            settles(1.25, egui::vec2(2560.0, 1440.0), discard);
+            settles(1.5, egui::vec2(3840.0, 2160.0), discard);
+            settles(1.0, egui::vec2(1366.0, 768.0), discard);
+        }
     }
 }

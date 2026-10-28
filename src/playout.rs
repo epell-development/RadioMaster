@@ -2695,6 +2695,15 @@ impl Playout {
         }
     }
 
+    /// Jump `delta` seconds forward (back when negative) in the track on air.
+    pub fn seek_by(&mut self, delta: f32) {
+        // (the engine's own position is fresher than `status` when keys repeat; a mirror only has `status`)
+        let st = if self.link.is_some() { self.status.clone() } else { self.engine.status() };
+        if st.has_track {
+            self.seek((st.pos + delta).clamp(0.0, st.total.max(0.0)));
+        }
+    }
+
     pub fn render_playlist(&self, out: PathBuf) {
         let paths: Vec<PathBuf> = self.playlist.iter().filter(|e| e.is_file()).map(|e| e.track.path.clone()).collect();
         let notify = self.notify.clone();

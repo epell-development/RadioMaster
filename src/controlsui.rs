@@ -158,6 +158,9 @@ impl App {
                 let v = (core.cfg.volume + d).clamp(0.0, 1.0);
                 core.set_volume(v);
             }
+            "seek_back" if p.playback => core.seek_by(-30.0),
+            "seek_forward" if p.playback => core.seek_by(30.0),
+            "seek_to" if p.playback => self.open_seek_to(ctx),
             "mic" if p.playback => self.toggle_mic(core),
             "stop_jingles" if p.playback && p.jingles => core.stop_carts(),
             // ---- playlist editing
