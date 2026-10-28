@@ -349,10 +349,17 @@ const UPDATE_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 /// Start listening. Returns the addresses actually bound (port 0 picks a free one).
 pub fn spawn(core: Arc<Mutex<Playout>>, mut cfg: ServerCfg, host: Host) -> Result<Listening, String> {
-    let mut accounts = Accounts::load();
-    if cfg.move_user(&mut accounts) {
-        accounts.save()?;
-    }
+    // (read, add the setup user and write back in one go: servers started side by side, as the tests
+    // do, must not write over each other's accounts)
+    static ACCOUNTS_FILE: Mutex<()> = Mutex::new(());
+    let accounts = {
+        let _one_at_a_time = ACCOUNTS_FILE.lock();
+        let mut accounts = Accounts::load();
+        if cfg.move_user(&mut accounts) {
+            accounts.save()?;
+        }
+        accounts
+    };
     let tls = if cfg.https { Some(crate::tls::server_tls(&cfg.cert_file, &cfg.key_file, &data_dir(), cfg.acme)?) } else { None };
     let (server, addr) = listen(&cfg.bind, cfg.port, tls.as_ref())?;
     let portal = if cfg.portal {
