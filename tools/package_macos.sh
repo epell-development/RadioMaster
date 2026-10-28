@@ -68,6 +68,7 @@ if [ -n "${APPLE_CERTIFICATE_P12:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; 
   security set-keychain-settings -lut 3600 "$kc"
   security unlock-keychain -p "$kcpass" "$kc"
   p12="$(mktemp)"
+  trap 'rm -f "$p12"' EXIT # also when the decode or import fails
   base64 --decode <<<"$APPLE_CERTIFICATE_P12" >"$p12"
   security import "$p12" -k "$kc" -P "${APPLE_CERTIFICATE_PASSWORD:-}" -T /usr/bin/codesign
   rm -f "$p12"
