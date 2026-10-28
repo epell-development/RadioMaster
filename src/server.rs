@@ -1582,10 +1582,11 @@ mod tests {
     /// settings, and forwarded actions.
     #[test]
     fn app_and_server_stay_in_step() {
+        // its own account name: the tests share one accounts file, and this one changes the password
         crate::config::set_data_dir(std::env::temp_dir().join(format!("rm-server-test-{}", std::process::id())));
         let station = station_with(vec![row("one"), row("two")]);
         let cfg = ServerCfg {
-            user: "studio".into(),
+            user: "night desk".into(),
             password_hash: crate::auth::hash("correct horse battery").unwrap(),
             bind: "127.0.0.1".into(),
             port: 0,
@@ -1596,8 +1597,8 @@ mod tests {
         let addr = spawn(station.clone(), cfg, host).unwrap().addr;
         let address = format!("127.0.0.1:{}", addr.port());
 
-        assert!(crate::link::login(&address, "studio", "wrong password!!", "").is_err());
-        let session = crate::link::login(&address, "studio", "correct horse battery", "").unwrap();
+        assert!(crate::link::login(&address, "night desk", "wrong password!!", "").is_err());
+        let session = crate::link::login(&address, "night desk", "correct horse battery", "").unwrap();
         assert_eq!(session.name, "RadioMaster Server");
 
         let local = Playout::new(Engine::new_detached(), crate::config::Config::default());
@@ -1628,7 +1629,7 @@ mod tests {
         // the server's own settings window: rename, wrong then right password change
         let s = link.current();
         let mut info = crate::link::Link::server_info(&s).unwrap();
-        assert_eq!(info.user, "studio");
+        assert_eq!(info.user, "night desk");
         assert!(info.forced_silent);
         info.name = "Night Desk".into();
         let mut u = ServerUpdate { name: info.name, autoplay: false, audio: true, outputs: vec![], password: None, ..Default::default() };
@@ -1637,7 +1638,7 @@ mod tests {
         assert!(crate::link::Link::server_update(&s, &u).is_err());
         u.password = Some(("correct horse battery".into(), "a brand new password".into()));
         assert!(!crate::link::Link::server_update(&s, &u).unwrap().autoplay);
-        assert!(crate::link::login(&address, "studio", "a brand new password", "").is_ok());
+        assert!(crate::link::login(&address, "night desk", "a brand new password", "").is_ok());
         link.stop();
     }
 
