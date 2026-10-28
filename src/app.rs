@@ -278,6 +278,8 @@ pub struct App {
     tag_edit: Option<Track>,
     show_about: bool,
     seek_drag: Option<f32>,
+    /// the time typed into "Go to time" (m:ss)
+    seek_to: String,
     mic_stream: Option<rodio::cpal::Stream>,
     mic_on: bool,
     /// playback was paused by the mic (Pause mode) and resumes when it goes off
@@ -442,6 +444,39 @@ fn fmt(secs: f32) -> String {
     } else {
         format!("{:02}:{:02}", s / 60, s % 60)
     }
+}
+
+fn seek_to_id() -> egui::Id {
+    egui::Id::new("seek_to_popup")
+}
+
+/// A hover text with the shortcut that does the same, if it has one.
+fn with_key(text: &str, key: String) -> String {
+    if key.is_empty() {
+        text.to_string()
+    } else {
+        format!("{text} ({key})")
+    }
+}
+
+/// A time typed by the user: "90" (seconds), "1:30", "1:02:03" or "1:30.5". None if it isn't one.
+fn parse_time(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() || s.split(':').count() > 3 {
+        return None;
+    }
+    let mut secs = 0.0f32;
+    let parts: Vec<&str> = s.split(':').map(str::trim).collect();
+    for (i, p) in parts.iter().enumerate() {
+        let last = i == parts.len() - 1;
+        let v: f32 = if last { p.parse().ok()? } else { p.parse::<u32>().ok()? as f32 };
+        // minutes and seconds after the first part stay under 60
+        if !v.is_finite() || v < 0.0 || (i > 0 && v >= 60.0) {
+            return None;
+        }
+        secs = secs * 60.0 + v;
+    }
+    Some(secs)
 }
 
 fn name_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, opts: &[String]) {
@@ -647,6 +682,7 @@ impl App {
             srv: Default::default(),
             files: Default::default(),
             seek_drag: None,
+            seek_to: String::new(),
             mic_stream: None,
             mic_on: false,
             mic_paused: false,
@@ -1404,6 +1440,53 @@ impl App {
     }
 
     // --------------------------------------------------------------- player
+    /// "Go to a time" for the track on air: a small box to type the time into.
+    fn seek_to_button(&mut self, ui: &mut egui::Ui, core: &mut Playout, enabled: bool, total: f32, size: egui::Vec2) {
+        let id = seek_to_id();
+        let r = ui
+            .add_enabled(enabled, egui::Button::new("⏱").min_size(size))
+            .on_hover_text(with_key(tr("Go to a time in the track"), self.controls.key_label("seek_to")));
+        if r.clicked() {
+            self.open_seek_to(ui.ctx());
+        }
+        let focus = ui.ctx().data_mut(|d| d.remove_temp::<bool>(id.with("focus"))).unwrap_or(false);
+        egui::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            ui.set_min_width(220.0);
+            ui.label(tr("Go to (minutes:seconds)"));
+            let mut go = false;
+            ui.horizontal(|ui| {
+                let t = ui.add(egui::TextEdit::singleline(&mut self.seek_to).hint_text("1:30").desired_width(90.0));
+                if focus {
+                    t.request_focus();
+                }
+                go = t.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                go |= ui.button(tr("Go")).clicked();
+            });
+            let to = parse_time(&self.seek_to);
+            match to {
+                Some(s) if s > total => {
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 20), format!("{} {}", tr("The track is only"), fmt(total)));
+                }
+                None if !self.seek_to.trim().is_empty() => {
+                    ui.colored_label(egui::Color32::from_rgb(200, 120, 20), tr("Type a time like 1:30 or 90"));
+                }
+                _ => {}
+            }
+            if let Some(s) = to.filter(|s| go && *s <= total) {
+                core.seek(s);
+                ui.memory_mut(|m| m.close_popup());
+            }
+        });
+    }
+
+    /// Open "Go to a time" (from its button or its shortcut), ready to type into.
+    pub(super) fn open_seek_to(&mut self, ctx: &egui::Context) {
+        let id = seek_to_id();
+        self.seek_to.clear();
+        ctx.memory_mut(|m| m.open_popup(id));
+        ctx.data_mut(|d| d.insert_temp(id.with("focus"), true));
+    }
+
     fn player(&mut self, ctx: &egui::Context, core: &mut Playout) {
         egui::TopBottomPanel::top("player").show(ctx, |ui| {
             ui.add_space(4.0);
@@ -1577,18 +1660,43 @@ impl App {
                         };
                         ui.add(egui::Label::new(RichText::new(t).size(19.0).strong()).truncate());
                         ui.add(egui::Label::new(RichText::new(artist).color(GRAY)).truncate());
-                        let mut p = self.seek_drag.unwrap_or(st.pos);
-                        ui.spacing_mut().slider_width = (mid_w - 16.0).max(100.0);
-                        let r = ui.add(egui::Slider::new(&mut p, 0.0..=st.total.max(1.0)).show_value(false));
-                        if r.dragged() {
-                            self.seek_drag = Some(p);
-                        }
-                        if r.drag_stopped() {
-                            core.seek(p);
-                            self.seek_drag = None;
-                        } else if r.changed() && !r.dragged() {
-                            core.seek(p);
-                        }
+                        ui.horizontal(|ui| {
+                            let may_seek = self.perm.playback && st.has_track;
+                            let jump = egui::vec2(46.0, 20.0);
+                            // (on a narrow window only the bar fits; the keys still jump)
+                            let buttons = mid_w - 16.0 - 3.0 * (jump.x + gap) >= 100.0;
+                            ui.spacing_mut().slider_width = if buttons { mid_w - 16.0 - 3.0 * (jump.x + gap) } else { (mid_w - 16.0).max(100.0) };
+                            if buttons
+                                && ui
+                                    .add_enabled(may_seek, egui::Button::new("−30s").min_size(jump))
+                                    .on_hover_text(with_key(tr("Back 30 seconds"), self.controls.key_label("seek_back")))
+                                    .clicked()
+                            {
+                                core.seek_by(-30.0);
+                            }
+                            let mut p = self.seek_drag.unwrap_or(st.pos);
+                            let r = ui.add_enabled(may_seek, egui::Slider::new(&mut p, 0.0..=st.total.max(1.0)).show_value(false));
+                            if r.dragged() {
+                                self.seek_drag = Some(p);
+                            }
+                            if r.drag_stopped() {
+                                core.seek(p);
+                                self.seek_drag = None;
+                            } else if r.changed() && !r.dragged() {
+                                core.seek(p);
+                            }
+                            if buttons
+                                && ui
+                                    .add_enabled(may_seek, egui::Button::new("+30s").min_size(jump))
+                                    .on_hover_text(with_key(tr("Forward 30 seconds"), self.controls.key_label("seek_forward")))
+                                    .clicked()
+                            {
+                                core.seek_by(30.0);
+                            }
+                            if buttons {
+                                self.seek_to_button(ui, core, may_seek, st.total, jump);
+                            }
+                        });
                     });
                 });
                 ui.separator();
@@ -3796,5 +3904,21 @@ impl eframe::App for App {
             self.notes.save();
         }
         crate::playout::flush_writes();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_time;
+
+    #[test]
+    fn typed_times() {
+        assert_eq!(parse_time("90"), Some(90.0));
+        assert_eq!(parse_time(" 1:30 "), Some(90.0));
+        assert_eq!(parse_time("1:02:03"), Some(3723.0));
+        assert_eq!(parse_time("0:30.5"), Some(30.5));
+        for bad in ["", "abc", "1:75", "1:-5", "1::2", "1:2:3:4", "-4", "1.5:00", "NaN"] {
+            assert_eq!(parse_time(bad), None, "{bad:?}");
+        }
     }
 }
