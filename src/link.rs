@@ -508,12 +508,13 @@ impl Listener {
                 .timeout_read(LISTEN_STALL)
                 .tls_config(crate::tls::client_config(&pin, Default::default()))
                 .build();
-            // the last trouble put in the log, so a server that stays away isn't reported every 2 s
-            let mut told = String::new();
-            let mut trouble = |e: String| {
-                if e != told {
+            // the trouble already put in the log since the sound last played, so a server that stays
+            // away (or keeps failing in two ways by turns) isn't reported every 2 s
+            let told = std::cell::RefCell::new(Vec::<String>::new());
+            let trouble = |e: String| {
+                if !told.borrow().contains(&e) {
                     say(format!("Can't hear the station here: {e}"));
-                    told = e.clone();
+                    told.borrow_mut().push(e.clone());
                 }
                 *shown.lock() = Hearing::Trouble(e);
             };
@@ -527,6 +528,8 @@ impl Listener {
                             if !playing {
                                 playing = true;
                                 *shown.lock() = Hearing::Playing;
+                                // it works again: trouble from now on is news
+                                told.borrow_mut().clear();
                             }
                             let _ = feed.try_send(s.to_vec());
                             !st.load(Ordering::Relaxed)
