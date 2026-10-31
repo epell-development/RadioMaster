@@ -345,9 +345,24 @@ impl App {
                 }
             });
         });
+        if r.trigger != Trigger::Songs {
+            ui.horizontal(|ui| {
+                ui.label(tr("When the time comes"));
+                ui.radio_value(&mut r.interrupt, false, tr("wait for the song on air to end"));
+                ui.radio_value(&mut r.interrupt, true, tr("interrupt the song on air"));
+            });
+            if r.interrupt {
+                ui.horizontal(|ui| {
+                    ui.label(tr("Warn the presenter"));
+                    ui.add(egui::DragValue::new(&mut r.warn_secs).range(0..=crate::config::MAX_WARN_SECS));
+                    ui.label(tr("seconds before (0 = no warning)"));
+                });
+            }
+        }
         ui.label(
             RichText::new(match r.trigger {
                 Trigger::Songs => tr("Added straight after the song that starts."),
+                _ if r.interrupt => tr("The song on air fades out and the break starts on time. A countdown lets the presenter play it now, snooze it or skip it."),
                 _ => tr("Queued after the song on air when the time comes (the song isn't cut)."),
             })
             .small()

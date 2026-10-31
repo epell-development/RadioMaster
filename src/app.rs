@@ -4,7 +4,7 @@ use crate::config::{data_dir, CartPad, ServerKind};
 use crate::i18n::tr;
 use crate::items::PlEntry;
 use crate::library::Track;
-use crate::playout::{M3uRow, PlayState, Playout};
+use crate::playout::{BreakAct, M3uRow, PlayState, Playout};
 use crate::scheduler::{ActionKind, Event};
 use crate::stream::EncState;
 use crate::workzones::{Tab, WorkzoneSet};
@@ -366,6 +366,8 @@ pub struct App {
     new_user_perms: crate::auth::Perms,
     user_pw: HashMap<String, String>,
     user_delete: Option<String>,
+    /// minutes the ad-break countdown's Snooze button puts the break back by
+    break_snooze: u32,
     tool_open: std::collections::BTreeSet<ToolWin>,
     fade_edit: Option<tools::FadeEdit>,
     preview: Option<crate::audio::PreviewPlayer>,
@@ -764,6 +766,7 @@ impl App {
             new_user_perms: crate::auth::Perms::presenter(),
             user_pw: HashMap::new(),
             user_delete: None,
+            break_snooze: 5,
         }
     }
 
@@ -1485,6 +1488,67 @@ impl App {
         self.seek_to.clear();
         ctx.memory_mut(|m| m.open_popup(id));
         ctx.data_mut(|d| d.insert_temp(id.with("focus"), true));
+    }
+
+    /// A countdown for each advert / jingle break about to interrupt the track on air, with Play
+    /// now, Snooze and Skip (see `AdRule::interrupt`).
+    fn break_countdown(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        if core.breaks.is_empty() {
+            return;
+        }
+        let now = core.now().timestamp();
+        let screen = ctx.screen_rect();
+        let mut act = None;
+        for (i, b) in core.breaks.iter().enumerate() {
+            let left = (b.at - now).max(0);
+            let title = if b.adverts { tr("Advert break") } else { tr("Jingles") };
+            egui::Window::new(format!("{title} — {}", b.name))
+                .id(egui::Id::new(("ad_break", b.rule)))
+                .collapsible(false)
+                .resizable(false)
+                .default_pos(egui::pos2(screen.center().x - 160.0, 90.0 + i as f32 * 40.0))
+                .constrain(true)
+                .show(ctx, |ui| {
+                    ui.set_max_width(320.0);
+                    if left > 60 {
+                        ui.label(RichText::new(format!("{} {}:{:02}", tr("Starts in"), left / 60, left % 60)).size(22.0).strong());
+                    } else {
+                        ui.label(RichText::new(format!("{} {left} s", tr("Starts in"))).size(22.0).strong().color(if left <= 10 {
+                            RED
+                        } else {
+                            AMBER
+                        }));
+                    }
+                    ui.label(RichText::new(tr("The song on air will fade out.")).small().color(GRAY));
+                    ui.add_space(4.0);
+                    ui.label(tr("Up next:"));
+                    egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                        for t in &b.titles {
+                            ui.label(format!("• {t}"));
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.add_enabled_ui(self.perm.playback, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(tr("▶ Play now")).clicked() {
+                                act = Some((b.rule, BreakAct::PlayNow));
+                            }
+                            if ui.button(tr("Snooze")).clicked() {
+                                act = Some((b.rule, BreakAct::Snooze { mins: self.break_snooze }));
+                            }
+                            ui.add(egui::DragValue::new(&mut self.break_snooze).range(1..=120));
+                            ui.label(tr("min"));
+                            if ui.button(tr("Skip")).on_hover_text(tr("Leave this break out this time")).clicked() {
+                                act = Some((b.rule, BreakAct::Skip));
+                            }
+                        });
+                    });
+                });
+        }
+        if let Some((rule, a)) = act {
+            core.break_action(rule, a);
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
     }
 
     fn player(&mut self, ctx: &egui::Context, core: &mut Playout) {
@@ -3780,6 +3844,7 @@ impl eframe::App for App {
         self.menu(ctx, &mut core);
         self.status_bar(ctx, &core);
         self.player(ctx, &mut core);
+        self.break_countdown(ctx, &mut core);
         // automatic hour lines: kept where each new hour starts (not while something is being dragged)
         if self.hour_check.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) && !ctx.input(|i| i.pointer.any_down()) {
             self.hour_check = Some(std::time::Instant::now());
