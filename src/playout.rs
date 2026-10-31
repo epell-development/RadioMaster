@@ -32,6 +32,35 @@ pub enum PlayState {
     Paused,
 }
 
+/// An advert / jingle break that cuts into the track on air, counting down to its start (see
+/// `AdRule::interrupt`). The presenter can play it now, snooze it or skip it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct AdBreak {
+    /// the rule's id
+    pub rule: u64,
+    pub name: String,
+    pub adverts: bool,
+    /// when it starts (unix seconds)
+    pub at: i64,
+    /// what will play, picked when the countdown starts
+    pub files: Vec<PathBuf>,
+    pub titles: Vec<String>,
+}
+
+/// What the presenter chose in the countdown popup of an `AdBreak`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BreakAct {
+    PlayNow,
+    /// start it this many minutes from now instead
+    Snooze {
+        mins: u32,
+    },
+    /// leave it out this time
+    Skip,
+}
+
 pub struct HistoryItem {
     pub time: String,
     pub text: String,
@@ -366,6 +395,8 @@ pub struct Playout {
     /// minute each timed rule last went off (so it fires once), and when
     rule_fired: HashMap<u64, String>,
     rule_last: HashMap<u64, DateTime<Local>>,
+    /// interrupting breaks counting down (on the server when this is a mirror)
+    pub breaks: Vec<AdBreak>,
     auto_check: Instant,
     /// cue points per file (manual from the track editor, or computed by smart fading)
     pub cues: HashMap<PathBuf, Cues>,
@@ -519,6 +550,7 @@ impl Playout {
             dsp_shared,
             rule_fired: HashMap::new(),
             rule_last: HashMap::new(),
+            breaks: vec![],
             auto_check: Instant::now(),
             cues,
             cues_dirty: false,
@@ -660,19 +692,7 @@ impl Playout {
             self.run_event(&e);
         }
 
-        // timed advert / jingle rules (every N minutes, set times)
-        let timed: Vec<crate::config::AdRule> = self
-            .cfg
-            .ad_rules
-            .iter()
-            .filter(|r| self.rule_fired.get(&r.id) != Some(&key) && r.due_now(&now, self.rule_last.get(&r.id).copied()))
-            .cloned()
-            .collect();
-        for r in timed {
-            self.rule_fired.insert(r.id, key.clone());
-            self.rule_last.insert(r.id, now);
-            self.fire_rule(r.id, None);
-        }
+        self.timed_rules(now);
 
         // DSP settings → engine
         if self.dsp_shared != self.cfg.dsp {
@@ -1882,19 +1902,128 @@ impl Playout {
                 .any(|r| (!r.folder.trim().is_empty() && path.starts_with(r.folder.trim())) || r.files.iter().any(|f| Path::new(f) == path))
     }
 
+    /// Timed advert / jingle rules (every N minutes, set times). Rules that queue go after the
+    /// track on air; rules that cut in start a countdown `warn_secs` before their minute and
+    /// interrupt the track on air when it reaches zero.
+    fn timed_rules(&mut self, now: DateTime<Local>) {
+        use chrono::Timelike;
+        let key_of = |t: &DateTime<Local>| t.format("%Y%m%d%H%M").to_string();
+        let key = key_of(&now);
+        let queue: Vec<u64> = self
+            .cfg
+            .ad_rules
+            .iter()
+            .filter(|r| !r.cuts_in() && self.rule_fired.get(&r.id) != Some(&key) && r.due_now(&now, self.rule_last.get(&r.id).copied()))
+            .map(|r| r.id)
+            .collect();
+        for id in queue {
+            self.rule_fired.insert(id, key.clone());
+            self.rule_last.insert(id, now);
+            self.fire_rule(id, None);
+        }
+
+        // cutting in: look ahead over the countdown for the next minute the rule is due
+        let minute = now.with_second(0).and_then(|t| t.with_nanosecond(0)).unwrap_or(now);
+        let mut start = vec![];
+        for (k, r) in self.cfg.ad_rules.iter().enumerate() {
+            if !r.cuts_in() || self.breaks.iter().any(|b| b.rule == r.id) {
+                continue;
+            }
+            let until = now + CDur::seconds(r.warn_secs.min(crate::config::MAX_WARN_SECS) as i64);
+            let last = self.rule_last.get(&r.id).copied();
+            let mut t = minute;
+            while t <= until {
+                if self.rule_fired.get(&r.id) != Some(&key_of(&t)) && r.due_now(&t, last) {
+                    start.push((k, t));
+                    break;
+                }
+                t += CDur::minutes(1);
+            }
+        }
+        for (k, t) in start {
+            let (id, name, adverts) = {
+                let r = &self.cfg.ad_rules[k];
+                (r.id, r.name.clone(), r.adverts)
+            };
+            self.rule_fired.insert(id, key_of(&t));
+            self.rule_last.insert(id, t);
+            let files = self.pick_rule(k);
+            if files.is_empty() {
+                continue;
+            }
+            let titles = files.iter().map(|p| self.entry_for(p).track.label()).collect();
+            if t > now {
+                self.say(format!("{name}: cuts in at {}", t.format("%H:%M")));
+            }
+            self.breaks.push(AdBreak { rule: id, name, adverts, at: t.timestamp(), files, titles });
+        }
+
+        // countdowns that reached zero
+        let ts = now.timestamp();
+        if self.breaks.iter().any(|b| b.at <= ts) {
+            let (due, wait): (Vec<AdBreak>, Vec<AdBreak>) = std::mem::take(&mut self.breaks).into_iter().partition(|b| b.at <= ts);
+            self.breaks = wait;
+            for b in due {
+                self.start_break(b);
+            }
+        }
+    }
+
+    /// Put a break's files after the track on air and cut to them (when something is playing
+    /// that isn't itself an advert or jingle).
+    fn start_break(&mut self, b: AdBreak) {
+        let Some(k) = self.cfg.ad_rules.iter().position(|r| r.id == b.rule) else { return };
+        let on_air_is_break = self.on_air.as_ref().is_some_and(|t| self.is_rule_file(&t.path));
+        let cut = self.state == PlayState::Playing && self.wait_until.is_none() && !on_air_is_break;
+        if self.queue_rule(k, b.files, None) > 0 && cut {
+            self.next();
+        }
+    }
+
+    /// The presenter's answer to a break's countdown.
+    pub fn break_action(&mut self, rule: u64, act: BreakAct) {
+        if self.forward(|_| sync::Cmd::Break { rule, act }) {
+            return;
+        }
+        let Some(i) = self.breaks.iter().position(|b| b.rule == rule) else { return };
+        match act {
+            BreakAct::PlayNow => {
+                let b = self.breaks.remove(i);
+                self.start_break(b);
+            }
+            BreakAct::Snooze { mins } => {
+                let mins = mins.clamp(1, 120);
+                let b = &mut self.breaks[i];
+                b.at = Local::now().timestamp() + mins as i64 * 60;
+                let name = b.name.clone();
+                self.say(format!("{name}: snoozed for {mins} min"));
+            }
+            BreakAct::Skip => {
+                let b = self.breaks.remove(i);
+                self.say(format!("{}: skipped this time", b.name));
+            }
+        }
+    }
+
     /// Run rule `id` now: pick its files and put them after `after` (or after the on-air row).
     /// Returns how many were queued.
     pub fn fire_rule(&mut self, id: u64, after: Option<usize>) -> usize {
         if self.forward(|tab| sync::Cmd::FireRule { tab, id, after }) {
             return 0;
         }
-        use crate::config::RotPick;
         let Some(k) = self.cfg.ad_rules.iter().position(|r| r.id == id) else { return 0 };
+        let picked = self.pick_rule(k);
+        self.queue_rule(k, picked, after)
+    }
+
+    /// The files rule `k` plays this time (empty, with a message, when it has none).
+    fn pick_rule(&mut self, k: usize) -> Vec<PathBuf> {
+        use crate::config::RotPick;
         let r = self.cfg.ad_rules[k].clone();
         let pool = self.rule_pool(&r);
         if pool.is_empty() {
             self.say(format!("{}: nothing to play (check its folder / files)", r.name));
-            return 0;
+            return vec![];
         }
         let want = (r.count.max(1) as usize).min(pool.len());
         let picked: Vec<PathBuf> = match r.pick {
@@ -1907,11 +2036,21 @@ impl Playout {
                 v
             }
         };
+        picked
+    }
+
+    /// Put rule `k`'s picked files after `after` (or after the on-air row). Returns how many.
+    fn queue_rule(&mut self, k: usize, picked: Vec<PathBuf>, after: Option<usize>) -> usize {
+        if picked.is_empty() {
+            return 0;
+        }
+        let r = &self.cfg.ad_rules[k];
+        let (name, adverts) = (r.name.clone(), r.adverts);
         let n = picked.len();
         let rows: Vec<PlEntry> = picked.iter().map(|p| self.entry_for(p)).collect();
         let at = after.or(self.current).map(|c| c + 1).unwrap_or(0);
         self.insert_rows(at, rows);
-        self.say(format!("{}: {n} {} queued", r.name, if r.adverts { "advert(s)" } else { "jingle(s)" }));
+        self.say(format!("{name}: {n} {} queued", if adverts { "advert(s)" } else { "jingle(s)" }));
         n
     }
 
@@ -2935,6 +3074,64 @@ mod tests {
         p.apply_rotations(5, &song);
         let names: Vec<String> = p.playlist.iter().map(|e| e.track.path.file_name().unwrap().to_string_lossy().to_string()).collect();
         assert_eq!(&names[6..8], ["ad2.wav", "ad0.wav"]);
+    }
+
+    #[test]
+    fn interrupting_breaks_count_down_and_cut_in() {
+        use crate::config::{AdRule, Trigger};
+        let mut p = playout();
+        let dir = std::env::temp_dir().join("rm_test_breaks");
+        let _ = std::fs::create_dir_all(&dir);
+        let ad = dir.join("break.wav");
+        crate::engine::write_wav(&ad, &vec![0.0; 4410 * 2], 2, 44100).unwrap();
+        let rule = |id: u64, h: u32, m: u32, interrupt: bool| AdRule {
+            id,
+            name: format!("Break {id}"),
+            enabled: true,
+            adverts: true,
+            trigger: Trigger::Times,
+            times: vec![(h, m)],
+            files: vec![ad.to_string_lossy().to_string()],
+            interrupt,
+            warn_secs: 30,
+            ..Default::default()
+        };
+        p.cfg.ad_rules = vec![rule(1, 14, 30, true), rule(2, 15, 0, true), rule(3, 16, 0, false)];
+        for i in 0..3 {
+            p.playlist.push(file(&format!("song{i}"), 200.0));
+        }
+        p.current = Some(0);
+        let at = |h, m, s| Local.with_ymd_and_hms(2026, 10, 20, h, m, s).unwrap();
+
+        p.timed_rules(at(14, 29, 20));
+        assert!(p.breaks.is_empty(), "too early for the countdown");
+        p.timed_rules(at(14, 29, 31));
+        assert_eq!(p.breaks.len(), 1, "the countdown starts 30 s before");
+        assert_eq!((p.breaks[0].rule, p.breaks[0].at), (1, at(14, 30, 0).timestamp()));
+        assert_eq!(p.breaks[0].titles.len(), 1);
+        p.timed_rules(at(14, 29, 45));
+        assert_eq!(p.breaks.len(), 1, "one countdown per break");
+        assert_eq!(p.playlist.len(), 3, "nothing queued before zero");
+        p.timed_rules(at(14, 30, 0));
+        assert!(p.breaks.is_empty());
+        assert_eq!(p.playlist.len(), 4);
+        assert_eq!(p.playlist[1].track.path, ad, "the break goes straight after the track on air");
+        p.timed_rules(at(14, 30, 40));
+        assert!(p.breaks.is_empty() && p.playlist.len() == 4, "once per time");
+
+        // skipped: nothing plays at 15:00
+        p.timed_rules(at(14, 59, 40));
+        assert_eq!(p.breaks.len(), 1);
+        p.break_action(2, BreakAct::Skip);
+        assert!(p.breaks.is_empty());
+        p.timed_rules(at(15, 0, 0));
+        assert!(p.breaks.is_empty() && p.playlist.len() == 4);
+
+        // a rule that waits for the song on air gets no countdown
+        p.timed_rules(at(15, 59, 45));
+        assert!(p.breaks.is_empty());
+        p.timed_rules(at(16, 0, 0));
+        assert_eq!(p.playlist.len(), 5);
     }
 
     #[test]
