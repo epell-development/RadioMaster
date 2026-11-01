@@ -449,6 +449,7 @@ impl App {
         }
         core.stop();
         core.stop_carts();
+        core.stop_recording();
         self.mic_stream = None;
         self.mic_on = false;
         core.save_all();

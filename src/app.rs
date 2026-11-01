@@ -34,6 +34,7 @@ enum SettingsPage {
     Playback,
     Devices,
     Streaming,
+    Recording,
     Audio,
     Automation,
     Remote,
@@ -41,12 +42,13 @@ enum SettingsPage {
     Accounts,
 }
 impl SettingsPage {
-    const ALL: [SettingsPage; 10] = [
+    const ALL: [SettingsPage; 11] = [
         Self::General,
         Self::Library,
         Self::Playback,
         Self::Devices,
         Self::Streaming,
+        Self::Recording,
         Self::Audio,
         Self::Automation,
         Self::Remote,
@@ -60,6 +62,7 @@ impl SettingsPage {
             Self::Playback => "Playback",
             Self::Devices => "Audio devices",
             Self::Streaming => "Broadcast / encoders",
+            Self::Recording => "Show recording",
             Self::Audio => "Audio processing",
             Self::Automation => "Automation / metadata",
             Self::Remote => "Remote API",
@@ -86,6 +89,8 @@ enum Dlg {
     CatFolder(usize, PathBuf),
     SaveReport(PathBuf),
     AnnounceFolder(PathBuf),
+    /// folder for show recordings
+    RecFolder(PathBuf),
     ContainerFiles(Vec<PathBuf>),
     FfmpegPath(PathBuf),
     /// (outro?, file) for a speech row
@@ -203,6 +208,8 @@ mod panes;
 mod pltools;
 #[path = "plview.rs"]
 mod plview;
+#[path = "recui.rs"]
+mod recui;
 #[path = "reportui.rs"]
 mod reportui;
 #[path = "serveradmin.rs"]
@@ -891,6 +898,7 @@ impl App {
                     self.ins_from_pl = Some((p, rows, vec![true; n]));
                 }
                 Dlg::AnnounceFolder(p) => core.cfg.announce.folder = p.to_string_lossy().to_string(),
+                Dlg::RecFolder(p) => core.cfg.recording.folder = p.to_string_lossy().to_string(),
                 Dlg::ContainerFiles(v) => {
                     if let Some(d) = self.item_dlg.as_mut() {
                         d.items.extend(v);
@@ -1190,6 +1198,7 @@ impl App {
                         ToolWin::Scheduler,
                         ToolWin::AudioFx,
                         ToolWin::Streams,
+                        ToolWin::Recorder,
                         ToolWin::AzuraCast,
                         ToolWin::Reports,
                         ToolWin::History,
@@ -1477,7 +1486,10 @@ impl App {
     }
 
     // ----------------------------------------------------------- status bar
-    fn status_bar(&self, ctx: &egui::Context, core: &Playout) {
+    /// The message line, clock, streams and recorder at the bottom. Needs `&mut self` because
+    /// clicking ⏺ REC opens the Show recorder window (its only caller is `update`).
+    fn status_bar(&mut self, ctx: &egui::Context, core: &Playout) {
+        let mut open_recorder = false;
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(core.notify.lock().clone());
@@ -1486,6 +1498,24 @@ impl App {
                     ui.separator();
                     let live = core.handles.iter().flatten().filter(|h| h.status.lock().state == EncState::Live).count();
                     ui.label(RichText::new(format!("● {live} stream(s) live")).color(if live > 0 { GREEN } else { GRAY }));
+                    if let Some(rec) = core.recording() {
+                        ui.separator();
+                        let (text, color) = match rec.state.as_str() {
+                            "recording" => (tr("⏺ REC"), RED),
+                            "error" => (tr("⏺ REC: problem"), AMBER),
+                            "starting" => (tr("⏺ REC: starting"), GRAY),
+                            _ => (tr("⏺ REC: waiting"), GRAY),
+                        };
+                        let hover =
+                            if rec.error.is_empty() { tr("Show recording: click to see it").to_string() } else { rec.error.clone() };
+                        if ui
+                            .add(egui::Label::new(RichText::new(text).color(color)).sense(egui::Sense::click()))
+                            .on_hover_text(hover)
+                            .clicked()
+                        {
+                            open_recorder = true;
+                        }
+                    }
                     if let Some(np) = &core.azura.lock().np {
                         ui.separator();
                         ui.label(format!("👥 {} listeners ({} unique)", np.listeners.current, np.listeners.unique));
@@ -1493,6 +1523,9 @@ impl App {
                 });
             });
         });
+        if open_recorder {
+            self.open_tool(ToolWin::Recorder);
+        }
     }
 
     // --------------------------------------------------------------- player
@@ -2109,6 +2142,7 @@ impl App {
                                 self.smart_fade_settings(ui, core);
                             },
                             SettingsPage::Streaming=>self.tab_streaming(ui,core),
+                            SettingsPage::Recording=>self.tab_recording(ui,core),
                             SettingsPage::Audio=>self.tab_dsp(ui,core),
                             SettingsPage::Devices=>self.tab_devices(ui,core),
                             SettingsPage::Automation=>self.tab_settings(ui,core),
@@ -4056,6 +4090,7 @@ impl eframe::App for App {
         for i in 0..c.cfg.encoders.len() {
             c.stop_encoder(i);
         }
+        c.finish_recording();
         c.save_all();
         c.plugins.stop_services();
         drop(c);

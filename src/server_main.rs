@@ -20,6 +20,7 @@ mod live;
 mod mic;
 mod playout;
 mod plugins;
+mod recorder;
 mod remote;
 mod scheduler;
 mod selfupdate;
@@ -570,6 +571,7 @@ fn main() {
     for i in 0..c.cfg.encoders.len() {
         c.stop_encoder(i);
     }
+    c.finish_recording();
     c.save_all();
     c.plugins.stop_services();
     drop(c);
