@@ -869,15 +869,26 @@ pub struct NetSource {
     cur: Vec<f32>,
     pos: usize,
     prebuffer: usize,
+    /// how far `prebuffer` may grow after the sound runs dry (see `net_feed_adaptive`)
+    grow_to: usize,
     buffering: bool,
 }
 
 /// A network feed: push blocks (with `try_send`, so a slow consumer never holds the network up)
 /// into the sender; the `NetSource` plays them.
+#[allow(dead_code)] // RadioMaster-Server (the mic)
 pub fn net_feed(prebuffer: usize) -> (Sender<Vec<f32>>, NetSource) {
+    net_feed_adaptive(prebuffer, prebuffer)
+}
+
+/// Like `net_feed`, but each time the sound runs dry after playing, the prebuffer doubles (up to
+/// `grow_to` blocks). Over a LAN it stays short; behind a reverse proxy or CDN that passes the sound
+/// on in bursts, it grows until a burst's gap fits, instead of cutting in and out for good.
+pub fn net_feed_adaptive(prebuffer: usize, grow_to: usize) -> (Sender<Vec<f32>>, NetSource) {
     let prebuffer = prebuffer.max(1);
-    let (tx, rx) = crossbeam_channel::bounded(prebuffer * 4);
-    (tx, NetSource { rx, cur: Vec::new(), pos: 0, prebuffer, buffering: true })
+    let grow_to = grow_to.max(prebuffer);
+    let (tx, rx) = crossbeam_channel::bounded(grow_to * 4);
+    (tx, NetSource { rx, cur: Vec::new(), pos: 0, prebuffer, grow_to, buffering: true })
 }
 
 impl NetSource {
@@ -898,6 +909,8 @@ impl NetSource {
                     self.pos = 0;
                 }
                 Err(_) => {
+                    // ran dry while playing: wait for more next time
+                    self.prebuffer = (self.prebuffer * 2).min(self.grow_to);
                     self.buffering = true;
                     self.cur.clear();
                     self.pos = 0;
@@ -1015,6 +1028,39 @@ mod tests {
         h.extend_from_slice(&(data.len() as u32).to_le_bytes());
         h.extend_from_slice(&data);
         std::fs::write(path, h).unwrap();
+    }
+
+    #[test]
+    fn network_feed_waits_longer_after_running_dry() {
+        let (tx, mut src) = net_feed_adaptive(2, 8);
+        let play = |src: &mut NetSource, frames: usize| (0..frames).filter(|_| src.frame() != (0.0, 0.0)).count();
+        // two blocks of one frame each start it
+        tx.send(vec![1.0, 1.0]).unwrap();
+        assert_eq!(play(&mut src, 1), 0, "still buffering");
+        tx.send(vec![1.0, 1.0]).unwrap();
+        assert_eq!(play(&mut src, 2), 2);
+        // it ran dry: now it waits for four blocks
+        assert_eq!(play(&mut src, 1), 0);
+        for _ in 0..3 {
+            tx.send(vec![1.0, 1.0]).unwrap();
+        }
+        assert_eq!(play(&mut src, 1), 0, "three aren't enough any more");
+        tx.send(vec![1.0, 1.0]).unwrap();
+        assert_eq!(play(&mut src, 4), 4);
+        // never past grow_to; a burst that big still fits
+        for _ in 0..3 {
+            assert_eq!(play(&mut src, 1), 0);
+        }
+        assert_eq!(src.prebuffer, 8);
+        for _ in 0..24 {
+            tx.try_send(vec![1.0, 1.0]).unwrap();
+        }
+        assert_eq!(play(&mut src, 24), 24);
+        // a fixed feed (the mic) keeps its prebuffer
+        let (_tx, mut fixed) = net_feed(3);
+        fixed.frame();
+        fixed.frame();
+        assert_eq!(fixed.prebuffer, 3);
     }
 
     #[test]
