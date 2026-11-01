@@ -114,6 +114,10 @@ pub fn apply(ctx: &egui::Context, dark: bool, scale: f32) {
         v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(70, 110, 180));
     }
     v.window_shadow.spread = 6;
+    // Pin egui's theme to the user's choice. Left at "follow the system", egui keeps
+    // separate light and dark styles and switches to the OS one on the first frames,
+    // so a saved dark theme came back light after a restart (issue #30).
+    ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.set_visuals(v);
 
     let mut s = (*ctx.style()).clone();
