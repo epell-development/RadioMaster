@@ -253,6 +253,8 @@ pub struct App {
     dev_listed: bool,
     dev_listing: bool,
     dev_inputs: Vec<String>,
+    /// sound card buffer being typed or dragged in Settings, applied when the edit ends
+    buffer_edit: Option<u32>,
     ctx: egui::Context,
     sel: BTreeSet<usize>,
     anchor: Option<usize>,
@@ -712,6 +714,7 @@ impl App {
             dev_listed: false,
             dev_listing: false,
             dev_inputs: vec![],
+            buffer_edit: None,
             ctx: cc.egui_ctx.clone(),
             sel: BTreeSet::new(),
             anchor: None,
@@ -2249,7 +2252,8 @@ impl App {
         } else {
             // while connected the mic goes to the server, which puts it on air
             let device = &core.cfg.audio_devices.input;
-            let started = self.server_mic(device).unwrap_or_else(|| crate::mic::start(core.engine.clone(), device));
+            let started =
+                self.server_mic(device).unwrap_or_else(|| crate::mic::start(core.engine.clone(), device, core.cfg.audio_devices.buffer_ms));
             match started {
                 Ok(s) => {
                     self.mic_stream = Some(s);
@@ -3140,13 +3144,32 @@ impl App {
                 for v in [40, 0, 150, 300] {
                     if ui.selectable_label(ms == v, label(v)).clicked() && ms != v {
                         core.cfg.audio_devices.buffer_ms = v;
+                        self.buffer_edit = None;
                         changed = true;
                     }
                 }
             });
+            // or type any value in (fast PCs with a good interface can go much lower)
+            use crate::audio::{buffer_ms_of, MAX_BUFFER_MS, MIN_BUFFER_MS};
+            let mut v = self.buffer_edit.unwrap_or(buffer_ms_of(ms));
+            let r = ui
+                .add(egui::DragValue::new(&mut v).range(MIN_BUFFER_MS..=MAX_BUFFER_MS).speed(0.5).suffix(" ms").update_while_editing(false))
+                .on_hover_text(tr("Type your own buffer size in milliseconds. The sound card may round it to a size it supports; the size in use is shown below."));
+            if r.changed() {
+                self.buffer_edit = Some(v);
+            }
+            // reopening the sound cards waits until the drag or the typing is done
+            if !r.dragged() && !r.has_focus() {
+                if let Some(v) = self.buffer_edit.take() {
+                    if v != buffer_ms_of(ms) {
+                        core.cfg.audio_devices.buffer_ms = v;
+                        changed = true;
+                    }
+                }
+            }
         })
         .response
-        .on_hover_text(tr("If the sound crackles or stutters on a slow or busy computer, pick a bigger buffer. A bigger buffer adds a little delay between pressing Play and hearing it."));
+        .on_hover_text(tr("If the sound crackles or stutters on a slow or busy computer, pick a bigger buffer. A bigger buffer adds a little delay between pressing Play and hearing it; a fast computer with a good audio interface can use a much smaller one. The mic uses it too, the next time it is turned on."));
         if changed {
             let engine = self.output_engine(core);
             self.audio.apply(&engine, &core.cfg.audio_devices);
