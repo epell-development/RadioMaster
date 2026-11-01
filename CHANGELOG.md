@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.2.10 — 2026-11-01
+**New**
+- Advert and jingle rules can interrupt the song on air at their set time instead of waiting for it to
+  end. A countdown opens before the break (30 seconds by default) with what will play and Play now /
+  Snooze / Skip; at zero the song fades out and the break starts. Works when connected to a server too
+- Cart wall: right-click a pad to give it a name or one of ten background colours; text on a coloured
+  pad stays readable
+- Player: −30s / +30s buttons beside the seek bar and a "Go to a time" box, with Alt+←, Alt+→ and
+  Ctrl+T (changeable in Help → Shortcuts and MIDI); works while connected to a server
+- Settings: type your own sound card buffer size (1–1000 ms) next to the presets; Settings shows the
+  buffer each output actually got, or that the driver refused it
+- macOS: one universal app for Apple Silicon and Intel Macs (macOS 11 or later)
+
+**Fixed**
+- The dark theme switched back to light after a restart
+- Cart pads with long names stretched the grid; every pad is now the same size, long names wrap and end
+  in "…", and the full name shows in the tooltip
+- The mic could lag up to a second behind; it now uses the same buffer as the sound card and its delay
+  can't creep up
+- "Fit each screen like 1920×1080" made the window keep growing and shrinking
+- "Hear the station here" never played behind IIS or another reverse proxy that holds the start back;
+  it now waits longer, asks proxies not to buffer, and says why when it can't play
+- macOS: "not supported on this Mac" on Intel Macs
+
+**Changed**
+- The sound card devices reopen once you finish typing or dragging the buffer size, not every frame
+- Website and README: how to get past the Windows SmartScreen and macOS Gatekeeper warnings, and an
+  "Already using AzuraCast?" FAQ entry
+- Release builds can be code-signed for Windows and macOS once certificates are set up
+
 ## v0.2.9 — 2026-10-26
 **New**
 - Playlist generator: inserts after N songs, every N minutes (on the clock) or at set times, with hour
