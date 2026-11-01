@@ -70,6 +70,12 @@ where
 
 /// Open the input device (empty name = system default) and send stereo 44.1 kHz audio to `sink`.
 pub fn capture<F: FnMut(&[f32]) + Send + 'static>(device_name: &str, sink: F) -> Result<cpal::Stream> {
+    capture_with(device_name, 0, sink)
+}
+
+/// Like `capture`, with a sound card buffer of about `buffer_ms` (0 = the driver's own).
+/// If the driver refuses that size its own buffer is used.
+pub fn capture_with<F: FnMut(&[f32]) + Send + 'static>(device_name: &str, buffer_ms: u32, sink: F) -> Result<cpal::Stream> {
     let host = cpal::default_host();
     let chosen = if device_name.is_empty() {
         None
@@ -80,18 +86,41 @@ pub fn capture<F: FnMut(&[f32]) + Send + 'static>(device_name: &str, sink: F) ->
     let cfg = dev.default_input_config()?;
     let rate = cfg.sample_rate().0 as f32;
     let fmt = cfg.sample_format();
-    let conf: cpal::StreamConfig = cfg.into();
-    let stream = match fmt {
-        cpal::SampleFormat::F32 => build::<f32, F>(&dev, &conf, rate, sink)?,
-        cpal::SampleFormat::I16 => build::<i16, F>(&dev, &conf, rate, sink)?,
-        cpal::SampleFormat::U16 => build::<u16, F>(&dev, &conf, rate, sink)?,
-        other => return Err(anyhow!("unsupported input sample format {other:?}")),
+    let sizes = *cfg.buffer_size();
+    let mut conf: cpal::StreamConfig = cfg.into();
+    if buffer_ms > 0 {
+        conf.buffer_size = crate::audio::pick_buffer(&sizes, conf.sample_rate.0, crate::audio::buffer_ms_of(buffer_ms)).0;
+    }
+    // the sink moves into the stream, so it is shared to allow a second try at the default size
+    let sink = std::sync::Arc::new(std::sync::Mutex::new(sink));
+    let open = |conf: &cpal::StreamConfig| {
+        let sink = sink.clone();
+        let f = move |s: &[f32]| {
+            if let Ok(mut k) = sink.lock() {
+                (*k)(s)
+            }
+        };
+        match fmt {
+            cpal::SampleFormat::F32 => build::<f32, _>(&dev, conf, rate, f),
+            cpal::SampleFormat::I16 => build::<i16, _>(&dev, conf, rate, f),
+            cpal::SampleFormat::U16 => build::<u16, _>(&dev, conf, rate, f),
+            other => Err(anyhow!("unsupported input sample format {other:?}")),
+        }
+    };
+    let stream = match open(&conf) {
+        Ok(s) => s,
+        Err(_) if conf.buffer_size != cpal::BufferSize::Default => {
+            conf.buffer_size = cpal::BufferSize::Default;
+            open(&conf)?
+        }
+        Err(e) => return Err(e),
     };
     stream.play()?;
     Ok(stream)
 }
 
 /// Mic button: input goes straight into the master bus (music is ducked by the engine).
-pub fn start(engine: Engine, device_name: &str) -> Result<cpal::Stream> {
-    capture(device_name, move |s| engine.mic_push(s))
+/// `buffer_ms` is the sound card buffer setting (0 = default).
+pub fn start(engine: Engine, device_name: &str, buffer_ms: u32) -> Result<cpal::Stream> {
+    capture_with(device_name, buffer_ms, move |s| engine.mic_push(s))
 }

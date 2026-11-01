@@ -35,11 +35,39 @@ pub fn default_output_name() -> Option<String> {
 
 /// Sound card buffer when the setting is left on its default.
 pub const DEFAULT_BUFFER_MS: u32 = 80;
+/// Smallest and largest buffer that can be typed in. The driver may still raise or lower it to
+/// what it supports (WASAPI shared mode rarely goes below about 10 ms).
+pub const MIN_BUFFER_MS: u32 = 1;
+pub const MAX_BUFFER_MS: u32 = 1000;
+
+/// The setting in milliseconds (0 = default), clamped to what can be asked for.
+pub fn buffer_ms_of(setting: u32) -> u32 {
+    if setting == 0 {
+        DEFAULT_BUFFER_MS
+    } else {
+        setting.clamp(MIN_BUFFER_MS, MAX_BUFFER_MS)
+    }
+}
+
+/// Picks a fixed buffer of about `ms` for a device whose driver supports `sup`.
+/// Returns the buffer size and a short note on what was asked for, for the device report.
+pub(crate) fn pick_buffer(sup: &cpal::SupportedBufferSize, rate: u32, ms: u32) -> (cpal::BufferSize, String) {
+    let mut frames = ((rate as u64 * ms as u64 / 1000) as u32).max(16);
+    if let cpal::SupportedBufferSize::Range { min, max } = sup {
+        if *min <= *max {
+            frames = frames.clamp(*min, *max);
+        }
+    }
+    let got = frames as f32 * 1000.0 / rate.max(1) as f32;
+    (cpal::BufferSize::Fixed(frames), format!("{frames} frames, about {got:.1} ms"))
+}
 
 /// Plays `make()` on `device` through cpal, with a buffer of about `buffer_ms` milliseconds.
-/// A bigger buffer than the driver's default rides out a busy CPU (slow PCs) instead of crackling.
+/// A bigger buffer than the driver's default rides out a busy CPU (slow PCs) instead of crackling;
+/// a small one (a fast PC with a good interface) gets the delay down.
 /// `make` is called again if the driver refuses that buffer size and its own default is used.
-fn open_output<S, F>(device: &cpal::Device, buffer_ms: u32, mut make: F) -> anyhow::Result<cpal::Stream>
+/// Also returns a note on the buffer in use.
+fn open_output<S, F>(device: &cpal::Device, buffer_ms: u32, mut make: F) -> anyhow::Result<(cpal::Stream, String)>
 where
     S: Source<Item = f32> + Send + 'static,
     F: FnMut() -> S,
@@ -47,21 +75,18 @@ where
     let sup = device.default_output_config()?;
     let format = sup.sample_format();
     let mut cfg = sup.config();
-    let ms = if buffer_ms == 0 { DEFAULT_BUFFER_MS } else { buffer_ms };
-    let mut frames = (cfg.sample_rate.0 as u64 * ms as u64 / 1000) as u32;
-    if let cpal::SupportedBufferSize::Range { min, max } = sup.buffer_size() {
-        frames = frames.clamp(*min, *max);
-    }
-    cfg.buffer_size = cpal::BufferSize::Fixed(frames);
+    let (size, mut note) = pick_buffer(sup.buffer_size(), cfg.sample_rate.0, buffer_ms_of(buffer_ms));
+    cfg.buffer_size = size;
     let stream = match build_output(device, &cfg, format, make()) {
         Ok(s) => s,
         Err(_) => {
             cfg.buffer_size = cpal::BufferSize::Default;
+            note = "driver's own buffer (it refused the size asked for)".into();
             build_output(device, &cfg, format, make())?
         }
     };
     stream.play()?;
-    Ok(stream)
+    Ok((stream, note))
 }
 
 fn build_output<S>(device: &cpal::Device, cfg: &cpal::StreamConfig, format: SampleFormat, src: S) -> anyhow::Result<cpal::Stream>
@@ -264,6 +289,7 @@ impl AudioManager {
         if let Some(s) = self.null_stop.take() {
             s.store(true, Ordering::Relaxed);
         }
+        engine.set_mic_latency_ms(buffer_ms_of(cfg.buffer_ms));
         let host = cpal::default_host();
         let mut wanted: Vec<(String, f32, bool)> =
             cfg.outputs.iter().filter(|o| o.enabled).map(|o| (o.name.clone(), o.gain, o.studio)).collect();
@@ -297,10 +323,10 @@ impl AudioManager {
                 }
             };
             match opened {
-                Ok(stream) => {
+                Ok((stream, buf)) => {
                     let role = if have_primary { "monitor" } else { "primary" };
                     let extra = if studio { ", muted while the mic is on" } else { "" };
-                    self.report.push((name.clone(), format!("playing ({role}{extra})")));
+                    self.report.push((name.clone(), format!("playing ({role}{extra}, {buf})")));
                     self.running.push(Running {
                         name,
                         primary: !have_primary,
@@ -342,7 +368,7 @@ impl PreviewPlayer {
         let dev = find_output(device).ok_or_else(|| anyhow::anyhow!("no output device for preview"))?;
         let engine = Engine::new_detached();
         engine.set_volume(1.0);
-        let stream = open_output(&dev, 0, || engine.primary_source())?;
+        let (stream, _) = open_output(&dev, 0, || engine.primary_source())?;
         engine.play_source(src, None, 0.0, crate::engine::CueSpec::default(), Some(0.0), false);
         let stop = Arc::new(AtomicBool::new(false));
         let (s2, e2) = (stop.clone(), engine.clone());
@@ -363,7 +389,7 @@ impl PreviewPlayer {
         let dev = find_output(device).ok_or_else(|| anyhow::anyhow!("no output device for preview"))?;
         let engine = Engine::new_detached();
         engine.set_volume(1.0);
-        let stream = open_output(&dev, 0, || engine.primary_source())?;
+        let (stream, _) = open_output(&dev, 0, || engine.primary_source())?;
         let ca = a.cues;
         let from = from.clamp(0.0, (ca.cue_out - 0.05).max(0.0));
         let fade_in = if from <= ca.cue_in + 1e-3 { ca.fade_in } else { 0.0 };
@@ -434,5 +460,30 @@ impl PreviewPlayer {
 impl Drop for PreviewPlayer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_setting_is_clamped() {
+        assert_eq!(buffer_ms_of(0), DEFAULT_BUFFER_MS);
+        assert_eq!(buffer_ms_of(3), 3);
+        assert_eq!(buffer_ms_of(5000), MAX_BUFFER_MS);
+    }
+
+    #[test]
+    fn small_buffers_follow_the_driver_range() {
+        let range = cpal::SupportedBufferSize::Range { min: 32, max: 4096 };
+        // 3 ms at 48 kHz is 144 frames
+        let (size, note) = pick_buffer(&range, 48_000, 3);
+        assert_eq!(size, cpal::BufferSize::Fixed(144));
+        assert!(note.contains("144 frames"));
+        // 1 ms would be 48 frames, but this driver goes no lower than 64
+        let range = cpal::SupportedBufferSize::Range { min: 64, max: 4096 };
+        assert_eq!(pick_buffer(&range, 48_000, 1).0, cpal::BufferSize::Fixed(64));
+        assert_eq!(pick_buffer(&cpal::SupportedBufferSize::Unknown, 44_100, 1000).0, cpal::BufferSize::Fixed(44_100));
     }
 }

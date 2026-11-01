@@ -310,6 +310,9 @@ struct Shared {
     /// music level right now (follows `duck` smoothly)
     duck_now: f32,
     mic_buf: VecDeque<f32>,
+    /// most mic audio (interleaved samples) allowed to queue up before the oldest is dropped,
+    /// so the mic's delay can't creep up when the input and output clocks drift apart
+    mic_max: usize,
     monitors: Vec<Sender<Arc<Vec<f32>>>>,
     /// mics of apps connected to RadioMaster Server (summed with the local mic while the mic is on)
     net_mics: Vec<(u64, NetSource)>,
@@ -537,6 +540,7 @@ impl Engine {
             duck: 0.35,
             duck_now: 1.0,
             mic_buf: VecDeque::new(),
+            mic_max: SR as usize * 2,
             monitors: vec![],
             net_mics: vec![],
             next_mic: 0,
@@ -732,9 +736,19 @@ impl Engine {
             return;
         }
         s.mic_buf.extend(samples.iter().copied());
-        while s.mic_buf.len() > SR as usize * 2 {
-            s.mic_buf.pop_front();
+        // never less than a few of the input's own chunks, whatever size its driver settled on
+        let max = s.mic_max.max(samples.len() * 3).min(SR as usize * 2);
+        if s.mic_buf.len() > max {
+            // drop back to half the limit in one go (one small skip rather than many)
+            let drop = (s.mic_buf.len() - max / 2) & !1;
+            s.mic_buf.drain(..drop);
         }
+    }
+
+    /// Lets the mic queue hold a few sound card buffers of `buffer_ms` (at least 60 ms, at most 1 s).
+    pub fn set_mic_latency_ms(&self, buffer_ms: u32) {
+        let ms = (buffer_ms as usize * 4).clamp(60, 1000);
+        self.shared.lock().mic_max = (SR as usize * 2 * ms / 1000) & !1;
     }
 
     pub fn seek(&self, secs: f32) -> Result<()> {
