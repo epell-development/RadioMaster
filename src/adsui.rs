@@ -55,6 +55,8 @@ fn kind_tag(ui: &mut egui::Ui, adverts: bool) {
 
 impl App {
     pub(super) fn tab_ads(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        // adverts from older versions (or an older server) have no id yet; rules choose by id
+        core.cfg.ensure_ad_ids();
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.ads.view, AdsView::Rules, RichText::new(tr("📋 Rules")).strong());
             ui.selectable_value(
@@ -202,6 +204,25 @@ impl App {
 
     fn rule_editor(&mut self, ui: &mut egui::Ui, core: &mut Playout, i: usize) {
         let ads_n = core.cfg.ads.len();
+        let now = Local::now();
+        // (id, label, file, state) of each advert in the list, for choosing which ones the rule plays
+        let ads: Vec<(u64, String, String, RichText)> = core
+            .cfg
+            .ads
+            .iter()
+            .map(|a| {
+                let state = if !a.enabled {
+                    RichText::new(tr("off")).small().color(GRAY)
+                } else if a.path.trim().is_empty() {
+                    RichText::new(tr("no audio file")).small().color(AMBER)
+                } else if a.active(&now) {
+                    RichText::new(tr("● running today")).small().color(GREEN)
+                } else {
+                    RichText::new(tr("○ not today")).small().color(AMBER)
+                };
+                (a.id, a.label(), a.path.clone(), state)
+            })
+            .collect();
         let r = &mut core.cfg.ad_rules[i];
         let mut act: Option<&str> = None;
         ui.horizontal(|ui| {
@@ -235,6 +256,9 @@ impl App {
                         true,
                         format!("{} ({} {})", tr("the Adverts list — each advert only in its own dates and days"), ads_n, tr("adverts")),
                     );
+                    if r.use_ad_list {
+                        ui.indent("rule_ads", |ui| self.rule_ad_picker(ui, r, &ads));
+                    }
                     ui.radio_value(&mut r.use_ad_list, false, tr("a folder or chosen files"));
                 }
                 if !(r.adverts && r.use_ad_list) {
@@ -407,10 +431,61 @@ impl App {
         }
     }
 
+    /// Every advert in the list, or only the ticked ones (several can be ticked).
+    fn rule_ad_picker(&mut self, ui: &mut egui::Ui, r: &mut AdRule, ads: &[(u64, String, String, RichText)]) {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut r.ad_choose, false, tr("every advert"));
+            if ui.radio_value(&mut r.ad_choose, true, tr("only the adverts I tick")).clicked() && r.ad_ids.is_empty() {
+                // start with them all ticked; untick the ones this rule shouldn't play
+                r.ad_ids = ads.iter().map(|a| a.0).collect();
+            }
+        });
+        if !r.ad_choose {
+            return;
+        }
+        if ads.is_empty() {
+            ui.label(RichText::new(tr("The Adverts list is empty. Add adverts there first.")).small().color(AMBER));
+            if ui.button(tr("📢 Open the Adverts list")).clicked() {
+                self.ads.view = AdsView::Adverts;
+            }
+            return;
+        }
+        ui.horizontal(|ui| {
+            if ui.small_button(tr("Tick all")).clicked() {
+                r.ad_ids = ads.iter().map(|a| a.0).collect();
+            }
+            if ui.small_button(tr("Untick all")).clicked() {
+                r.ad_ids.clear();
+            }
+            let n = ads.iter().filter(|a| r.ad_ids.contains(&a.0)).count();
+            ui.label(RichText::new(format!("{n} / {} {}", ads.len(), tr("ticked"))).small().color(GRAY));
+        });
+        egui::ScrollArea::vertical().id_salt(("rule_ads_scroll", r.id)).max_height(220.0).show(ui, |ui| {
+            for (id, label, path, state) in ads {
+                ui.horizontal(|ui| {
+                    let mut on = r.ad_ids.contains(id);
+                    let hover = if path.is_empty() { tr("no audio file").to_string() } else { path.clone() };
+                    if ui.checkbox(&mut on, label.as_str()).on_hover_text(hover).changed() {
+                        if on {
+                            r.ad_ids.push(*id);
+                        } else {
+                            r.ad_ids.retain(|x| x != id);
+                        }
+                    }
+                    ui.label(state.clone());
+                });
+            }
+        });
+        if !ads.iter().any(|a| r.ad_ids.contains(&a.0)) {
+            ui.label(RichText::new(tr("No adverts ticked: this rule plays nothing.")).small().color(AMBER));
+        }
+    }
+
     fn ads_list(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         ui.horizontal(|ui| {
             if ui.button(tr("➕ Add advert")).clicked() {
-                core.cfg.ads.push(Ad::default());
+                let ad = core.cfg.new_ad();
+                core.cfg.ads.push(ad);
             }
             let users: Vec<String> = core.cfg.ad_rules.iter().filter(|r| r.adverts && r.use_ad_list).map(|r| r.name.clone()).collect();
             ui.label(
@@ -426,6 +501,7 @@ impl App {
         ui.add_space(4.0);
         let now = Local::now();
         let mut del = None;
+        let rules: Vec<AdRule> = core.cfg.ad_rules.iter().filter(|r| r.adverts && r.use_ad_list).cloned().collect();
         egui::ScrollArea::vertical().id_salt("ads_list_scroll").auto_shrink([false, false]).show(ui, |ui| {
             for i in 0..core.cfg.ads.len() {
                 let a: &mut Ad = &mut core.cfg.ads[i];
@@ -433,7 +509,8 @@ impl App {
                     ui.set_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut a.enabled, "");
-                        ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(170.0).font(egui::TextStyle::Body));
+                        ui.add(egui::TextEdit::singleline(&mut a.advertiser).desired_width(150.0).hint_text(tr("advertiser / company")));
+                        ui.add(egui::TextEdit::singleline(&mut a.name).desired_width(170.0).hint_text(tr("advert name")));
                         let live = a.active(&now);
                         ui.label(if !a.enabled {
                             RichText::new(tr("off")).small().color(GRAY)
@@ -460,6 +537,16 @@ impl App {
                         ui.add_space(10.0);
                         days_edit(ui, &mut a.days);
                     });
+                    let by: Vec<&str> = rules.iter().filter(|r| r.plays_ad(a)).map(|r| r.name.as_str()).collect();
+                    ui.label(
+                        RichText::new(if by.is_empty() {
+                            tr("No rule plays this advert.").to_string()
+                        } else {
+                            format!("{} {}", tr("Played by:"), by.join(", "))
+                        })
+                        .small()
+                        .color(GRAY),
+                    );
                 });
             }
             if core.cfg.ads.is_empty() {
@@ -467,7 +554,7 @@ impl App {
             }
         });
         if let Some(i) = del {
-            core.cfg.ads.remove(i);
+            core.cfg.remove_ad(i);
         }
     }
 }

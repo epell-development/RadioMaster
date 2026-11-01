@@ -1879,7 +1879,7 @@ impl Playout {
             self.cfg
                 .ads
                 .iter()
-                .filter(|a| a.active(&now) && !a.path.is_empty())
+                .filter(|a| r.plays_ad(a) && a.active(&now) && !a.path.is_empty())
                 .map(|a| PathBuf::from(&a.path))
                 .filter(|p| p.exists())
                 .collect()
@@ -3074,6 +3074,34 @@ mod tests {
         p.apply_rotations(5, &song);
         let names: Vec<String> = p.playlist.iter().map(|e| e.track.path.file_name().unwrap().to_string_lossy().to_string()).collect();
         assert_eq!(&names[6..8], ["ad2.wav", "ad0.wav"]);
+    }
+
+    #[test]
+    fn rules_play_only_the_adverts_chosen_from_the_list() {
+        use crate::config::{Ad, AdRule};
+        let mut p = playout();
+        let dir = std::env::temp_dir().join("rm_test_ad_list");
+        let _ = std::fs::create_dir_all(&dir);
+        p.cfg.ads = (0..3)
+            .map(|i| {
+                let f = dir.join(format!("spot{i}.wav"));
+                crate::engine::write_wav(&f, &vec![0.0; 4410 * 2], 2, 44100).unwrap();
+                Ad { id: i + 1, name: format!("Spot {i}"), path: f.to_string_lossy().to_string(), ..Default::default() }
+            })
+            .collect();
+        let mut r = AdRule { adverts: true, use_ad_list: true, ..Default::default() };
+        let names = |p: &Playout, r: &AdRule| -> Vec<String> {
+            p.rule_pool(r).iter().map(|f| f.file_name().unwrap().to_string_lossy().to_string()).collect()
+        };
+        assert_eq!(names(&p, &r), ["spot0.wav", "spot1.wav", "spot2.wav"], "rules saved before stay on the whole list");
+        r.ad_choose = true;
+        r.ad_ids = vec![3, 1];
+        assert_eq!(names(&p, &r), ["spot0.wav", "spot2.wav"]);
+        p.cfg.ad_rules = vec![r.clone()];
+        p.cfg.remove_ad(0);
+        assert_eq!(p.cfg.ad_rules[0].ad_ids, [3], "a deleted advert leaves the rules");
+        r.ad_ids.clear();
+        assert!(names(&p, &r).is_empty(), "nothing ticked plays nothing");
     }
 
     #[test]
