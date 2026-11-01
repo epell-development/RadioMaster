@@ -1492,6 +1492,8 @@ impl App {
     }
 
     // ----------------------------------------------------------- status bar
+    /// The message line, clock, streams and recorder at the bottom. Needs `&mut self` because
+    /// clicking ⏺ REC opens the Show recorder window (its only caller is `update`).
     fn status_bar(&mut self, ctx: &egui::Context, core: &Playout) {
         let mut open_recorder = false;
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
