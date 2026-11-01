@@ -869,7 +869,8 @@ pub struct NetSource {
     cur: Vec<f32>,
     pos: usize,
     prebuffer: usize,
-    /// how far `prebuffer` may grow after the sound runs dry (see `net_feed_adaptive`)
+    /// the most `prebuffer` may grow to after the sound runs dry (see `net_feed_adaptive`);
+    /// always at least `prebuffer`
     grow_to: usize,
     buffering: bool,
 }
