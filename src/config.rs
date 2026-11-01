@@ -760,6 +760,105 @@ pub struct AudioDevices {
     pub buffer_ms: u32,
 }
 
+/// File type of the show recordings.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RecFormat {
+    /// compressed, built in (64–320 kbps)
+    #[default]
+    Mp3,
+    /// lossless and compressed (needs ffmpeg)
+    Flac,
+    /// uncompressed
+    Wav,
+}
+
+impl RecFormat {
+    pub const ALL: [RecFormat; 3] = [RecFormat::Mp3, RecFormat::Flac, RecFormat::Wav];
+    pub fn label(self) -> &'static str {
+        match self {
+            RecFormat::Mp3 => "MP3 (compressed, 64–320 kbps)",
+            RecFormat::Flac => "FLAC (lossless, about half the size of WAV; needs ffmpeg)",
+            RecFormat::Wav => "WAV (uncompressed, about 600 MB an hour)",
+        }
+    }
+    pub fn extension(self) -> &'static str {
+        match self {
+            RecFormat::Mp3 => "mp3",
+            RecFormat::Flac => "flac",
+            RecFormat::Wav => "wav",
+        }
+    }
+}
+
+/// Show recording: the on-air mix is saved to a folder in files of `segment_mins` each, lined up
+/// with the clock (a 60-minute file starts on the hour).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct RecordCfg {
+    pub enabled: bool,
+    /// a local, network (\\server\share) or cloud-synced folder; empty = "recordings" in the data folder
+    pub folder: String,
+    pub format: RecFormat,
+    /// MP3 bitrate
+    pub bitrate_kbps: u32,
+    /// length of each file in minutes
+    pub segment_mins: u32,
+    /// delete recordings older than this many days (0 = keep them all)
+    pub keep_days: u32,
+    /// days of the week to record (Monday first)
+    pub days: [bool; 7],
+    /// record between these hours (from == to: all day; 22 → 6 runs over midnight)
+    pub from_hour: u32,
+    pub to_hour: u32,
+}
+
+impl Default for RecordCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            folder: String::new(),
+            format: RecFormat::Mp3,
+            bitrate_kbps: 128,
+            segment_mins: 60,
+            keep_days: 90,
+            days: [true; 7],
+            from_hour: 0,
+            to_hour: 0,
+        }
+    }
+}
+
+impl RecordCfg {
+    /// Whether recordings are made at `now` (days and hours).
+    pub fn active_at(&self, now: chrono::NaiveDateTime) -> bool {
+        use chrono::Timelike;
+        self.days[now.weekday().num_days_from_monday() as usize] && hours_ok(self.from_hour, self.to_hour, now.hour())
+    }
+
+    /// The folder recordings go into.
+    pub fn folder_path(&self) -> PathBuf {
+        if self.folder.trim().is_empty() {
+            data_dir().join("recordings")
+        } else {
+            PathBuf::from(self.folder.trim())
+        }
+    }
+
+    /// Minutes per file: one that divides the day (so files line up with the clock), and at most
+    /// 6 hours for WAV (a WAV file can't be bigger than 4 GB).
+    pub fn segment(&self) -> u32 {
+        let m = SEGMENT_MINS.iter().copied().filter(|&m| m <= self.segment_mins.max(1)).max().unwrap_or(60);
+        if self.format == RecFormat::Wav {
+            m.min(360)
+        } else {
+            m
+        }
+    }
+}
+
+/// The file lengths offered for show recordings, in minutes.
+pub const SEGMENT_MINS: [u32; 10] = [15, 30, 60, 120, 180, 240, 360, 480, 720, 1440];
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {
@@ -814,6 +913,8 @@ pub struct Config {
     pub ffmpeg_path: String,
     /// while connected to RadioMaster Server: play the station's mix on this machine's sound cards
     pub hear_server: bool,
+    /// show recording (logger): the on-air mix saved to files, one per hour
+    pub recording: RecordCfg,
 }
 
 impl Default for Config {
@@ -857,6 +958,7 @@ impl Default for Config {
             rotations: vec![],
             ad_rules: vec![AdRule { id: 1, ..Default::default() }],
             ad_rules_v: 1,
+            recording: RecordCfg::default(),
         }
     }
 }

@@ -12,6 +12,7 @@ pub(super) enum ToolWin {
     Ads,
     AudioFx,
     Streams,
+    Recorder,
     AzuraCast,
     Reports,
     History,
@@ -23,12 +24,13 @@ pub(super) enum ToolWin {
 }
 
 impl ToolWin {
-    pub(super) const ALL: [ToolWin; 13] = [
+    pub(super) const ALL: [ToolWin; 14] = [
         ToolWin::FadeEditor,
         ToolWin::Generator,
         ToolWin::Ads,
         ToolWin::AudioFx,
         ToolWin::Streams,
+        ToolWin::Recorder,
         ToolWin::AzuraCast,
         ToolWin::Reports,
         ToolWin::History,
@@ -45,7 +47,7 @@ impl ToolWin {
             ToolWin::FadeEditor => p.tool(tool::TRACK_EDITOR),
             ToolWin::Generator => p.tool(tool::GENERATOR),
             ToolWin::Ads => p.tool(tool::ADS),
-            ToolWin::Streams => p.streaming,
+            ToolWin::Streams | ToolWin::Recorder => p.streaming,
             ToolWin::AzuraCast => p.tool(tool::AZURACAST),
             ToolWin::AudioFx => p.tool(tool::AUDIO_FX),
             ToolWin::Plugins => p.tool(tool::PLUGINS),
@@ -65,6 +67,7 @@ impl ToolWin {
             ToolWin::Ads => "Advertisement scheduler",
             ToolWin::AudioFx => "Audio processing",
             ToolWin::Streams => "Streams / encoders",
+            ToolWin::Recorder => "Show recorder",
             ToolWin::AzuraCast => "AzuraCast station manager",
             ToolWin::Reports => "Reports",
             ToolWin::History => "Play history",
@@ -82,6 +85,7 @@ impl ToolWin {
             ToolWin::Ads => "📢",
             ToolWin::AudioFx => "🔈",
             ToolWin::Streams => "📡",
+            ToolWin::Recorder => "⏺",
             ToolWin::AzuraCast => "☁",
             ToolWin::Reports => "📊",
             ToolWin::History => "📜",
@@ -99,6 +103,7 @@ impl ToolWin {
             ToolWin::Ads => [1000.0, 600.0],
             ToolWin::AudioFx => [760.0, 560.0],
             ToolWin::Streams => [820.0, 520.0],
+            ToolWin::Recorder => [700.0, 620.0],
             ToolWin::AzuraCast => [900.0, 560.0],
             ToolWin::Reports => [760.0, 480.0],
             ToolWin::History => [560.0, 480.0],
@@ -393,6 +398,7 @@ impl App {
                         ToolWin::Ads => self.tab_ads(ui, core),
                         ToolWin::AudioFx => self.tab_dsp(ui, core),
                         ToolWin::Streams => self.tab_streaming(ui, core),
+                        ToolWin::Recorder => self.tab_recording(ui, core),
                         ToolWin::Notepad => self.tab_segment(ui, core),
                         ToolWin::Plugins => self.tab_plugins(ui, core),
                         ToolWin::Scheduler => self.tab_scheduler(ui, core),

@@ -460,6 +460,14 @@ pub struct Playout {
     wave_errors: HashMap<PathBuf, String>,
     /// lines ever written to the log (how the server's clients follow it)
     pub log_total: u64,
+    // ---- show recording
+    recorder: Option<crate::recorder::Recorder>,
+    /// recording settings that changed, and when (applied once they stay put for a moment)
+    rec_pending: Option<(crate::config::RecordCfg, Instant)>,
+    /// the server's recorder (when this is a mirror)
+    rec_mirror: Option<crate::recorder::RecStatus>,
+    /// the last recorder problem written to the log
+    rec_error: String,
 }
 
 #[path = "sync.rs"]
@@ -589,6 +597,10 @@ impl Playout {
             clock_offset_ms: 0,
             wave_errors: HashMap::new(),
             log_total: 0,
+            recorder: None,
+            rec_pending: None,
+            rec_mirror: None,
+            rec_error: String::new(),
         }
     }
 
@@ -751,9 +763,63 @@ impl Playout {
             self.enc_states = states;
         }
 
+        self.follow_recording();
+
         if self.last_save.elapsed().as_secs() >= 60 {
             self.save_all();
         }
+    }
+
+    // ------------------------------------------------------------- show recording
+    /// Start, stop or restart the show recorder to match the settings. A change is applied once it
+    /// has stayed the same for a couple of seconds, so typing a folder name doesn't start a file
+    /// per key press.
+    fn follow_recording(&mut self) {
+        let want = &self.cfg.recording;
+        let running = self.recorder.as_ref().map(|r| (&r.cfg, r.ffmpeg.as_str()));
+        let same = match running {
+            Some((c, f)) => want.enabled && c == want && f == self.cfg.ffmpeg_path,
+            None => !want.enabled,
+        };
+        if same {
+            self.rec_pending = None;
+        } else {
+            match &self.rec_pending {
+                Some((c, t)) if c == want && t.elapsed() >= std::time::Duration::from_secs(2) => {
+                    self.rec_pending = None;
+                    self.recorder = None; // stops it (the file it was writing is closed)
+                    if want.enabled {
+                        self.recorder = Some(crate::recorder::Recorder::start(want.clone(), &self.engine, self.cfg.ffmpeg_path.clone()));
+                        self.say(format!("Show recording on: {}", want.folder_path().display()));
+                    } else {
+                        self.say("Show recording off");
+                    }
+                }
+                Some((c, _)) if c == want => {}
+                _ => self.rec_pending = Some((want.clone(), Instant::now())),
+            }
+        }
+        let err = self.recorder.as_ref().map(|r| r.status.lock().error.clone()).unwrap_or_default();
+        if err != self.rec_error {
+            if !err.is_empty() {
+                self.say(format!("Show recording: {err}"));
+            }
+            self.rec_error = err;
+        }
+    }
+
+    /// What the show recorder is doing (the server's when this is a mirror); None when it is off.
+    pub fn recording(&self) -> Option<crate::recorder::RecStatus> {
+        if self.link.is_some() {
+            return self.rec_mirror.clone();
+        }
+        self.recorder.as_ref().map(|r| r.status.lock().clone())
+    }
+
+    /// Stop recording here (this machine is connecting to a server, which records instead). It
+    /// starts again by itself when this playout runs again with recording on.
+    pub fn stop_recording(&mut self) {
+        self.recorder = None;
     }
 
     pub fn save_all(&mut self) {

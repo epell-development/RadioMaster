@@ -21,6 +21,7 @@ mod midi;
 mod pdf;
 mod playout;
 mod plugins;
+mod recorder;
 mod remote;
 mod report;
 mod scheduler;

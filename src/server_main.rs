@@ -20,6 +20,7 @@ mod live;
 mod mic;
 mod playout;
 mod plugins;
+mod recorder;
 mod remote;
 mod scheduler;
 mod selfupdate;

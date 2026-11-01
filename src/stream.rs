@@ -288,7 +288,7 @@ pub fn split_args(line: &str) -> Vec<String> {
 }
 
 /// An encoder program fed through pipes: PCM in, encoded stream out.
-struct PipeEncoder {
+pub(crate) struct PipeEncoder {
     child: std::process::Child,
     pcm_tx: Option<crossbeam_channel::Sender<Vec<u8>>>,
     out_rx: Receiver<Vec<u8>>,
@@ -296,7 +296,7 @@ struct PipeEncoder {
 }
 
 impl PipeEncoder {
-    fn start(program: &str, args: &[String]) -> Result<Self> {
+    pub(crate) fn start(program: &str, args: &[String]) -> Result<Self> {
         use std::process::{Command, Stdio};
         let mut c = Command::new(program);
         c.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -341,7 +341,7 @@ impl PipeEncoder {
         Ok(PipeEncoder { child, pcm_tx: Some(pcm_tx), out_rx, errors })
     }
 
-    fn encode(&mut self, pcm: &[i16], out: &mut Vec<u8>) -> Result<()> {
+    pub(crate) fn encode(&mut self, pcm: &[i16], out: &mut Vec<u8>) -> Result<()> {
         let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
         let gone = self.pcm_tx.as_ref().is_none_or(|tx| tx.send(bytes).is_err());
         while let Ok(b) = self.out_rx.try_recv() {
@@ -353,6 +353,28 @@ impl PipeEncoder {
             bail!("the encoder stopped{}", if msg.is_empty() { String::new() } else { format!(": {msg}") });
         }
         Ok(())
+    }
+}
+
+impl PipeEncoder {
+    /// End the input and collect the rest of the output (for a file: the encoder writes its last
+    /// frames when its input ends). Gives up after `wait`.
+    pub(crate) fn finish(&mut self, out: &mut Vec<u8>, wait: Duration) {
+        self.pcm_tx = None;
+        let until = std::time::Instant::now() + wait;
+        loop {
+            while let Ok(b) = self.out_rx.try_recv() {
+                out.extend_from_slice(&b);
+            }
+            if self.child.try_wait().ok().flatten().is_some() || std::time::Instant::now() > until {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        // the output reader ends once the program has closed its output
+        while let Ok(b) = self.out_rx.recv_timeout(Duration::from_millis(500)) {
+            out.extend_from_slice(&b);
+        }
     }
 }
 
