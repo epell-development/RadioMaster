@@ -22,7 +22,7 @@ CI uses the fixed Rust version in `RUST_VERSION` at the top of `ci.yml`, so a ne
 every pull request red overnight. Bump it on purpose and fix what the newer clippy finds in the same pull request.
 
 `cargo audit` (`.github/workflows/audit.yml`) runs when the dependencies change and every Monday.
-A tag push checks the tag against the version before the release builds anything.
+A tag push checks the tag against the version before the release builds anything. To make a release, follow [RELEASE.md](RELEASE.md).
 
 ## MergeGuard
 

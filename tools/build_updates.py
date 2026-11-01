@@ -78,6 +78,24 @@ if latest:
     ver, date = latest.groups()
     home = pathlib.Path("site/index.html")
     home.write_text(re.sub(r'("softwareVersion": ")[^"]*(")', lambda m: m.group(1) + ver + m.group(2), home.read_text(encoding="utf-8")), encoding="utf-8")
+    # the "New in vX.Y.Z" line on the home page: the summary line under the newest CHANGELOG heading
+    newest = re.split(r"^## ", pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8"), flags=re.M)[1]
+    summary = []
+    for line in newest.split("\n")[1:]:
+        if not line.strip() or line.startswith(("**", "- ", "  ")):
+            break
+        summary.append(line.strip())
+    if not summary:
+        raise SystemExit(
+            f"CHANGELOG.md: add a one-line summary under '## v{ver}' (before **New**); "
+            f"it goes on the home page as 'New in v{ver}'"
+        )
+    news = f"<b>New in v{ver}</b> {inline(' '.join(summary))} <span>All updates →</span>"
+    text = home.read_text(encoding="utf-8")
+    if "<!-- NEWS -->" not in text:
+        raise SystemExit("site/index.html: the <!-- NEWS --> markers are missing")
+    text = re.sub(r"(<!-- NEWS -->).*?(<!-- /NEWS -->)", lambda m: m.group(1) + news + m.group(2), text, flags=re.S)
+    home.write_text(text, encoding="utf-8")
     sitemap = pathlib.Path("site/sitemap.xml")
     sitemap.write_text(re.sub(r"<lastmod>[^<]*</lastmod>", f"<lastmod>{date}</lastmod>", sitemap.read_text(encoding="utf-8")), encoding="utf-8")
-    print(f"site/index.html and site/sitemap.xml set to v{ver} ({date})")
+    print(f"site/index.html (version, New in) and site/sitemap.xml set to v{ver} ({date})")

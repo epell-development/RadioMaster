@@ -1,6 +1,8 @@
 # Changelog
 
 ## v0.2.10 — 2026-11-01
+Advert breaks that start on time, named and coloured cart pads, quick seeking in the playing track, your own sound card buffer size, and a universal Mac app
+
 **New**
 - Advert and jingle rules can interrupt the song on air at their set time instead of waiting for it to
   end. A countdown opens before the break (30 seconds by default) with what will play and Play now /
