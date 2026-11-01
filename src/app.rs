@@ -632,12 +632,10 @@ fn action_pick(action: ActionKind) -> Pick {
 }
 
 /// Where generator tracks come from: a category, or the files of an advert / jingle rule
-/// (stored as "rule:<id>"). `rules` = (id, name, adverts). `time` also offers a time announcement
-/// (for inserts).
-fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)], time: bool) {
+/// (stored as "rule:<id>"). `rules` = (id, name, adverts).
+fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)]) {
     let shown = match cur.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) {
         Some(rid) => rules.iter().find(|r| r.0 == rid).map(|r| format!("⚡ {}", r.1)).unwrap_or_else(|| tr("(deleted rule)").to_string()),
-        None if cur == crate::generator::TIME_SOURCE => format!("⏰ {}", tr("Time announcement")),
         None => cur.clone(),
     };
     egui::ComboBox::from_id_salt(id).selected_text(shown).width(170.0).show_ui(ui, |ui| {
@@ -652,10 +650,6 @@ fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, c
                 let tag = if *adverts { tr("advert") } else { tr("jingle") };
                 ui.selectable_value(cur, format!("rule:{rid}"), format!("⚡ {name}  ({tag})"));
             }
-        }
-        if time {
-            ui.separator();
-            ui.selectable_value(cur, crate::generator::TIME_SOURCE.to_string(), format!("⏰ {}", tr("Time announcement")));
         }
     });
 }

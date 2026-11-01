@@ -14,7 +14,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="RadioMaster">
 <meta property="og:title" content="How to use the playlist generator">
-<meta property="og:description" content="Categories, templates, patterns, jingle inserts and auto-playlist: build hours of programming in one click.">
+<meta property="og:description" content="Categories, templates, patterns and auto-playlist: build hours of programming in one click.">
 <meta property="og:url" content="https://radiomaster.dovafm.com/guides/playlist-generator/">
 <meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
 <meta property="og:image:width" content="1280">
@@ -23,7 +23,7 @@
 <meta property="og:locale" content="en_GB">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="How to use the playlist generator">
-<meta name="twitter:description" content="Categories, templates, patterns, jingle inserts and auto-playlist: build hours of programming in one click.">
+<meta name="twitter:description" content="Categories, templates, patterns and auto-playlist: build hours of programming in one click.">
 <meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
 <script type="application/ld+json">
 {
@@ -114,7 +114,7 @@
     <p class="eyebrow">Guide · Run the station</p>
     <h1 class="page-h">How to use the playlist generator</h1>
     <p class="lede" style="margin-top:16px">The playlist generator builds hours of programming from your music library in one click. You tell it what pools of songs you have (categories) and how an hour should sound (a template), and it fills the playlist, keeps artists and songs apart, changes the sound for different times of day and drops in jingles, talk and time announcements on the clock.</p>
-    <nav class="toc" aria-label="On this page"><a href="#before">Before you start</a><a href="#categories">Categories</a><a href="#templates">Templates</a><a href="#dayparts">Times of day</a><a href="#inserts">Inserts</a><a href="#generate">Preview and generate</a><a href="#auto">Auto-playlist</a><a href="#schedule">On a schedule</a><a href="#tips">Tips</a></nav>
+    <nav class="toc" aria-label="On this page"><a href="#before">Before you start</a><a href="#categories">Categories</a><a href="#templates">Templates</a><a href="#dayparts">Times of day</a><a href="#generate">Preview and generate</a><a href="#auto">Auto-playlist</a><a href="#schedule">On a schedule</a><a href="#tips">Tips</a></nav>
   </section>
 
   <section class="block">
@@ -147,15 +147,12 @@
       <div class="rundown-table"><table><thead><tr><th>Time of day</th><th>Hours and days</th><th>Pattern</th></tr></thead><tbody><tr><td class="it">Breakfast</td><td>06:00–10:00, Mon–Fri</td><td>1 × Talk, 2 × Current</td></tr><tr><td class="it">Overnight</td><td>00:00–06:00, every day</td><td>3 × Gold, 1 × Station IDs</td></tr></tbody></table></div>
       <p>The clock follows the new tracks from where they will start on air, so a template that runs from 05:00 switches to the breakfast pattern at about 06:00.</p>
 
-      <h2 id="inserts">4. Inserts</h2>
-      <p>Inserts are things that go in on their own schedule instead of by position in the pattern, set up like <a href="/guides/advertisement-scheduler/">advert and jingle rules</a>. Press <b>➕ Add insert</b>, pick what to insert and how many, then when:</p>
-      <div class="rundown-table"><table><thead><tr><th>When</th><th>Example</th></tr></thead><tbody><tr><td class="k">after every N songs</td><td>1 × Station IDs after every 4 songs</td></tr><tr><td class="k">every N minutes</td><td>A jingle every 15 minutes. Tick <b>on the clock</b> to count from the top of the hour, so every 60 minutes means at :00.</td></tr><tr><td class="k">at set times</td><td>1 × Talk at 18:00 and 20:30</td></tr></tbody></table></div>
-      <p>Each insert can be limited to some hours (untick <b>all day</b>). An insert can come from a category, from the files of an advert or jingle rule, or be a <b>⏰ Time announcement</b>: <b>➕ Add time announcement</b> adds one at the top of every hour. <b>➕ Add jingles</b> is a shortcut that adds your first jingle rule every 15 minutes.</p>
-      <p>Timed inserts go in after the song that's playing when the time comes, so songs are never cut.</p>
+      <h3>Jingles, adverts and time announcements</h3>
+      <p>For jingles and IDs in a fixed spot, add them as a pattern step (step 4 in the example above). For anything on its own schedule, such as a jingle every 15 minutes, adverts at set times or after every few songs, use the <a href="/guides/advertisement-scheduler/">advertisement scheduler</a>: its rules fire while the generated playlist plays, so they aren't put in twice. For a time announcement at the top of every hour, use <b>➕ Hourly time announcement</b> in the <a href="/guides/event-scheduler/">event scheduler</a>.</p>
       <h3>Hour markers</h3>
       <p>Tick <b>Hour marker at the top of every hour</b> and the generator places an <a href="/#playlist">hour marker</a> where each new hour starts, so the station stays on the clock even if the songs run long or short.</p>
 
-      <h2 id="generate">5. Preview and generate</h2>
+      <h2 id="generate">4. Preview and generate</h2>
       <p><b>👁 Preview</b> shows the running order with the time each row starts, the number of tracks and the total length, without touching the playlist. Press <b>⟳ Again</b> for another mix, tick <b>after the playlist</b> to see it as an addition, and <b>✔ Put it in the playlist</b> when you like it. Or go straight to:</p>
       <ul>
         <li><b>▶ Generate (replace playlist)</b> clears the playlist and fills it with the template.</li>
@@ -175,7 +172,6 @@ APPEND Daytime</pre></div>
       <ul>
         <li>Within one generated playlist, every track in a category plays once before any of them repeats, so big categories stay fresh.</li>
         <li>If artist separation can't be met (a small category with few artists), the generator still picks a track rather than leaving a gap.</li>
-        <li>Timed inserts (jingles, IDs, adverts) don't count towards artist separation.</li>
         <li>Times of day let one template cover a whole day. For very different shows you can still make a template each and switch between them with the event scheduler.</li>
         <li>While connected to <a href="/server/">RadioMaster Server</a>, the library and folders are the server's, so a category folder is typed the way the server sees it, for example <code>/srv/music/current</code>.</li>
       </ul>

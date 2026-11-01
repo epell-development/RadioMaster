@@ -141,7 +141,7 @@ remote control HTTP API, station profiles, local operator accounts.
 **Rules** say what plays (an advert / jingle folder, chosen files, or the Adverts list), how often (after every N
 songs, every N minutes or hours, or at set times) and when the rule is in force (dates, days, hours). The **Adverts
 list** holds your adverts with the dates and days each may run. Rules can also be used in the playlist generator
-(as a pattern step or inserted every N minutes) and run by the Event scheduler or the `RULE <name>` command.
+(as a pattern step) and run by the Event scheduler or the `RULE <name>` command.
 
 ## Event scheduler (Tools → Event scheduler, F3)
 At a set time (on chosen days and dates): generate a new playlist from a template, append one, play a rule's
