@@ -466,8 +466,17 @@ fn cart_pad(ui: &mut egui::Ui, size: [f32; 2], label: &str, fill: Color32, enabl
         } else {
             fill
         };
-        let lum = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
-        let text = if lum > 150.0 { Color32::BLACK } else { Color32::WHITE };
+        // WCAG relative luminance: black text where it contrasts more than white (above about 0.18)
+        let lin = |c: u8| {
+            let c = c as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let lum = 0.2126 * lin(fill.r()) + 0.7152 * lin(fill.g()) + 0.0722 * lin(fill.b());
+        let text = if lum > 0.179 { Color32::BLACK } else { Color32::WHITE };
         ui.painter().rect(rect, v.corner_radius, fill, v.bg_stroke, egui::StrokeKind::Inside);
         let font = egui::TextStyle::Button.resolve(ui.style());
         let mut job = egui::text::LayoutJob::simple(label.to_owned(), font, text, rect.width() - 10.0);
