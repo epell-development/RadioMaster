@@ -339,6 +339,9 @@ const TOKEN_IDLE: Duration = Duration::from_secs(24 * 3600);
 
 /// MP3 bitrate of the mix sent to the apps.
 const LISTEN_KBPS: u32 = 192;
+/// How many mix blocks (about 23 ms each) may pile up while an app (or a proxy in front of the
+/// server) reads slowly before the oldest are skipped: about 3 s. The app trims its own delay.
+const LISTEN_BACKLOG: usize = 130;
 /// An app's mic goes off when nothing arrives for this long (the app quit or lost the network).
 const MIC_IDLE: Duration = Duration::from_secs(3);
 /// Mic audio waits for this many decoded MP3 frames (about 26 ms each) before it plays.
@@ -1065,11 +1068,12 @@ impl Api {
             };
             let engine = api.core.lock().engine.clone();
             let mut w = req.into_writer();
-            let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nCache-Control: no-cache, no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n\r\n";
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nCache-Control: no-cache, no-store, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n\r\n";
             if w.write_all(head.as_bytes()).and_then(|_| w.flush()).is_err() {
                 return;
             }
-            let (tx, rx) = crossbeam_channel::bounded::<Arc<Vec<i16>>>(64);
+            // room for a few seconds: a proxy in front of the server can stop reading for a moment
+            let (tx, rx) = crossbeam_channel::bounded::<Arc<Vec<i16>>>(LISTEN_BACKLOG * 2);
             engine.add_tap(tx);
             let mut out = Vec::new();
             let mut checked = Instant::now();
@@ -1077,7 +1081,7 @@ impl Api {
                 match rx.recv_timeout(Duration::from_secs(1)) {
                     Ok(pcm) => {
                         // keep the delay short: skip what piled up while the network was slow
-                        while rx.len() > 12 {
+                        while rx.len() > LISTEN_BACKLOG {
                             let _ = rx.try_recv();
                         }
                         out.clear();
