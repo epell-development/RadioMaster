@@ -73,6 +73,11 @@ pub enum Cmd {
         id: u64,
         after: Option<usize>,
     },
+    /// the presenter's answer to an interrupting break's countdown
+    Break {
+        rule: u64,
+        act: BreakAct,
+    },
     Rescan,
     WriteTags {
         track: Track,
@@ -119,6 +124,7 @@ impl Cmd {
             Cmd::Event { .. } => p.tool(tool::SCHEDULER),
             Cmd::Generate { .. } => p.edit_playlists && p.tool(tool::GENERATOR),
             Cmd::FireRule { .. } => p.edit_playlists && p.tool(tool::ADS),
+            Cmd::Break { .. } => p.playback,
             Cmd::Rescan => p.settings || p.tool(tool::LIBRARY),
             Cmd::WriteTags { .. } | Cmd::SetCues { .. } | Cmd::ClearCues { .. } | Cmd::ReanalyseCues => p.tool(tool::TRACK_EDITOR),
         }
@@ -291,6 +297,8 @@ pub struct Live {
     pub notify: String,
     /// the server's clock when this was sent (unix ms; 0 from older servers)
     pub now_ms: i64,
+    /// interrupting advert / jingle breaks counting down
+    pub breaks: Vec<AdBreak>,
 }
 
 /// One poll's answer. The lists come only when they changed since the revision the app has.
@@ -726,6 +734,7 @@ impl Playout {
             scan_progress: self.scan_progress,
             notify: self.notify.lock().clone(),
             now_ms: chrono::Utc::now().timestamp_millis(),
+            breaks: self.breaks.clone(),
         }
     }
 
@@ -768,6 +777,7 @@ impl Playout {
             }
         }
         self.mirror_carts = l.carts;
+        self.breaks = l.breaks;
         self.scanning = l.scanning;
         self.scan_progress = l.scan_progress;
     }
@@ -878,6 +888,7 @@ impl Playout {
             Cmd::FireRule { tab, id, after } if tab_ok(self, tab) => {
                 self.with_tab(tab, |p| p.fire_rule(id, after));
             }
+            Cmd::Break { rule, act } => self.break_action(rule, act),
             Cmd::Rescan => self.start_scan(),
             Cmd::WriteTags { track } => self.update_tags(track),
             Cmd::SetCues { path, cues, duration } => self.set_manual_cues(&path, cues, duration),

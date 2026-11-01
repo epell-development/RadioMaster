@@ -342,7 +342,16 @@ pub struct AdRule {
     /// in force between these hours (from == to: all day; 22 → 6 runs over midnight)
     pub from_hour: u32,
     pub to_hour: u32,
+    /// set times / every N minutes: cut into the track on air when the time comes instead of
+    /// queueing after it
+    pub interrupt: bool,
+    /// with `interrupt`: seconds of countdown the presenter sees first, with Play now / Snooze /
+    /// Skip (0 = no countdown)
+    pub warn_secs: u32,
 }
+
+/// Longest countdown before an interrupting rule cuts in.
+pub const MAX_WARN_SECS: u32 = 300;
 
 impl Default for AdRule {
     fn default() -> Self {
@@ -367,6 +376,8 @@ impl Default for AdRule {
             days: [true; 7],
             from_hour: 0,
             to_hour: 0,
+            interrupt: false,
+            warn_secs: 30,
         }
     }
 }
@@ -402,6 +413,11 @@ impl AdRule {
                 }
             }
         }
+    }
+
+    /// Whether the rule interrupts the track on air (only set-time and every-N-minutes rules can).
+    pub fn cuts_in(&self) -> bool {
+        self.interrupt && self.trigger != Trigger::Songs
     }
 
     /// One line saying what the rule does, e.g. "1 random jingle after every 4 songs".
@@ -445,7 +461,8 @@ impl AdRule {
             ));
         }
         let limits = if limits.is_empty() { String::new() } else { format!(" · {}", limits.join(" · ")) };
-        format!("{pick} {when}{limits}")
+        let cut = if self.cuts_in() { ", cutting in" } else { "" };
+        format!("{pick} {when}{cut}{limits}")
     }
 }
 
