@@ -146,7 +146,7 @@ pub fn cfg_denied(old: &Config, new: &Config, p: &crate::auth::Perms) -> Option<
         "dsp" | "eq_presets" => p.tool(tool::AUDIO_FX),
         "azuracast" => p.tool(tool::AZURACAST),
         "carts" => p.jingles,
-        "encoders" => p.streaming,
+        "encoders" | "recording" => p.streaming,
         "mic_gain" | "mic_duck" | "mic_mode" | "volume" => p.playback,
         "loop_playlist" | "random_fill" | "hour_lines" | "announce" => p.edit_playlists,
         _ => p.settings,
@@ -299,6 +299,8 @@ pub struct Live {
     pub now_ms: i64,
     /// interrupting advert / jingle breaks counting down
     pub breaks: Vec<AdBreak>,
+    /// the show recorder (None: off, or an older server)
+    pub recording: Option<crate::recorder::RecStatus>,
 }
 
 /// One poll's answer. The lists come only when they changed since the revision the app has.
@@ -735,6 +737,7 @@ impl Playout {
             notify: self.notify.lock().clone(),
             now_ms: chrono::Utc::now().timestamp_millis(),
             breaks: self.breaks.clone(),
+            recording: self.recording(),
         }
     }
 
@@ -778,6 +781,7 @@ impl Playout {
         }
         self.mirror_carts = l.carts;
         self.breaks = l.breaks;
+        self.rec_mirror = l.recording;
         self.scanning = l.scanning;
         self.scan_progress = l.scan_progress;
     }
