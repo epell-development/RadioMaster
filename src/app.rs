@@ -439,6 +439,62 @@ pub(super) fn date_edit(ui: &mut egui::Ui, id: impl std::hash::Hash, value: &mut
     changed
 }
 
+/// Background colours offered in a cart pad's right-click menu.
+fn cart_colors() -> [(&'static str, [u8; 3]); 10] {
+    [
+        (tr("Blue"), [40, 80, 130]),
+        (tr("Teal"), [20, 120, 120]),
+        (tr("Green"), [46, 125, 50]),
+        (tr("Olive"), [110, 130, 30]),
+        (tr("Gold"), [190, 150, 20]),
+        (tr("Orange"), [205, 105, 30]),
+        (tr("Pink"), [185, 65, 125]),
+        (tr("Purple"), [110, 60, 160]),
+        (tr("Brown"), [120, 80, 50]),
+        (tr("Grey"), [90, 90, 90]),
+    ]
+}
+
+/// A cart wall pad: always exactly `size`, whatever the name, so the grid stays even.
+/// Long names wrap onto two lines and are cut off with "…" (the full name shows in the tooltip).
+fn cart_pad(ui: &mut egui::Ui, size: [f32; 2], label: &str, fill: Color32, enabled: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(size[0], size[1]), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let v = ui.style().interact(&resp);
+        let fill = if resp.is_pointer_button_down_on() {
+            fill.gamma_multiply(0.8)
+        } else if resp.hovered() && enabled {
+            fill.lerp_to_gamma(Color32::WHITE, 0.12)
+        } else {
+            fill
+        };
+        // WCAG relative luminance: black text where it contrasts more than white (above about 0.18)
+        let lin = |c: u8| {
+            let c = c as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let lum = 0.2126 * lin(fill.r()) + 0.7152 * lin(fill.g()) + 0.0722 * lin(fill.b());
+        let text = if lum > 0.179 { Color32::BLACK } else { Color32::WHITE };
+        ui.painter().rect(rect, v.corner_radius, fill, v.bg_stroke, egui::StrokeKind::Inside);
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::simple(label.to_owned(), font, text, rect.width() - 10.0);
+        job.wrap.max_rows = 2;
+        job.wrap.break_anywhere = true;
+        job.halign = egui::Align::Center;
+        let galley = ui.painter().layout_job(job);
+        let pos = egui::pos2(rect.center().x, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley.clone(), text);
+        if galley.elided {
+            return resp.on_hover_text(label);
+        }
+    }
+    resp
+}
+
 fn fmt(secs: f32) -> String {
     let s = secs.max(0.0) as u64;
     if s >= 3600 {
@@ -2774,25 +2830,46 @@ impl App {
                     let pad: &mut CartPad = &mut core.cfg.carts[i];
                     let loaded = !pad.path.is_empty();
                     let on = loaded && playing.iter().any(|p| p.as_path() == std::path::Path::new(&pad.path));
-                    let label = if loaded { pad.label.clone() } else { format!("Pad {}", i + 1) };
+                    let label = if loaded && !pad.label.is_empty() { pad.label.clone() } else { format!("Pad {}", i + 1) };
                     let fill = if on {
                         Color32::from_rgb(200, 60, 60)
+                    } else if let Some([r, g, b]) = pad.color {
+                        Color32::from_rgb(r, g, b)
                     } else if loaded {
                         Color32::from_rgb(40, 80, 130)
                     } else {
                         Color32::from_gray(48)
                     };
-                    let b = ui.add_sized([pad_width, 54.0], egui::Button::new(RichText::new(label).strong()).fill(fill).wrap());
+                    let b = cart_pad(ui, [pad_width, 54.0], &label, fill, loaded);
                     if b.clicked() && loaded && may_play {
                         trigger = Some(i);
                     }
+                    let b = if loaded { b.on_hover_text(&pad.path) } else { b };
                     b.context_menu(|ui| {
                         if ui.button(tr("Assign audio file…")).clicked() {
                             self.pick(Pick::File(AUDIO.0, AUDIO.1), tr("Assign audio file"), move |_, v| Some(Dlg::Cart(i, v.into_iter().next()?)));
                             ui.close_menu();
                         }
-                        ui.label(tr("Label:"));
-                        ui.add(egui::TextEdit::singleline(&mut pad.label).desired_width(220.0));
+                        ui.label(tr("Pad name:"));
+                        ui.add(egui::TextEdit::singleline(&mut pad.label).desired_width(220.0).hint_text(tr("Shown on the pad")));
+                        ui.label(tr("Colour:"));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                            for (name, [r, g, b]) in cart_colors() {
+                                let c = Color32::from_rgb(r, g, b);
+                                let picked = pad.color == Some([r, g, b]);
+                                let sw = ui
+                                    .add(egui::Button::new("").fill(c).min_size(egui::vec2(20.0, 20.0)).selected(picked))
+                                    .on_hover_text(name);
+                                if sw.clicked() {
+                                    pad.color = Some([r, g, b]);
+                                }
+                            }
+                        });
+                        if ui.add_enabled(pad.color.is_some(), egui::Button::new(tr("Default colour"))).clicked() {
+                            pad.color = None;
+                        }
+                        ui.separator();
                         if ui.button(tr("Clear pad")).clicked() {
                             *pad = CartPad::default();
                             ui.close_menu();
@@ -2807,7 +2884,7 @@ impl App {
                 core.trigger_cart(i);
             }
             ui.label(
-                RichText::new(tr("Click to fire (plays over the main program); click a red, playing pad to stop it. Right-click a pad to assign or relabel."))
+                RichText::new(tr("Click to fire (plays over the main program); click a red, playing pad to stop it. Right-click a pad to assign audio, rename it or pick a colour."))
                     .small()
                     .color(GRAY),
             );

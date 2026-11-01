@@ -248,6 +248,8 @@ impl Default for AzuraConfig {
 pub struct CartPad {
     pub label: String,
     pub path: String,
+    /// background colour (sRGB); `None` uses the default pad colour
+    pub color: Option<[u8; 3]>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -930,6 +932,15 @@ mod rule_tests {
         assert_eq!((b.trigger, b.times.clone(), b.use_ad_list, b.pick), (Trigger::Times, vec![(15, 45)], true, RotPick::All));
         assert_ne!(j.id, b.id);
         assert!(c.rotations.is_empty() && c.ad_breaks.is_empty());
+    }
+
+    #[test]
+    fn cart_pads_keep_their_colour_and_old_pads_have_none() {
+        let old: CartPad = serde_json::from_str(r#"{"label":"ID","path":"/j/id.mp3"}"#).unwrap();
+        assert_eq!(old.color, None);
+        let pad = CartPad { label: "News in".into(), path: "/j/news.mp3".into(), color: Some([200, 60, 60]) };
+        let back: CartPad = serde_json::from_str(&serde_json::to_string(&pad).unwrap()).unwrap();
+        assert_eq!((back.label.as_str(), back.color), ("News in", Some([200, 60, 60])));
     }
 
     #[test]
