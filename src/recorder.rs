@@ -46,6 +46,8 @@ pub struct RecStatus {
 
 pub struct Recorder {
     stop: Arc<AtomicBool>,
+    /// set when the thread has closed its file and ended
+    done: Arc<AtomicBool>,
     pub status: Arc<Mutex<RecStatus>>,
     /// the settings it was started with
     pub cfg: RecordCfg,
@@ -56,17 +58,31 @@ impl Recorder {
     /// `ffmpeg`: the ffmpeg program for FLAC ("" = look for it).
     pub fn start(cfg: RecordCfg, engine: &Engine, ffmpeg: String) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
         let status = Arc::new(Mutex::new(RecStatus { state: "starting".into(), ..Default::default() }));
         // about 45 s of sound: enough to ride out a slow network folder
         let (tx, rx) = bounded::<Arc<Vec<i16>>>(2048);
         engine.add_tap(tx);
-        let (s2, st2, c2, f2) = (stop.clone(), status.clone(), cfg.clone(), ffmpeg.clone());
-        thread::spawn(move || run(&c2, &f2, rx, &s2, &st2));
-        Recorder { stop, status, cfg, ffmpeg }
+        let (s2, d2, st2, c2, f2) = (stop.clone(), done.clone(), status.clone(), cfg.clone(), ffmpeg.clone());
+        thread::spawn(move || {
+            run(&c2, &f2, rx, &s2, &st2);
+            d2.store(true, Ordering::Relaxed);
+        });
+        Recorder { stop, done, status, cfg, ffmpeg }
     }
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    /// Stop and wait (up to `wait`) for the file being written to be closed. For quitting: the
+    /// process ending would otherwise lose the last seconds still buffered.
+    pub fn finish(&self, wait: Duration) {
+        self.stop();
+        let until = Instant::now() + wait;
+        while !self.done.load(Ordering::Relaxed) && Instant::now() < until {
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 

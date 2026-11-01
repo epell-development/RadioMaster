@@ -822,6 +822,14 @@ impl Playout {
         self.recorder = None;
     }
 
+    /// Quitting: stop recording and wait for the last file to be closed (dropping the recorder
+    /// only asks its thread to stop, and the process may end before it has).
+    pub fn finish_recording(&mut self) {
+        if let Some(r) = self.recorder.take() {
+            r.finish(std::time::Duration::from_secs(12));
+        }
+    }
+
     pub fn save_all(&mut self) {
         if self.link.is_some() {
             return;

@@ -4096,6 +4096,7 @@ impl eframe::App for App {
         for i in 0..c.cfg.encoders.len() {
             c.stop_encoder(i);
         }
+        c.finish_recording();
         c.save_all();
         c.plugins.stop_services();
         drop(c);
