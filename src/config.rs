@@ -328,6 +328,10 @@ pub struct AdRule {
     pub times: Vec<(u32, u32)>,
     /// adverts: take them from the Adverts list (each with its own dates and days)
     pub use_ad_list: bool,
+    /// with `use_ad_list`: play only the adverts in `ad_ids` instead of every advert in the list
+    pub ad_choose: bool,
+    /// adverts chosen for this rule (`Ad::id`), in Adverts list order when played in turn
+    pub ad_ids: Vec<u64>,
     pub folder: String,
     /// chosen files; when not empty these are used instead of the folder
     pub files: Vec<String>,
@@ -368,6 +372,8 @@ impl Default for AdRule {
             on_clock: true,
             times: vec![(12, 0)],
             use_ad_list: false,
+            ad_choose: false,
+            ad_ids: vec![],
             folder: String::new(),
             files: vec![],
             count: 1,
@@ -417,6 +423,11 @@ impl AdRule {
         }
     }
 
+    /// Whether the rule may play advert `ad` from the Adverts list.
+    pub fn plays_ad(&self, ad: &Ad) -> bool {
+        self.adverts && self.use_ad_list && (!self.ad_choose || self.ad_ids.contains(&ad.id))
+    }
+
     /// Whether the rule interrupts the track on air (only set-time and every-N-minutes rules can).
     pub fn cuts_in(&self) -> bool {
         self.interrupt && self.trigger != Trigger::Songs
@@ -464,7 +475,13 @@ impl AdRule {
         }
         let limits = if limits.is_empty() { String::new() } else { format!(" · {}", limits.join(" · ")) };
         let cut = if self.cuts_in() { ", cutting in" } else { "" };
-        format!("{pick} {when}{cut}{limits}")
+        let from = if self.adverts && self.use_ad_list && self.ad_choose {
+            let n = self.ad_ids.len();
+            format!(" from {n} chosen advert{}", if n == 1 { "" } else { "s" })
+        } else {
+            String::new()
+        };
+        format!("{pick}{from} {when}{cut}{limits}")
     }
 }
 
@@ -591,7 +608,11 @@ impl Default for Template {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Ad {
+    /// stays the same when adverts are added, removed or edited (rules choose adverts by it)
+    pub id: u64,
     pub name: String,
+    /// the company or client the advert is for
+    pub advertiser: String,
     pub enabled: bool,
     pub path: String,
     /// YYYY-MM-DD, empty = no limit
@@ -602,7 +623,9 @@ pub struct Ad {
 impl Default for Ad {
     fn default() -> Self {
         Self {
+            id: 0,
             name: "New ad".into(),
+            advertiser: String::new(),
             enabled: true,
             path: String::new(),
             start_date: String::new(),
@@ -612,6 +635,14 @@ impl Default for Ad {
     }
 }
 impl Ad {
+    /// "Advertiser — name", or just the name.
+    pub fn label(&self) -> String {
+        if self.advertiser.trim().is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} — {}", self.advertiser.trim(), self.name)
+        }
+    }
     pub fn active(&self, now: &DateTime<Local>) -> bool {
         let today = now.format("%Y-%m-%d").to_string();
         self.enabled
@@ -812,7 +843,41 @@ impl Config {
             c.remote.port = 9258;
         }
         c.migrate_ad_rules();
+        c.ensure_ad_ids();
         c
+    }
+
+    /// Give every advert a unique id (adverts saved before v0.2.11 have none). Returns whether
+    /// anything changed.
+    pub fn ensure_ad_ids(&mut self) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut next = self.ads.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+        let mut changed = false;
+        for a in &mut self.ads {
+            if a.id == 0 || !seen.insert(a.id) {
+                a.id = next;
+                seen.insert(next);
+                next += 1;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// A new advert with an id not used yet.
+    pub fn new_ad(&self) -> Ad {
+        Ad { id: self.ads.iter().map(|a| a.id).max().unwrap_or(0) + 1, ..Default::default() }
+    }
+
+    /// Remove advert `i` from the list and from the rules that chose it.
+    pub fn remove_ad(&mut self, i: usize) {
+        if i >= self.ads.len() {
+            return;
+        }
+        let id = self.ads.remove(i).id;
+        for r in &mut self.ad_rules {
+            r.ad_ids.retain(|x| *x != id);
+        }
     }
 
     /// v0.2.5: song-count rules and commercial breaks became one list of advert / jingle rules.
@@ -943,5 +1008,19 @@ mod rule_tests {
         assert!(r.summary().contains("every 2 hours"));
         let t = AdRule { enabled: true, trigger: Trigger::Times, times: vec![(9, 0)], ..Default::default() };
         assert!(t.due_now(&at(2026, 10, 20, 9, 0), None) && !t.due_now(&at(2026, 10, 20, 9, 1), None));
+    }
+
+    #[test]
+    fn old_adverts_get_ids() {
+        let old = r#"{"ads":[{"name":"A","path":"a.mp3"},{"name":"B","path":"b.mp3"},{"id":2,"name":"C"}]}"#;
+        let mut c: Config = serde_json::from_str(old).unwrap();
+        assert!(c.ensure_ad_ids());
+        let ids: Vec<u64> = c.ads.iter().map(|a| a.id).collect();
+        assert_eq!(ids, [3, 4, 2]);
+        assert!(!c.ensure_ad_ids());
+        assert_eq!(c.new_ad().id, 5);
+        assert_eq!(c.ads[0].label(), "A");
+        c.ads[0].advertiser = "Acme".into();
+        assert_eq!(c.ads[0].label(), "Acme — A");
     }
 }

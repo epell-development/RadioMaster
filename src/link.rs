@@ -455,6 +455,9 @@ impl Fs {
 
 /// How much of the server's mix is buffered before it plays (decoded MP3 frames of about 26 ms).
 const LISTEN_PREBUFFER: usize = 12;
+/// How far that may grow when the sound keeps running dry (about 6 s): a reverse proxy or CDN in
+/// front of the server (Cloudflare, nginx, IIS) can pass the stream on in bursts a few seconds apart.
+const LISTEN_PREBUFFER_MAX: usize = 230;
 /// MP3 bitrate of the mic sent to the server.
 const MIC_KBPS: u32 = 128;
 /// The mic goes up in slices this long.
@@ -496,7 +499,7 @@ impl Listener {
         token: Arc<Mutex<String>>,
         say: Box<dyn Fn(String) + Send>,
     ) -> Listener {
-        let (feed, src) = crate::engine::net_feed(LISTEN_PREBUFFER);
+        let (feed, src) = crate::engine::net_feed_adaptive(LISTEN_PREBUFFER, LISTEN_PREBUFFER_MAX);
         engine.set_feed(Some(src));
         let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(Hearing::Connecting));

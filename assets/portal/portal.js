@@ -571,7 +571,7 @@ $("autoSave").addEventListener("click", () => saveCfg((c) => {
 $("tplAdd").addEventListener("click", () => editTemplate(-1));
 $("catAdd").addEventListener("click", () => editCategory(-1));
 
-/// Rows of (source, numbers…) with add and remove: template steps and markers.
+/// Rows of (source, numbers…) with add and remove: template steps.
 function stepRows(items, make, fields, addText) {
   const box = el("div");
   const draw = () => {
