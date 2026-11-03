@@ -272,7 +272,8 @@ pub fn open_video(path: &Path, secs: f32) -> anyhow::Result<(Pcm, f32)> {
             let d = a.duration();
             Ok((Box::new(rodio::source::UniformSourceIterator::<_, f32>::new(a, 2, SR)), d))
         }
-        Err(e) => open_audio(path, secs).map_err(|f| anyhow::anyhow!("{e}; {f}")),
+        // ffmpeg is the last try, so its message is the one that says what to do
+        Err(_) => open_audio(path, secs),
     }
 }
 
