@@ -643,6 +643,8 @@ impl Playout {
                 *sh = self.cfg.azuracast.clone();
             }
         }
+        // video files whose sound needs ffmpeg use the one chosen in Settings
+        crate::media::set_ffmpeg_choice(&self.cfg.ffmpeg_path);
         let st = self.engine.status();
         let ended = self.engine.take_ended();
         self.status = st.clone();

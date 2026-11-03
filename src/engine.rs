@@ -454,6 +454,9 @@ pub fn open_at(path: &Path, secs: f32) -> Result<Pcm> {
 /// Opens a file at `secs` seconds; also gives its length (0 = unknown) without opening it twice.
 fn open_seek(path: &Path, secs: f32) -> Result<(Pcm, f32)> {
     // a bigger read buffer means fewer, larger disk reads (kind to slow and network drives)
+    if crate::library::is_video(path) {
+        return crate::media::open_video(path, secs);
+    }
     let mut dec = Decoder::new(BufReader::with_capacity(256 * 1024, File::open(path)?))?;
     let dur = dec.total_duration().map(|d| d.as_secs_f32()).unwrap_or(0.0);
     if secs > 0.0 {

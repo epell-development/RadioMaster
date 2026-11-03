@@ -384,6 +384,8 @@ pub struct App {
     left_w: f32,
     right_w: f32,
     art_rx: Option<mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>>,
+    /// the Video window and panels
+    video: crate::video::Viewer,
     /// File → Connect to Server
     srv: serverui::ServerUi,
     files: fileui::FileUi,
@@ -747,6 +749,7 @@ impl App {
             left_w: 300.0,
             right_w: 400.0,
             art_rx: None,
+            video: Default::default(),
             srv: Default::default(),
             files: Default::default(),
             seek_drag: None,
@@ -1211,6 +1214,7 @@ impl App {
                         ToolWin::FileExplorer,
                         ToolWin::Cleanup,
                         ToolWin::Notepad,
+                        ToolWin::Video,
                         ToolWin::Plugins,
                     ] {
                         let sc = match w {
@@ -4021,6 +4025,7 @@ impl eframe::App for App {
         });
         self.repeat_window(ctx, &mut core);
         self.keys_window(ctx);
+        self.video.end_frame();
         self.az_take_downloads(&mut core);
         if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
             // at start-up, then every 6 hours for stations that run for weeks

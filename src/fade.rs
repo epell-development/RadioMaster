@@ -92,6 +92,13 @@ impl Waveform {
     /// Decode a file and build its waveform. Runs on a background thread, at a gentle pace: it
     /// rests as long as it works, so on a slow PC playback and the window keep a core to themselves.
     pub fn analyze(path: &Path) -> Result<Waveform> {
+        if crate::library::is_video(path) {
+            // rodio's decoder panics on video files: symphonia or ffmpeg, as stereo at the engine's rate
+            let (src, _) = crate::media::open_video(path, 0.0)?;
+            let rate = crate::engine::SR;
+            let gentle = Gentle { inner: src, n: 0, every: rate as usize * 2 * 5, t: Instant::now() };
+            return Ok(Self::from_interleaved(gentle, rate));
+        }
         let dec = Decoder::new(BufReader::with_capacity(256 * 1024, File::open(path)?))?;
         // the file's own rate: envelopes don't need resampling, which cost as much as the decoding
         let (rate, channels) = (dec.sample_rate().max(1), dec.channels().max(1) as usize);
