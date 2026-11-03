@@ -102,6 +102,10 @@ pub enum Cmd {
         tab: usize,
         rows: Vec<usize>,
     },
+    /// "Stop after this track" on or off
+    StopAfter {
+        on: bool,
+    },
 }
 
 impl Cmd {
@@ -117,6 +121,7 @@ impl Cmd {
             | Cmd::Prev
             | Cmd::Volume { .. }
             | Cmd::Seek { .. }
+            | Cmd::StopAfter { .. }
             | Cmd::TabOnAir { .. } => p.playback,
             Cmd::Cart { .. } | Cmd::StopCarts => p.jingles,
             Cmd::EncoderStart { .. } | Cmd::EncoderStop { .. } => p.streaming,
@@ -147,7 +152,7 @@ pub fn cfg_denied(old: &Config, new: &Config, p: &crate::auth::Perms) -> Option<
         "azuracast" => p.tool(tool::AZURACAST),
         "carts" => p.jingles,
         "encoders" | "recording" => p.streaming,
-        "mic_gain" | "mic_duck" | "mic_mode" | "volume" => p.playback,
+        "mic_gain" | "mic_duck" | "mic_mode" | "volume" | "repeat_track" | "shuffle" => p.playback,
         "loop_playlist" | "random_fill" | "hour_lines" | "announce" => p.edit_playlists,
         _ => p.settings,
     };
@@ -301,6 +306,10 @@ pub struct Live {
     pub breaks: Vec<AdBreak>,
     /// the show recorder (None: off, or an older server)
     pub recording: Option<crate::recorder::RecStatus>,
+    /// "Stop after this track" is on
+    pub stop_after: bool,
+    /// the row Shuffle plays next on the on-air playlist
+    pub shuffle_next: Option<usize>,
 }
 
 /// One poll's answer. The lists come only when they changed since the revision the app has.
@@ -738,6 +747,8 @@ impl Playout {
             now_ms: chrono::Utc::now().timestamp_millis(),
             breaks: self.breaks.clone(),
             recording: self.recording(),
+            stop_after: self.stop_after,
+            shuffle_next: self.shuffle_next,
         }
     }
 
@@ -782,6 +793,8 @@ impl Playout {
         self.mirror_carts = l.carts;
         self.breaks = l.breaks;
         self.rec_mirror = l.recording;
+        self.stop_after = l.stop_after;
+        self.shuffle_next = l.shuffle_next;
         self.scanning = l.scanning;
         self.scan_progress = l.scan_progress;
     }
@@ -872,6 +885,7 @@ impl Playout {
             }
             Cmd::PauseToggle => self.pause_toggle(),
             Cmd::Stop => self.stop(),
+            Cmd::StopAfter { on } => self.set_stop_after(on),
             Cmd::Next => self.next(),
             Cmd::Prev => self.prev(),
             Cmd::Volume { v } => self.set_volume(v.clamp(0.0, 1.0)),
@@ -1002,6 +1016,25 @@ mod tests {
         assert_eq!(cfg_denied(&old, &new, &crate::auth::Perms::default()), None);
         assert!(Cmd::Next.allowed(&p) && !Cmd::EncoderStart { i: 0 }.allowed(&p));
         assert!(!Cmd::Generate { tab: 0, name: "Hits".into(), append: false }.allowed(&p));
+    }
+
+    #[test]
+    fn play_modes_reach_the_server_and_come_back() {
+        // what the web portal sends
+        let c: Cmd = serde_json::from_str(r#"{"cmd":"stop_after","on":true}"#).unwrap();
+        assert!(matches!(c, Cmd::StopAfter { on: true }));
+        assert!(c.allowed(&crate::auth::Perms::presenter()));
+        // a presenter may turn Repeat track and Shuffle on
+        let old = Config::default();
+        let new = Config { repeat_track: true, shuffle: true, ..old.clone() };
+        assert_eq!(cfg_denied(&old, &new, &crate::auth::Perms::presenter()), None);
+        // the server's flag shows in the app
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut server = Playout::new(Engine::new_detached(), Config::default());
+        server.run_cmd(Cmd::StopAfter { on: true });
+        let mut m = Playout::mirror_of(&server, tx);
+        m.apply_live(server.live_wire());
+        assert!(m.stop_after);
     }
 
     #[test]

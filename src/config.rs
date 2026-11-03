@@ -886,6 +886,10 @@ pub struct Config {
     pub volume: f32,
     pub loop_playlist: bool,
     pub random_fill: bool,
+    /// play the track on air again when it ends (until this is turned off)
+    pub repeat_track: bool,
+    /// play the playlist's rows in random order
+    pub shuffle: bool,
     pub encoders: Vec<EncoderConfig>,
     pub azuracast: AzuraConfig,
     pub carts: Vec<CartPad>,
@@ -951,6 +955,8 @@ impl Default for Config {
             volume: 0.9,
             loop_playlist: false,
             random_fill: false,
+            repeat_track: false,
+            shuffle: false,
             encoders: vec![EncoderConfig::default()],
             azuracast: AzuraConfig::default(),
             carts: vec![CartPad::default(); 24],

@@ -153,6 +153,12 @@ impl App {
             "stop" if p.playback => core.stop(),
             "next" if p.playback => core.next(),
             "prev" if p.playback => core.prev(),
+            "repeat_track" if p.playback => core.cfg.repeat_track = !core.cfg.repeat_track,
+            "shuffle" if p.playback => core.cfg.shuffle = !core.cfg.shuffle,
+            "stop_after" if p.playback => {
+                let on = !core.stop_after;
+                core.set_stop_after(on);
+            }
             "volume_up" | "volume_down" if p.playback => {
                 let d = if id == "volume_up" { 0.05 } else { -0.05 };
                 let v = (core.cfg.volume + d).clamp(0.0, 1.0);

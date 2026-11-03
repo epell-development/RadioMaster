@@ -1664,14 +1664,16 @@ impl App {
             let now = core.now();
             let st = core.status.clone();
             let title = Some(core.on_air_text()).filter(|t| !t.is_empty()).unwrap_or_else(|| "No track playing".into());
-            let next_i = core.current.map(|i| i + 1).unwrap_or(0);
-            let coming = core
-                .playlist
-                .iter()
-                .skip(next_i)
-                .find(|e| !matches!(e.kind, crate::items::ItemKind::Comment(_) | crate::items::ItemKind::HourMarker { .. }))
-                .map(|p| p.title())
-                .unwrap_or_else(|| "Queue empty".into());
+            let coming = if core.stop_after && core.state != PlayState::Stopped {
+                tr("Stops after this track").to_string()
+            } else {
+                match core.upcoming().and_then(|i| core.playlist.get(i)) {
+                    Some(e) if core.cfg.repeat_track && core.upcoming() == core.current => format!("{} {}", tr("Again:"), e.title()),
+                    Some(e) => e.title(),
+                    None if core.cfg.shuffle && core.state != PlayState::Stopped => tr("Shuffle: picking…").to_string(),
+                    None => "Queue empty".into(),
+                }
+            };
             let previous =
                 core.history.iter().rev().nth(if st.has_track { 1 } else { 0 }).map(|h| h.text.clone()).unwrap_or_else(|| "—".into());
             let marker = core.secs_to_next_marker();
@@ -2158,6 +2160,8 @@ impl App {
                                 ui.checkbox(&mut core.cfg.loop_playlist,"Loop the playlist");
                                 ui.checkbox(&mut core.cfg.auto_enabled,"Enable automated playlist top-up");
                                 ui.checkbox(&mut core.cfg.random_fill,"Fill from music library");
+                                ui.checkbox(&mut core.cfg.repeat_track, tr("Repeat track"));
+                                ui.checkbox(&mut core.cfg.shuffle, tr("Shuffle"));
                                 ui.separator();
                                 ui.heading(tr("Transitions"));
                                 self.smart_fade_settings(ui, core);

@@ -366,6 +366,21 @@ impl App {
                 }
                 ui.label(RichText::new(format!("{} items · {}", core.playlist.len(), fmt(core.total_secs()))).color(GRAY));
                 ui.checkbox(&mut core.cfg.loop_playlist, tr("Loop"));
+                ui.add_enabled_ui(self.perm.playback, |ui| {
+                    ui.checkbox(&mut core.cfg.repeat_track, tr("Repeat track"))
+                        .on_hover_text(tr("Play the track on air again when it ends, until this is turned off"));
+                    ui.checkbox(&mut core.cfg.shuffle, tr("Shuffle")).on_hover_text(tr(
+                        "Play the rows that haven't played yet in random order (commands, pauses and hour markers are never picked)",
+                    ));
+                    let mut sa = core.stop_after;
+                    if ui
+                        .checkbox(&mut sa, tr("Stop after this track"))
+                        .on_hover_text(tr("Stop when the item on air ends (turns itself off once it has)"))
+                        .changed()
+                    {
+                        core.set_stop_after(sa);
+                    }
+                });
                 ui.checkbox(&mut core.cfg.auto_enabled, tr("Auto-playlist"));
                 ui.checkbox(&mut core.cfg.random_fill, tr("Auto-fill from library"));
                 ui.checkbox(&mut self.workzones.follow, tr("Follow"))
