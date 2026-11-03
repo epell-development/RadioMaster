@@ -345,7 +345,10 @@ impl App {
     pub(super) fn tab_reports(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         if !self.rep.brand_asked {
             self.rep.brand_asked = true;
-            self.dlg(|| Some(Dlg::Brand(Brand::load())));
+            self.dlg(|| {
+                let (brand, problems) = Brand::load();
+                Some(Dlg::Brand(brand, problems))
+            });
         }
         self.rep.follow_today();
         // something new went on air: read the history again a moment later (the play is written

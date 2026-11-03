@@ -113,7 +113,7 @@ enum Dlg {
     /// the play history for Reports
     History(Vec<crate::report::Play>),
     /// the station's logo and signature for PDF reports (read on opening Reports)
-    Brand(crate::report::Brand),
+    Brand(crate::report::Brand, Vec<String>),
     /// a logo or signature was chosen (and copied into the data folder)
     BrandImage(crate::report::BrandImage, Result<image::RgbaImage, String>),
     /// a message for the status bar and log
@@ -976,7 +976,13 @@ impl App {
                     }
                 }
                 Dlg::History(all) => self.rep.set_history(all),
-                Dlg::Brand(b) => self.rep.set_brand(b),
+                Dlg::Brand(b, problems) => {
+                    self.rep.set_brand(b);
+                    for m in problems {
+                        core.say(m.clone());
+                        self.rep.msg = m;
+                    }
+                }
                 Dlg::BrandImage(which, res) => match res {
                     Ok(img) => self.rep.set_brand_image(which, Some(img)),
                     Err(e) => {

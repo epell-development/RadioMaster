@@ -215,14 +215,27 @@ fn brand_dir() -> std::path::PathBuf {
 const BRAND_MAX: u32 = 900;
 
 impl Brand {
-    /// Read the stored logo, signature and name (call off the UI thread).
-    pub fn load() -> Brand {
-        let img = |b: BrandImage| image::open(b.path()).ok().map(|i| i.to_rgba8());
-        Brand {
-            logo: img(BrandImage::Logo),
-            signature: img(BrandImage::Signature),
-            signed_by: std::fs::read_to_string(brand_dir().join("signed-by.txt")).unwrap_or_default().trim().to_string(),
-        }
+    /// Read the stored logo, signature and name (call off the UI thread). None chosen is normal;
+    /// a stored picture that can't be read comes back as a message (and the report goes without it).
+    pub fn load() -> (Brand, Vec<String>) {
+        let mut problems = vec![];
+        let mut img = |b: BrandImage, what: &str| {
+            let path = b.path();
+            if !path.exists() {
+                return None;
+            }
+            match image::open(&path) {
+                Ok(i) => Some(i.to_rgba8()),
+                Err(e) => {
+                    problems.push(format!("Couldn't read the {what} for reports ({}): {e}", path.display()));
+                    None
+                }
+            }
+        };
+        let logo = img(BrandImage::Logo, "logo");
+        let signature = img(BrandImage::Signature, "signature");
+        let signed_by = std::fs::read_to_string(brand_dir().join("signed-by.txt")).unwrap_or_default().trim().to_string();
+        (Brand { logo, signature, signed_by }, problems)
     }
 
     /// Keep a copy of a picture (PNG or JPEG) as the logo or signature, scaled down if it is big.
@@ -781,7 +794,7 @@ mod tests {
             f.to = all.iter().map(|p| p.at.date()).max().unwrap();
             let sel: Vec<&Play> = all.iter().filter(|p| f.matches(p)).collect();
             let rows = summarize(&sel);
-            let brand = if std::env::var("RM_PDF_BRAND").is_ok() { Brand::load() } else { meta.brand.clone() };
+            let brand = if std::env::var("RM_PDF_BRAND").is_ok() { Brand::load().0 } else { meta.brand.clone() };
             let meta = Meta { station: "DovaFM Test Station".into(), title: "Play report".into(), filter: f.clone(), brand };
             std::fs::write(format!("{dir}/summary.pdf"), pdf_summary(&meta, &rows, &sel)).unwrap();
             let ads: Vec<&Play> = sel.iter().copied().filter(|p| p.kind == "advert").collect();
