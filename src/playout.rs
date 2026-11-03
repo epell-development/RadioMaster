@@ -1189,7 +1189,10 @@ impl Playout {
             self.say("Stopped after the track, as asked");
             return false;
         }
-        // an hour marker that is due, or the rest of a container, comes before a repeat
+        // Repeat only replays a plain file row, and only when nothing else is owed first:
+        // - `pending_jump`: a soft hour marker went off during this track and must take over now;
+        // - `sub_queue`: the row on air is a container that still has files to play.
+        // In both cases `advance_inner` plays those, and repeat resumes on the next file that ends.
         if self.cfg.repeat_track && self.pending_jump.is_none() && self.sub_queue.is_empty() {
             if let Some(c) = self.current.filter(|&c| self.playlist.get(c).is_some_and(|e| e.is_file())) {
                 if self.start_index(c, old_fade) {
@@ -3777,6 +3780,11 @@ mod tests {
         assert!(p.play_index(0, 0.0));
         assert!(p.auto_next(Some(0.0)));
         assert_eq!(p.current, Some(0), "and repeat carries on once the marker is done");
+        // the rest of a container plays before a repeat too
+        p.sub_queue.push_back(Track { title: "part2".into(), ..Track::from_path(&wav) });
+        assert!(p.auto_next(Some(0.0)));
+        assert!(p.sub_queue.is_empty(), "the container's next file played");
+        assert_eq!(p.on_air.as_ref().map(|t| t.title.as_str()), Some("part2"));
         // Next still moves on
         p.next();
         assert_eq!(p.current, Some(1));
