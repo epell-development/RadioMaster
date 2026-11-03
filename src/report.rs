@@ -401,30 +401,6 @@ impl Doc {
         self.y += 14.0;
     }
 
-    /// Lines for the station to sign and date.
-    fn sign_off(&mut self) {
-        self.need(70.0);
-        self.y += 18.0;
-        let w = (RIGHT - M - 40.0) / 3.0;
-        for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
-            let x = M + i as f32 * (w + 20.0);
-            self.pdf.line(x, self.y + 20.0, x + w, self.y + 20.0, 0.7, MUTED);
-            self.pdf.text(x, self.y + 32.0, 7.5, Font::Regular, MUTED, label);
-        }
-        self.y += 44.0;
-    }
-
-    /// A rounded strip with a coloured tag and a line of grey text (the item's file).
-    fn tag_line(&mut self, kind: &str, text: &str) {
-        let tag = kind_name(kind);
-        self.pdf.round_rect(M, self.y, RIGHT - M, 30.0, 5.0, CARD);
-        self.pdf.round_rect(M + 10.0, self.y + 8.0, Pdf::width(tag, 8.0, Font::Bold) + 14.0, 15.0, 7.0, kind_color(kind));
-        self.pdf.text(M + 17.0, self.y + 18.5, 8.0, Font::Bold, WHITE, tag);
-        let fx = M + 34.0 + Pdf::width(tag, 8.0, Font::Bold);
-        self.pdf.text(fx, self.y + 19.0, 8.0, Font::Regular, MUTED, &Pdf::fit(text, 8.0, Font::Regular, RIGHT - fx - 10.0));
-        self.y += 44.0;
-    }
-
     fn finish(mut self, meta: &Meta) -> Vec<u8> {
         let n = self.pdf.page_count();
         for i in 0..n {
@@ -524,7 +500,12 @@ pub fn pdf_proof(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
             by_day.entry(p.at.date()).or_default().push(p.at);
         }
         let file = mine.iter().map(|p| p.path.as_str()).find(|p| !p.is_empty()).unwrap_or("");
-        d.tag_line(&r.kind, file);
+        d.pdf.round_rect(M, d.y, RIGHT - M, 30.0, 5.0, CARD);
+        d.pdf.round_rect(M + 10.0, d.y + 8.0, Pdf::width(kind_name(&r.kind), 8.0, Font::Bold) + 14.0, 15.0, 7.0, kind_color(&r.kind));
+        d.pdf.text(M + 17.0, d.y + 18.5, 8.0, Font::Bold, WHITE, kind_name(&r.kind));
+        let fx = M + 34.0 + Pdf::width(kind_name(&r.kind), 8.0, Font::Bold);
+        d.pdf.text(fx, d.y + 19.0, 8.0, Font::Regular, MUTED, &Pdf::fit(file, 8.0, Font::Regular, RIGHT - fx - 10.0));
+        d.y += 44.0;
         d.cards(&[
             (r.plays.to_string(), "TIMES AIRED"),
             (by_day.len().to_string(), "DAYS ON AIR"),
@@ -554,7 +535,16 @@ pub fn pdf_proof(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
             }
         }
         d.table(&[("Date", 1.4, false), ("Times on air", 5.2, false), ("Count", 0.7, true)], &wrapped, Some(&groups));
-        d.sign_off();
+        // sign-off
+        d.need(70.0);
+        d.y += 18.0;
+        let w = (RIGHT - M - 40.0) / 3.0;
+        for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
+            let x = M + i as f32 * (w + 20.0);
+            d.pdf.line(x, d.y + 20.0, x + w, d.y + 20.0, 0.7, MUTED);
+            d.pdf.text(x, d.y + 32.0, 7.5, Font::Regular, MUTED, label);
+        }
+        d.y += 44.0;
     }
     if rows.is_empty() {
         d.header(meta, "Proof of play");
@@ -643,7 +633,14 @@ pub fn pdf_ad_schedule(station: &str, ad: &crate::config::Ad, from: NaiveDate, t
         (a, b) => format!("{a} to {b}"),
     };
     let file = if ad.path.trim().is_empty() { "No audio file yet" } else { ad.path.as_str() };
-    d.tag_line("advert", &format!("{file}  ·  runs {runs}"));
+    let line = format!("{file}  ·  runs {runs}");
+    let tag = kind_name("advert");
+    d.pdf.round_rect(M, d.y, RIGHT - M, 30.0, 5.0, CARD);
+    d.pdf.round_rect(M + 10.0, d.y + 8.0, Pdf::width(tag, 8.0, Font::Bold) + 14.0, 15.0, 7.0, kind_color("advert"));
+    d.pdf.text(M + 17.0, d.y + 18.5, 8.0, Font::Bold, WHITE, tag);
+    let fx = M + 34.0 + Pdf::width(tag, 8.0, Font::Bold);
+    d.pdf.text(fx, d.y + 19.0, 8.0, Font::Regular, MUTED, &Pdf::fit(&line, 8.0, Font::Regular, RIGHT - fx - 10.0));
+    d.y += 44.0;
     let days = s.slots.iter().map(|x| x.date).collect::<std::collections::BTreeSet<_>>().len();
     let ends =
         chrono::NaiveDate::parse_from_str(ad.end_date.trim(), "%Y-%m-%d").map_or("—".to_string(), |d| d.format("%-d %b").to_string());
@@ -690,7 +687,15 @@ pub fn pdf_ad_schedule(station: &str, ad: &crate::config::Ad, from: NaiveDate, t
         let rows: Vec<Vec<String>> = s.untimed.iter().map(|(n, w)| vec![n.clone(), w.clone()]).collect();
         d.table(&[("Rule", 2.0, false), ("When", 5.0, false)], &rows, None);
     }
-    d.sign_off();
+    // sign-off
+    d.need(70.0);
+    d.y += 18.0;
+    let w = (RIGHT - M - 40.0) / 3.0;
+    for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
+        let x = M + i as f32 * (w + 20.0);
+        d.pdf.line(x, d.y + 20.0, x + w, d.y + 20.0, 0.7, MUTED);
+        d.pdf.text(x, d.y + 32.0, 7.5, Font::Regular, MUTED, label);
+    }
     d.finish(&meta)
 }
 
