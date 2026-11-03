@@ -172,6 +172,96 @@ pub struct Meta {
     /// e.g. "Advert report"
     pub title: String,
     pub filter: Filter,
+    /// the station's own logo and signature
+    pub brand: Brand,
+}
+
+// ------------------------------------------------------------------ station logo and signature
+
+/// The station's logo and signature, chosen once and put on every PDF report. Kept as PNG files
+/// in the data folder (not in the settings: a connected app makes its PDFs itself).
+#[derive(Clone, Default)]
+pub struct Brand {
+    pub logo: Option<image::RgbaImage>,
+    pub signature: Option<image::RgbaImage>,
+    /// printed under the signature
+    pub signed_by: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrandImage {
+    Logo,
+    Signature,
+}
+
+impl BrandImage {
+    fn file(self) -> &'static str {
+        match self {
+            BrandImage::Logo => "logo.png",
+            BrandImage::Signature => "signature.png",
+        }
+    }
+    /// Where the copy is kept.
+    pub fn path(self) -> std::path::PathBuf {
+        brand_dir().join(self.file())
+    }
+}
+
+fn brand_dir() -> std::path::PathBuf {
+    crate::config::data_dir().join("report-branding")
+}
+
+/// Largest side of a stored logo or signature (plenty for print, keeps PDFs small).
+const BRAND_MAX: u32 = 900;
+
+impl Brand {
+    /// Read the stored logo, signature and name (call off the UI thread).
+    pub fn load() -> Brand {
+        let img = |b: BrandImage| image::open(b.path()).ok().map(|i| i.to_rgba8());
+        Brand {
+            logo: img(BrandImage::Logo),
+            signature: img(BrandImage::Signature),
+            signed_by: std::fs::read_to_string(brand_dir().join("signed-by.txt")).unwrap_or_default().trim().to_string(),
+        }
+    }
+
+    /// Keep a copy of a picture (PNG or JPEG) as the logo or signature, scaled down if it is big.
+    /// A signature photographed on white paper gets its white made see-through.
+    pub fn store(which: BrandImage, src: &std::path::Path) -> Result<image::RgbaImage, String> {
+        let img = image::open(src).map_err(|e| e.to_string())?;
+        let img = if img.width() > BRAND_MAX || img.height() > BRAND_MAX { img.thumbnail(BRAND_MAX, BRAND_MAX) } else { img };
+        let mut img = img.to_rgba8();
+        if which == BrandImage::Signature {
+            clear_paper(&mut img);
+        }
+        std::fs::create_dir_all(brand_dir()).map_err(|e| e.to_string())?;
+        img.save_with_format(which.path(), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+        Ok(img)
+    }
+
+    pub fn remove(which: BrandImage) {
+        let _ = std::fs::remove_file(which.path());
+    }
+
+    pub fn save_name(name: &str) {
+        let _ = std::fs::create_dir_all(brand_dir());
+        let _ = std::fs::write(brand_dir().join("signed-by.txt"), name.trim());
+    }
+}
+
+/// Make near-white pixels see-through (a scanned or photographed signature on paper), when the
+/// picture has no transparency of its own.
+fn clear_paper(img: &mut image::RgbaImage) {
+    if img.pixels().any(|p| p[3] < 255) {
+        return;
+    }
+    for p in img.pixels_mut() {
+        let light = p[0].min(p[1]).min(p[2]);
+        if light > 200 {
+            // fade out from light grey to white, so the pen strokes keep soft edges
+            p[3] = (((255 - light) as u32 * 255) / 55) as u8;
+        }
+    }
 }
 
 impl Meta {
@@ -225,20 +315,67 @@ fn kind_color(k: &str) -> Rgb {
 
 struct Doc {
     pdf: Pdf,
+    /// RadioMaster's logo (when the station has none of its own)
     logo: Option<(usize, f32)>,
+    /// the station's logo, drawn on a white card
+    station_logo: Option<(usize, f32)>,
+    signature: Option<(usize, f32)>,
+    signed_by: String,
     y: f32,
     label: String,
 }
 
+/// Put a picture in the PDF: (image number, width / height).
+fn add_img(pdf: &mut Pdf, i: &image::RgbaImage) -> (usize, f32) {
+    let aspect = i.width() as f32 / i.height().max(1) as f32;
+    (pdf.add_image(i.width(), i.height(), i.as_raw()), aspect)
+}
+
+/// Width and height of a picture fitted into `max_w` × `max_h`.
+fn fit_box(aspect: f32, max_w: f32, max_h: f32) -> (f32, f32) {
+    let h = max_h.min(max_w / aspect.max(0.01));
+    (h * aspect, h)
+}
+
 impl Doc {
-    fn new(label: &str) -> Self {
+    fn new(label: &str, brand: &Brand) -> Self {
         let mut pdf = Pdf::new();
-        let logo = image::load_from_memory(include_bytes!("../assets/logo_dark.png")).ok().map(|i| {
-            let i = i.to_rgba8();
-            let aspect = i.width() as f32 / i.height().max(1) as f32;
-            (pdf.add_image(i.width(), i.height(), i.as_raw()), aspect)
-        });
-        Doc { pdf, logo, y: 0.0, label: label.to_string() }
+        let station_logo = brand.logo.as_ref().map(|i| add_img(&mut pdf, i));
+        let logo = if station_logo.is_some() {
+            None
+        } else {
+            image::load_from_memory(include_bytes!("../assets/logo_dark.png")).ok().map(|i| add_img(&mut pdf, &i.to_rgba8()))
+        };
+        let signature = brand.signature.as_ref().map(|i| add_img(&mut pdf, i));
+        Doc { pdf, logo, station_logo, signature, signed_by: brand.signed_by.clone(), y: 0.0, label: label.to_string() }
+    }
+
+    /// Station / Signed / Date lines at the end of a report, with the stored signature and name.
+    fn sign_off(&mut self, station: &str) {
+        let sig_h = if self.signature.is_some() { 46.0 } else { 0.0 };
+        self.need(70.0 + sig_h);
+        self.y += 18.0;
+        let line_y = self.y + 20.0 + sig_h;
+        let w = (RIGHT - M - 40.0) / 3.0;
+        for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
+            let x = M + i as f32 * (w + 20.0);
+            self.pdf.line(x, line_y, x + w, line_y, 0.7, MUTED);
+            self.pdf.text(x, line_y + 12.0, 7.5, Font::Regular, MUTED, label);
+        }
+        let x_sig = M + w + 20.0;
+        if let Some((img, aspect)) = self.signature {
+            // filled in: the station's name, the signature and today's date
+            let (iw, ih) = fit_box(aspect, w, sig_h + 10.0);
+            self.pdf.image(img, x_sig, line_y - ih - 2.0, iw, ih);
+            self.pdf.text(M, line_y - 5.0, 9.5, Font::Regular, INK, &Pdf::fit(station, 9.5, Font::Regular, w));
+            let today = chrono::Local::now().format("%-d %B %Y").to_string();
+            self.pdf.text(M + 2.0 * (w + 20.0), line_y - 5.0, 9.5, Font::Regular, INK, &today);
+        }
+        if !self.signed_by.is_empty() {
+            let name = Pdf::fit(&self.signed_by, 8.5, Font::Bold, w);
+            self.pdf.text(x_sig, line_y + 24.0, 8.5, Font::Bold, INK, &name);
+        }
+        self.y = line_y + 36.0;
     }
 
     /// Dark band at the top of a page with the logo, the report name and the station.
@@ -246,7 +383,12 @@ impl Doc {
         let p = &mut self.pdf;
         p.rect(0.0, 0.0, Pdf::W, 96.0, BAND);
         p.rect(0.0, 96.0, Pdf::W, 3.0, ACCENT);
-        if let Some((img, aspect)) = self.logo {
+        if let Some((img, aspect)) = self.station_logo {
+            // on a white card, so a dark logo still shows on the dark band
+            let (w, h) = fit_box(aspect, 150.0, 52.0);
+            p.round_rect(M, 48.0 - h / 2.0 - 8.0, w + 16.0, h + 16.0, 6.0, WHITE);
+            p.image(img, M + 8.0, 48.0 - h / 2.0, w, h);
+        } else if let Some((img, aspect)) = self.logo {
             let h = 34.0;
             p.image(img, M, 31.0, h * aspect, h);
         }
@@ -429,7 +571,7 @@ fn busiest_hour(plays: &[&Play]) -> String {
 
 /// Summary report: totals, plays per day and one row per item.
 pub fn pdf_summary(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
-    let mut d = Doc::new(&meta.title);
+    let mut d = Doc::new(&meta.title, &meta.brand);
     d.header(meta, &meta.title);
     let airtime_total: f32 = rows.iter().map(|r| r.secs).sum();
     d.cards(&[
@@ -482,13 +624,17 @@ pub fn pdf_summary(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
     );
     if rows.is_empty() {
         d.pdf.text(M, d.y + 10.0, 10.0, Font::Regular, MUTED, "Nothing was played in this period.");
+        d.y += 20.0;
+    }
+    if d.signature.is_some() || !d.signed_by.is_empty() {
+        d.sign_off(&meta.station);
     }
     d.finish(meta)
 }
 
 /// Proof of play: for each item, every time it went on air, grouped by day, on its own page.
 pub fn pdf_proof(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
-    let mut d = Doc::new("Proof of play");
+    let mut d = Doc::new("Proof of play", &meta.brand);
     for (k, r) in rows.iter().enumerate() {
         if k > 0 {
             d.pdf.new_page();
@@ -535,16 +681,7 @@ pub fn pdf_proof(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
             }
         }
         d.table(&[("Date", 1.4, false), ("Times on air", 5.2, false), ("Count", 0.7, true)], &wrapped, Some(&groups));
-        // sign-off
-        d.need(70.0);
-        d.y += 18.0;
-        let w = (RIGHT - M - 40.0) / 3.0;
-        for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
-            let x = M + i as f32 * (w + 20.0);
-            d.pdf.line(x, d.y + 20.0, x + w, d.y + 20.0, 0.7, MUTED);
-            d.pdf.text(x, d.y + 32.0, 7.5, Font::Regular, MUTED, label);
-        }
-        d.y += 44.0;
+        d.sign_off(&meta.station);
     }
     if rows.is_empty() {
         d.header(meta, "Proof of play");
@@ -604,14 +741,37 @@ mod tests {
         let f = filter(&[]);
         let sel: Vec<&Play> = all.iter().filter(|p| f.matches(p)).collect();
         let rows = summarize(&sel);
-        let meta = Meta { station: "Test FM".into(), title: "Play report".into(), filter: f };
+        let meta = Meta { station: "Test FM".into(), title: "Play report".into(), filter: f.clone(), brand: Brand::default() };
         let a = pdf_summary(&meta, &rows, &sel);
         let b = pdf_proof(&meta, &rows, &sel);
-        for pdf in [&a, &b] {
+        // with the station's own logo and signature
+        let mut sig = image::RgbaImage::from_pixel(300, 100, image::Rgba([255, 255, 255, 255]));
+        for x in 20..280 {
+            sig.put_pixel(x, 50 + (x % 20) / 4, image::Rgba([10, 20, 90, 255]));
+        }
+        clear_paper(&mut sig);
+        assert_eq!(sig.get_pixel(0, 0)[3], 0, "the paper is see-through");
+        assert_eq!(sig.get_pixel(20, 50)[3], 255, "the ink is not");
+        let brand = Brand {
+            logo: Some(image::RgbaImage::from_pixel(200, 80, image::Rgba([200, 30, 30, 255]))),
+            signature: Some(sig),
+            signed_by: "Jane Doe, Station Manager".into(),
+        };
+        let branded = Meta { brand, ..meta };
+        let c = pdf_proof(&branded, &rows, &sel);
+        let e = pdf_summary(&branded, &rows, &sel);
+        let images = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches("/Subtype /Image").count();
+        let masks = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches("/SMask").count();
+        let plain = images(&b) - masks(&b);
+        assert_eq!(images(&c) - masks(&c), plain + 1, "the station's logo instead of RadioMaster's, and the signature");
+        assert!(masks(&c) >= 1, "the signature keeps its see-through paper");
+        let meta = branded;
+        for pdf in [&a, &b, &c, &e] {
             assert!(pdf.starts_with(b"%PDF-1.4"));
             assert!(String::from_utf8_lossy(pdf).contains("%%EOF"));
         }
         assert!(String::from_utf8_lossy(&b).contains(&format!("/Count {}", rows.len())), "one page per item");
+        assert!(String::from_utf8_lossy(&c).contains(&format!("/Count {}", rows.len())), "signing adds no pages here");
         // RM_PDF_OUT=folder [RM_PDF_IN=history.csv]: write sample PDFs to look at
         if let Ok(dir) = std::env::var("RM_PDF_OUT") {
             let src = std::env::var("RM_PDF_IN").ok().and_then(|p| std::fs::read_to_string(p).ok());
@@ -621,7 +781,8 @@ mod tests {
             f.to = all.iter().map(|p| p.at.date()).max().unwrap();
             let sel: Vec<&Play> = all.iter().filter(|p| f.matches(p)).collect();
             let rows = summarize(&sel);
-            let meta = Meta { station: "DovaFM Test Station".into(), title: "Play report".into(), filter: f.clone() };
+            let brand = if std::env::var("RM_PDF_BRAND").is_ok() { Brand::load() } else { meta.brand.clone() };
+            let meta = Meta { station: "DovaFM Test Station".into(), title: "Play report".into(), filter: f.clone(), brand };
             std::fs::write(format!("{dir}/summary.pdf"), pdf_summary(&meta, &rows, &sel)).unwrap();
             let ads: Vec<&Play> = sel.iter().copied().filter(|p| p.kind == "advert").collect();
             let ad_rows = summarize(&ads);
