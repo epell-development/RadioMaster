@@ -401,6 +401,30 @@ impl Doc {
         self.y += 14.0;
     }
 
+    /// Lines for the station to sign and date.
+    fn sign_off(&mut self) {
+        self.need(70.0);
+        self.y += 18.0;
+        let w = (RIGHT - M - 40.0) / 3.0;
+        for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
+            let x = M + i as f32 * (w + 20.0);
+            self.pdf.line(x, self.y + 20.0, x + w, self.y + 20.0, 0.7, MUTED);
+            self.pdf.text(x, self.y + 32.0, 7.5, Font::Regular, MUTED, label);
+        }
+        self.y += 44.0;
+    }
+
+    /// A rounded strip with a coloured tag and a line of grey text (the item's file).
+    fn tag_line(&mut self, kind: &str, text: &str) {
+        let tag = kind_name(kind);
+        self.pdf.round_rect(M, self.y, RIGHT - M, 30.0, 5.0, CARD);
+        self.pdf.round_rect(M + 10.0, self.y + 8.0, Pdf::width(tag, 8.0, Font::Bold) + 14.0, 15.0, 7.0, kind_color(kind));
+        self.pdf.text(M + 17.0, self.y + 18.5, 8.0, Font::Bold, WHITE, tag);
+        let fx = M + 34.0 + Pdf::width(tag, 8.0, Font::Bold);
+        self.pdf.text(fx, self.y + 19.0, 8.0, Font::Regular, MUTED, &Pdf::fit(text, 8.0, Font::Regular, RIGHT - fx - 10.0));
+        self.y += 44.0;
+    }
+
     fn finish(mut self, meta: &Meta) -> Vec<u8> {
         let n = self.pdf.page_count();
         for i in 0..n {
@@ -500,12 +524,7 @@ pub fn pdf_proof(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
             by_day.entry(p.at.date()).or_default().push(p.at);
         }
         let file = mine.iter().map(|p| p.path.as_str()).find(|p| !p.is_empty()).unwrap_or("");
-        d.pdf.round_rect(M, d.y, RIGHT - M, 30.0, 5.0, CARD);
-        d.pdf.round_rect(M + 10.0, d.y + 8.0, Pdf::width(kind_name(&r.kind), 8.0, Font::Bold) + 14.0, 15.0, 7.0, kind_color(&r.kind));
-        d.pdf.text(M + 17.0, d.y + 18.5, 8.0, Font::Bold, WHITE, kind_name(&r.kind));
-        let fx = M + 34.0 + Pdf::width(kind_name(&r.kind), 8.0, Font::Bold);
-        d.pdf.text(fx, d.y + 19.0, 8.0, Font::Regular, MUTED, &Pdf::fit(file, 8.0, Font::Regular, RIGHT - fx - 10.0));
-        d.y += 44.0;
+        d.tag_line(&r.kind, file);
         d.cards(&[
             (r.plays.to_string(), "TIMES AIRED"),
             (by_day.len().to_string(), "DAYS ON AIR"),
@@ -535,22 +554,144 @@ pub fn pdf_proof(meta: &Meta, rows: &[Row], plays: &[&Play]) -> Vec<u8> {
             }
         }
         d.table(&[("Date", 1.4, false), ("Times on air", 5.2, false), ("Count", 0.7, true)], &wrapped, Some(&groups));
-        // sign-off
-        d.need(70.0);
-        d.y += 18.0;
-        let w = (RIGHT - M - 40.0) / 3.0;
-        for (i, label) in ["Station", "Signed", "Date"].iter().enumerate() {
-            let x = M + i as f32 * (w + 20.0);
-            d.pdf.line(x, d.y + 20.0, x + w, d.y + 20.0, 0.7, MUTED);
-            d.pdf.text(x, d.y + 32.0, 7.5, Font::Regular, MUTED, label);
-        }
-        d.y += 44.0;
+        d.sign_off();
     }
     if rows.is_empty() {
         d.header(meta, "Proof of play");
         d.pdf.text(M, d.y + 10.0, 10.0, Font::Regular, MUTED, "Nothing was played in this period.");
     }
     d.finish(meta)
+}
+
+// ------------------------------------------------------------------ advert schedule
+
+/// Longest period an advert schedule covers.
+pub const MAX_SCHEDULE_DAYS: i64 = 366;
+
+/// One time an advert is due to play.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slot {
+    pub date: NaiveDate,
+    pub time: (u32, u32),
+    /// the ad break (or advert rule) that plays it
+    pub rule: String,
+    /// `Some((plays, out of))` when the break picks only some of its adverts each time, so this one
+    /// isn't certain to play; `None` when it always plays
+    pub share: Option<(u32, usize)>,
+}
+
+/// When an advert is due to play over a period, from its own run dates and days and the ad breaks
+/// and advert rules that play it.
+#[derive(Clone, Debug, Default)]
+pub struct AdSchedule {
+    pub slots: Vec<Slot>,
+    /// (name, summary) of each break / rule that plays the advert
+    pub rules: Vec<(String, String)>,
+    /// rules not tied to the clock (after N songs, every N minutes from the last time): (name, summary)
+    pub untimed: Vec<(String, String)>,
+}
+
+pub fn ad_schedule(cfg: &crate::config::Config, ad: &crate::config::Ad, from: NaiveDate, to: NaiveDate) -> AdSchedule {
+    let to = to.min(from + chrono::Duration::days(MAX_SCHEDULE_DAYS - 1));
+    let mut out = AdSchedule::default();
+    let rules: Vec<&crate::config::AdRule> = cfg.ad_rules.iter().filter(|r| r.enabled && r.plays_ad(ad)).collect();
+    for r in &rules {
+        out.rules.push((r.name.clone(), r.summary()));
+    }
+    let mut d = from;
+    while d <= to {
+        if ad.active_on(d) {
+            for r in rules.iter().filter(|r| r.on_day(d)) {
+                let Some(times) = r.clock_times() else { continue };
+                // the adverts this rule picks from that day
+                let pool =
+                    cfg.ads.iter().filter(|a| r.plays_ad(a) && a.active_on(d) && (a.id == ad.id || !a.path.trim().is_empty())).count();
+                let share = match r.pick {
+                    crate::config::RotPick::All => None,
+                    _ if r.count.max(1) as usize >= pool => None,
+                    _ => Some((r.count.max(1), pool)),
+                };
+                for time in times {
+                    out.slots.push(Slot { date: d, time, rule: r.name.clone(), share });
+                }
+            }
+        }
+        d += chrono::Duration::days(1);
+    }
+    out.slots.sort_by_key(|x| (x.date, x.time));
+    for r in &rules {
+        if r.clock_times().is_none() && (0..=(to - from).num_days()).any(|k| r.on_day(from + chrono::Duration::days(k))) {
+            out.untimed.push((r.name.clone(), r.summary()));
+        }
+    }
+    out
+}
+
+/// A printable schedule for one advert: every time it's due to play in the period.
+pub fn pdf_ad_schedule(station: &str, ad: &crate::config::Ad, from: NaiveDate, to: NaiveDate, s: &AdSchedule) -> Vec<u8> {
+    let meta = Meta {
+        station: station.to_string(),
+        title: "Advert schedule".into(),
+        filter: Filter { from, to, kinds: vec!["advert".into()], search: String::new(), exclude: vec![] },
+    };
+    let mut d = Doc::new("Advert schedule");
+    d.header(&meta, &ad.label());
+    let runs = match (ad.start_date.trim(), ad.end_date.trim()) {
+        ("", "") => "no end date".to_string(),
+        (a, "") => format!("from {a}, no end date"),
+        ("", b) => format!("until {b}"),
+        (a, b) => format!("{a} to {b}"),
+    };
+    let file = if ad.path.trim().is_empty() { "No audio file yet" } else { ad.path.as_str() };
+    d.tag_line("advert", &format!("{file}  ·  runs {runs}"));
+    let days = s.slots.iter().map(|x| x.date).collect::<std::collections::BTreeSet<_>>().len();
+    let ends =
+        chrono::NaiveDate::parse_from_str(ad.end_date.trim(), "%Y-%m-%d").map_or("—".to_string(), |d| d.format("%-d %b").to_string());
+    d.cards(&[
+        (s.slots.len().to_string(), "SCHEDULED PLAYS"),
+        (days.to_string(), "DAYS ON AIR"),
+        (s.rules.len().to_string(), "AD BREAKS / RULES"),
+        (ends, "ADVERT ENDS"),
+    ]);
+    if !s.rules.is_empty() {
+        d.section("Ad breaks that play it");
+        let rows: Vec<Vec<String>> = s.rules.iter().map(|(n, w)| vec![n.clone(), w.clone()]).collect();
+        d.table(&[("Ad break / rule", 2.0, false), ("When", 5.0, false)], &rows, None);
+    }
+    d.section("Schedule");
+    let mut rows: Vec<Vec<String>> = vec![];
+    let mut groups: Vec<usize> = vec![];
+    let mut last = None;
+    for x in &s.slots {
+        if last != Some(x.date) {
+            last = Some(x.date);
+            groups.push(groups.last().map_or(0, |g| g + 1));
+            rows.push(vec![x.date.format("%a %d/%m/%Y").to_string()]);
+        } else {
+            groups.push(*groups.last().unwrap_or(&0));
+            rows.push(vec![String::new()]);
+        }
+        let row = rows.last_mut().unwrap();
+        row.push(format!("{:02}:{:02}", x.time.0, x.time.1));
+        row.push(x.rule.clone());
+        row.push(match x.share {
+            None => "Plays".into(),
+            Some((n, of)) => format!("{n} of {of} adverts each time"),
+        });
+    }
+    if rows.is_empty() {
+        d.pdf.text(M, d.y + 10.0, 10.0, Font::Regular, MUTED, "No ad break plays this advert at a set time in this period.");
+        d.y += 28.0;
+    } else {
+        d.table(&[("Date", 1.4, false), ("Time", 0.8, false), ("Ad break", 2.6, false), ("", 2.2, false)], &rows, Some(&groups));
+    }
+    if !s.untimed.is_empty() {
+        d.section("Also plays (not at set times)");
+        let rows: Vec<Vec<String>> = s.untimed.iter().map(|(n, w)| vec![n.clone(), w.clone()]).collect();
+        d.table(&[("Rule", 2.0, false), ("When", 5.0, false)], &rows, None);
+    }
+    d.sign_off();
+    d.finish(&meta)
 }
 
 /// Monday of the week `d` is in.
@@ -629,5 +770,51 @@ mod tests {
             std::fs::write(format!("{dir}/proof.pdf"), pdf_proof(&meta, &ad_rows, &ads)).unwrap();
             std::fs::write(format!("{dir}/ads.pdf"), pdf_summary(&meta, &ad_rows, &ads)).unwrap();
         }
+    }
+
+    #[test]
+    fn advert_schedule() {
+        use crate::config::{Ad, AdRule, Config, RotPick, Trigger};
+        let ad = |id, path: &str| Ad { id, name: format!("Ad {id}"), path: path.into(), ..Default::default() };
+        let mut cfg = Config { ads: vec![ad(1, "a.mp3"), ad(2, "b.mp3"), ad(3, "")], ..Default::default() };
+        cfg.ads[0].end_date = "2026-11-04".into();
+        let mut morning = AdRule::new_break(1, (8, 0));
+        morning.name = "Morning".into();
+        morning.times.push((7, 30));
+        morning.ad_ids = vec![1, 2];
+        morning.days = [true, true, true, true, true, false, false];
+        let mut rotate = AdRule::new_break(2, (12, 0));
+        rotate.name = "Noon".into();
+        rotate.ad_ids = vec![1, 2, 3];
+        rotate.pick = RotPick::Random;
+        let songs = AdRule {
+            id: 3,
+            name: "Songs".into(),
+            enabled: true,
+            adverts: true,
+            use_ad_list: true,
+            trigger: Trigger::Songs,
+            ..Default::default()
+        };
+        let other = AdRule::new_break(4, (9, 0)); // nothing assigned
+        cfg.ad_rules = vec![morning, rotate, songs, other];
+        // Mon 2 Nov – Sun 8 Nov 2026; the advert ends on Wednesday
+        let (from, to) = (NaiveDate::from_ymd_opt(2026, 11, 2).unwrap(), NaiveDate::from_ymd_opt(2026, 11, 8).unwrap());
+        let s = ad_schedule(&cfg, &cfg.ads[0], from, to);
+        assert_eq!(s.rules.len(), 3);
+        assert_eq!(s.untimed.len(), 1);
+        assert_eq!(s.slots.len(), 9, "3 days × (07:30, 08:00, 12:00)");
+        assert_eq!((s.slots[0].time, s.slots[0].rule.as_str(), s.slots[0].share), ((7, 30), "Morning", None));
+        // advert 3 has no file, so the noon break picks 1 of 2
+        assert_eq!(s.slots[2].share, Some((1, 2)));
+        assert_eq!(s.slots.last().unwrap().date, NaiveDate::from_ymd_opt(2026, 11, 4).unwrap());
+        let pdf = pdf_ad_schedule("Test FM", &cfg.ads[0], from, to, &s);
+        assert!(pdf.starts_with(b"%PDF"));
+        if let Ok(dir) = std::env::var("RM_PDF_OUT") {
+            std::fs::write(format!("{dir}/ad-schedule.pdf"), &pdf).unwrap();
+        }
+        // the weekend: only the noon break, and only advert 2 is left
+        let weekend = ad_schedule(&cfg, &cfg.ads[1], NaiveDate::from_ymd_opt(2026, 11, 7).unwrap(), to);
+        assert!(weekend.slots.iter().all(|x| x.rule == "Noon" && x.share.is_none()) && weekend.slots.len() == 2);
     }
 }

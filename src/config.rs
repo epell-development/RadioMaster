@@ -394,13 +394,57 @@ impl AdRule {
     /// Whether the rule is in force at `now` (dates, days and hours).
     pub fn in_force(&self, now: &DateTime<Local>) -> bool {
         use chrono::Timelike;
-        let today = now.format("%Y-%m-%d").to_string();
-        let hours_ok = hours_ok(self.from_hour, self.to_hour, now.hour());
+        self.on_day(now.date_naive()) && hours_ok(self.from_hour, self.to_hour, now.hour())
+    }
+
+    /// Whether the rule is in force at some time on day `d` (on, dates and days; not hours).
+    pub fn on_day(&self, d: chrono::NaiveDate) -> bool {
+        let day = d.format("%Y-%m-%d").to_string();
         self.enabled
-            && (self.from_date.trim().is_empty() || today.as_str() >= self.from_date.trim())
-            && (self.to_date.trim().is_empty() || today.as_str() <= self.to_date.trim())
-            && self.days[now.weekday().num_days_from_monday() as usize]
-            && hours_ok
+            && (self.from_date.trim().is_empty() || day.as_str() >= self.from_date.trim())
+            && (self.to_date.trim().is_empty() || day.as_str() <= self.to_date.trim())
+            && self.days[d.weekday().num_days_from_monday() as usize]
+    }
+
+    /// An ad break: an advert rule that plays the adverts assigned to it from the Adverts list.
+    pub fn is_break(&self) -> bool {
+        self.adverts && self.use_ad_list && self.ad_choose
+    }
+
+    /// A new ad break at `(hour, minute)`: every advert assigned to it plays, one after the other.
+    pub fn new_break(id: u64, at: (u32, u32)) -> AdRule {
+        AdRule {
+            id,
+            name: "Ad break".into(),
+            enabled: true,
+            adverts: true,
+            trigger: Trigger::Times,
+            times: vec![at],
+            use_ad_list: true,
+            ad_choose: true,
+            pick: RotPick::All,
+            ..Default::default()
+        }
+    }
+
+    /// The times of day (hour, minute) the rule goes off, within its hours: set times, or every N
+    /// minutes on the clock. `None` when it isn't tied to the clock (after N songs, or N minutes
+    /// after the last time).
+    pub fn clock_times(&self) -> Option<Vec<(u32, u32)>> {
+        let ok = |h: u32| hours_ok(self.from_hour, self.to_hour, h);
+        match self.trigger {
+            Trigger::Times => {
+                let mut t: Vec<(u32, u32)> = self.times.iter().copied().filter(|&(h, _)| ok(h)).collect();
+                t.sort();
+                t.dedup();
+                Some(t)
+            }
+            Trigger::Minutes if self.on_clock => {
+                let n = self.every_mins.max(1) as usize;
+                Some((0..24 * 60).step_by(n).map(|m| (m as u32 / 60, m as u32 % 60)).filter(|&(h, _)| ok(h)).collect())
+            }
+            _ => None,
+        }
     }
 
     /// Whether a timed rule goes off in this minute.
@@ -475,6 +519,10 @@ impl AdRule {
         }
         let limits = if limits.is_empty() { String::new() } else { format!(" · {}", limits.join(" · ")) };
         let cut = if self.cuts_in() { ", cutting in" } else { "" };
+        if self.is_break() && self.pick == RotPick::All {
+            let n = self.ad_ids.len();
+            return format!("{n} advert{} one after the other {when}{cut}{limits}", if n == 1 { "" } else { "s" });
+        }
         let from = if self.adverts && self.use_ad_list && self.ad_choose {
             let n = self.ad_ids.len();
             format!(" from {n} chosen advert{}", if n == 1 { "" } else { "s" })
@@ -683,11 +731,15 @@ impl Ad {
         }
     }
     pub fn active(&self, now: &DateTime<Local>) -> bool {
-        let today = now.format("%Y-%m-%d").to_string();
+        self.active_on(now.date_naive())
+    }
+    /// Whether the advert may run on day `d` (on, run dates and days).
+    pub fn active_on(&self, d: chrono::NaiveDate) -> bool {
+        let day = d.format("%Y-%m-%d").to_string();
         self.enabled
-            && (self.start_date.is_empty() || today >= self.start_date)
-            && (self.end_date.is_empty() || today <= self.end_date)
-            && self.days[now.weekday().num_days_from_monday() as usize]
+            && (self.start_date.is_empty() || day >= self.start_date)
+            && (self.end_date.is_empty() || day <= self.end_date)
+            && self.days[d.weekday().num_days_from_monday() as usize]
     }
 }
 
@@ -1010,6 +1062,16 @@ impl Config {
         Ad { id: self.ads.iter().map(|a| a.id).max().unwrap_or(0) + 1, ..Default::default() }
     }
 
+    /// Put advert `ad` into (or take it out of) the ad break `rule`.
+    pub fn set_ad_in_break(&mut self, rule: u64, ad: u64, on: bool) {
+        if let Some(r) = self.ad_rules.iter_mut().find(|r| r.id == rule && r.is_break()) {
+            r.ad_ids.retain(|x| *x != ad);
+            if on {
+                r.ad_ids.push(ad);
+            }
+        }
+    }
+
     /// Remove advert `i` from the list and from the rules that chose it.
     pub fn remove_ad(&mut self, i: usize) {
         if i >= self.ads.len() {
@@ -1139,6 +1201,35 @@ mod rule_tests {
         assert!(r.summary().contains("every 2 hours"));
         let t = AdRule { enabled: true, trigger: Trigger::Times, times: vec![(9, 0)], ..Default::default() };
         assert!(t.due_now(&at(2026, 10, 20, 9, 0), None) && !t.due_now(&at(2026, 10, 20, 9, 1), None));
+    }
+
+    #[test]
+    fn ad_breaks() {
+        let mut c = Config { ads: vec![Ad { id: 1, ..Default::default() }, Ad { id: 2, ..Default::default() }], ..Default::default() };
+        let mut b = AdRule::new_break(7, (8, 30));
+        b.times.push((17, 0));
+        b.from_hour = 6;
+        b.to_hour = 12;
+        assert!(b.is_break());
+        assert_eq!(b.clock_times(), Some(vec![(8, 30)]), "17:00 is outside its hours");
+        c.ad_rules = vec![b];
+        c.set_ad_in_break(7, 2, true);
+        c.set_ad_in_break(7, 2, true);
+        assert_eq!(c.ad_rules[0].ad_ids, [2]);
+        assert!(c.ad_rules[0].plays_ad(&c.ads[1]) && !c.ad_rules[0].plays_ad(&c.ads[0]));
+        assert_eq!(c.ad_rules[0].summary(), "1 advert one after the other at 08:30, 17:00 · 06:00–12:00");
+        c.set_ad_in_break(7, 2, false);
+        assert!(c.ad_rules[0].ad_ids.is_empty());
+        let r = AdRule { trigger: Trigger::Minutes, every_mins: 20, on_clock: true, from_hour: 23, to_hour: 0, ..Default::default() };
+        assert_eq!(r.clock_times(), Some(vec![(23, 0), (23, 20), (23, 40)]));
+        assert_eq!(AdRule { on_clock: false, ..r }.clock_times(), None);
+        // a day the rule / advert is in force
+        let tue = chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+        let ad = Ad { start_date: "2026-11-04".into(), ..Default::default() };
+        assert!(!ad.active_on(tue) && ad.active_on(tue.succ_opt().unwrap()));
+        let mut b = AdRule::new_break(1, (9, 0));
+        b.days[1] = false;
+        assert!(!b.on_day(tue) && b.on_day(tue.succ_opt().unwrap()));
     }
 
     #[test]

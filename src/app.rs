@@ -88,6 +88,8 @@ enum Dlg {
     AdPath(usize, PathBuf),
     CatFolder(usize, PathBuf),
     SaveReport(PathBuf),
+    /// (advert id, from, to, file) for an advert's printable schedule
+    SaveAdSchedule(u64, chrono::NaiveDate, chrono::NaiveDate, PathBuf),
     AnnounceFolder(PathBuf),
     /// folder for show recordings
     RecFolder(PathBuf),
@@ -1004,6 +1006,20 @@ impl App {
                     let msg = self.rep.write_export(&p, Self::station_name(core)).unwrap_or_else(|e| format!("Couldn't save: {e}"));
                     core.say(msg.clone());
                     self.rep.msg = msg;
+                }
+                Dlg::SaveAdSchedule(id, from, to, p) => {
+                    if let Some(ad) = core.cfg.ads.iter().find(|a| a.id == id) {
+                        let s = crate::report::ad_schedule(&core.cfg, ad, from, to);
+                        let pdf = crate::report::pdf_ad_schedule(&Self::station_name(core), ad, from, to, &s);
+                        match std::fs::write(&p, pdf) {
+                            Ok(()) => {
+                                core.say(format!("Saved {}", p.display()));
+                                // opens in the PDF viewer, ready to print
+                                crate::plugins::open_folder(&p);
+                            }
+                            Err(e) => core.say(format!("Couldn't save: {e}")),
+                        }
+                    }
                 }
                 Dlg::FfmpegPath(p) => {
                     core.cfg.ffmpeg_path = p.to_string_lossy().to_string();
