@@ -3770,7 +3770,14 @@ mod tests {
         assert_eq!(p.upcoming(), Some(0));
         assert!(p.auto_next(Some(0.0)));
         assert_eq!(p.current, Some(0));
-        // …but Next still moves on
+        // …unless a soft hour marker is due: that comes first
+        p.pending_jump = Some(2);
+        assert!(p.auto_next(Some(0.0)));
+        assert_eq!(p.current, Some(2), "the due marker row beats the repeat");
+        assert!(p.play_index(0, 0.0));
+        assert!(p.auto_next(Some(0.0)));
+        assert_eq!(p.current, Some(0), "and repeat carries on once the marker is done");
+        // Next still moves on
         p.next();
         assert_eq!(p.current, Some(1));
         p.cfg.repeat_track = false;
