@@ -1181,8 +1181,14 @@ impl Playout {
         }
     }
 
-    /// The item on air ended (or reached its mix point) by itself: honour Stop after this track
-    /// and Repeat track, then go on as usual. False when nothing more plays.
+    /// The item on air ended (or reached its mix point) by itself: decide what comes next.
+    /// Checked in this order, first match wins:
+    /// 1. Stop after this track: nothing more starts (the flag turns itself off);
+    /// 2. a due soft hour marker (`pending_jump`) or the rest of a container (`sub_queue`);
+    /// 3. Repeat track: the same file row again;
+    /// 4. the usual next row (Shuffle, Loop and Auto-fill are handled in `next_index`).
+    ///
+    /// The Next button doesn't come through here, so it always moves on. False when nothing plays.
     fn auto_next(&mut self, old_fade: Option<f32>) -> bool {
         if self.stop_after {
             self.stop_after = false;
@@ -3790,7 +3796,8 @@ mod tests {
         assert_eq!(p.current, Some(1));
         p.cfg.repeat_track = false;
         assert_eq!(p.upcoming(), Some(2));
-        // Stop after this track: nothing more starts, and it turns itself off
+        // Stop after this track: nothing more starts, and it turns itself off (it wins over Repeat)
+        p.cfg.repeat_track = true;
         p.set_stop_after(true);
         assert!(!p.auto_next(Some(0.0)));
         assert!(!p.stop_after);
