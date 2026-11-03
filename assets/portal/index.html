@@ -64,6 +64,11 @@
           <button data-cmd="stop" title="Stop" aria-label="Stop">⏹</button>
           <button data-cmd="next" title="Next" aria-label="Next">⏭</button>
         </div>
+        <div class="row wrap modes">
+          <label><input type="checkbox" id="modeRepeat"> Repeat track</label>
+          <label><input type="checkbox" id="modeShuffle"> Shuffle</label>
+          <label><input type="checkbox" id="modeStopAfter"> Stop after this track</label>
+        </div>
         <label class="row volume">Volume <input type="range" id="volume" min="0" max="1" step="0.01"></label>
         <p class="muted small" id="notify"></p>
       </section>

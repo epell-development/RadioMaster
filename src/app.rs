@@ -369,6 +369,8 @@ pub struct App {
     profile_map: Option<ProfileMap>,
     accounts: crate::auth::Accounts,
     logged_in: Option<crate::auth::Operator>,
+    /// "Sign in…" was chosen while sign-in is turned off: show the sign-in screen anyway
+    sign_in_now: bool,
     login_name: String,
     login_password: String,
     auth_error: String,
@@ -827,6 +829,7 @@ impl App {
             profile_map: None,
             accounts: crate::auth::Accounts::load(),
             logged_in: None,
+            sign_in_now: false,
             login_name: String::new(),
             login_password: String::new(),
             auth_error: String::new(),
@@ -1141,11 +1144,23 @@ impl App {
                         self.show_users = true;
                         ui.close_menu();
                     }
-                    if ui.button(tr("Log out")).clicked() {
+                    if self.logged_in.as_ref().is_some_and(|u| u.is_open_station()) {
+                        // sign-in is off: signing in is only worth offering once there are accounts
+                        if self.accounts.users.iter().any(|u| !u.disabled)
+                            && ui.button(tr("Sign in…")).on_hover_text(tr("Sign in with an operator account")).clicked()
+                        {
+                            self.logged_in = None;
+                            self.sign_in_now = true;
+                            self.login_password.clear();
+                            self.auth_error.clear();
+                            ui.close_menu();
+                        }
+                    } else if ui.button(tr("Log out")).clicked() {
                         if self.srv.signed_in_remotely() {
                             self.disconnect(core);
                         }
                         self.logged_in = None;
+                        self.sign_in_now = false;
                         self.login_password.clear();
                         self.auth_error.clear();
                         ui.close_menu();
@@ -1668,14 +1683,16 @@ impl App {
             let now = core.now();
             let st = core.status.clone();
             let title = Some(core.on_air_text()).filter(|t| !t.is_empty()).unwrap_or_else(|| "No track playing".into());
-            let next_i = core.current.map(|i| i + 1).unwrap_or(0);
-            let coming = core
-                .playlist
-                .iter()
-                .skip(next_i)
-                .find(|e| !matches!(e.kind, crate::items::ItemKind::Comment(_) | crate::items::ItemKind::HourMarker { .. }))
-                .map(|p| p.title())
-                .unwrap_or_else(|| "Queue empty".into());
+            let coming = if core.stop_after && core.state != PlayState::Stopped {
+                tr("Stops after this track").to_string()
+            } else {
+                match core.upcoming().and_then(|i| core.playlist.get(i)) {
+                    Some(e) if core.cfg.repeat_track && core.upcoming() == core.current => format!("{} {}", tr("Again:"), e.title()),
+                    Some(e) => e.title(),
+                    None if core.cfg.shuffle && core.state != PlayState::Stopped => tr("Shuffle: picking…").to_string(),
+                    None => "Queue empty".into(),
+                }
+            };
             let previous =
                 core.history.iter().rev().nth(if st.has_track { 1 } else { 0 }).map(|h| h.text.clone()).unwrap_or_else(|| "—".into());
             let marker = core.secs_to_next_marker();
@@ -2162,6 +2179,8 @@ impl App {
                                 ui.checkbox(&mut core.cfg.loop_playlist,"Loop the playlist");
                                 ui.checkbox(&mut core.cfg.auto_enabled,"Enable automated playlist top-up");
                                 ui.checkbox(&mut core.cfg.random_fill,"Fill from music library");
+                                ui.checkbox(&mut core.cfg.repeat_track, tr("Repeat track"));
+                                ui.checkbox(&mut core.cfg.shuffle, tr("Shuffle"));
                                 ui.separator();
                                 ui.heading(tr("Transitions"));
                                 self.smart_fade_settings(ui, core);
@@ -2220,7 +2239,23 @@ impl App {
                             },
                             SettingsPage::Accounts=>{
                                 let admin=self.logged_in.as_ref().is_some_and(|u|u.admin);
-                                if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.show_users=true;}
+                                let mut ask=self.accounts.sign_in_required();
+                                let can=admin && (ask || self.accounts.has_admin());
+                                if ui
+                                    .add_enabled(can, egui::Checkbox::new(&mut ask, tr("Ask for a username and password when RadioMaster starts")))
+                                    .on_disabled_hover_text(if admin { tr("Create an administrator account first, so someone can sign in") } else { tr("Only administrators can change this") })
+                                    .changed()
+                                {
+                                    if let Err(e)=self.accounts.set_sign_in_required(ask){self.auth_error=e;}
+                                }
+                                if ask {
+                                    ui.small(tr("Everyone signs in with their own account and gets only the access it allows."));
+                                } else {
+                                    ui.small(tr("RadioMaster opens straight to the station with full access, so anyone at this computer can change settings and accounts. Turn this on to make people sign in."));
+                                }
+                                if admin && !self.auth_error.is_empty() && !self.show_users {ui.colored_label(RED,&self.auth_error);}
+                                ui.add_space(6.0);
+                                if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.auth_error.clear();self.show_users=true;}
                                 if !admin {ui.label(tr("Only administrators can manage user accounts."));}
                                 ui.small(tr("Accounts gate the local UI; secure your Windows account and streaming API separately."));
                             },
@@ -2274,9 +2309,30 @@ impl App {
                     self.login_password.clear();
                     if self.logged_in.is_some() {
                         self.login_name.clear(); // the "add a user" form reuses this box
+                        self.sign_in_now = false;
                     }
                 }
+                if !self.accounts.sign_in_required() && ui.button(tr("Cancel")).on_hover_text(tr("Back to the station without signing in")).clicked() {
+                    self.sign_in_now = false;
+                    self.srv.show_connect = false;
+                    self.srv.from_login = false;
+                    self.login_password.clear();
+                    self.auth_error.clear();
+                }
                 ui.colored_label(RED, &self.auth_error);
+                if !self.accounts.users.is_empty() {
+                    ui.add_space(8.0);
+                    ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(tr("Forgot your password? Another administrator can set a new one in File → Users…. If no administrator can sign in, close RadioMaster and delete operators.json from its settings folder: it then starts without asking, and your playlists and settings are kept."))
+                                .small()
+                                .color(GRAY),
+                        );
+                        if ui.small_button(tr("Open the settings folder")).clicked() {
+                            crate::plugins::open_folder(&data_dir());
+                        }
+                    });
+                }
                 ui.add_space(14.0);
                 ui.separator();
                 ui.add_space(6.0);
@@ -3922,6 +3978,10 @@ impl eframe::App for App {
         // If an embedded web view kept keyboard focus, take it back as soon as the user clicks our UI.
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.focused) {
             self.browsers.focus_parent("");
+        }
+        if self.logged_in.is_none() && !self.sign_in_now && !self.accounts.sign_in_required() {
+            // sign-in is turned off (or there are no accounts yet): straight in
+            self.logged_in = Some(crate::auth::Operator::open_station());
         }
         if self.logged_in.is_none() {
             self.browsers.block("");

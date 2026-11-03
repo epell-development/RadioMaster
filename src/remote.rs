@@ -33,8 +33,7 @@ pub fn spawn(core: Arc<Mutex<Playout>>, port: u16, password: String) {
                 match path {
                     "/api/status" => {
                         let cur = c.current.and_then(|i| c.playlist.get(i)).map(|e| e.track.clone());
-                        let nxt = c.current.map(|i| i + 1).unwrap_or(0);
-                        let next = c.playlist.get(nxt).map(|e| e.track.label());
+                        let next = c.upcoming().and_then(|i| c.playlist.get(i)).map(|e| e.track.label());
                         serde_json::json!({
                             "ok": true,
                             "state": match c.state { PlayState::Playing => "playing", PlayState::Paused => "paused", PlayState::Stopped => "stopped" },
@@ -43,6 +42,7 @@ pub fn spawn(core: Arc<Mutex<Playout>>, port: u16, password: String) {
                             "position": c.status.pos, "duration": c.status.total,
                             "volume": c.cfg.volume, "next": next,
                             "playlist_length": c.playlist.len(),
+                            "repeat_track": c.cfg.repeat_track, "shuffle": c.cfg.shuffle, "stop_after": c.stop_after,
                         })
                     }
                     "/api/play" => {
