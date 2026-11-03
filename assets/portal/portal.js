@@ -213,6 +213,16 @@ document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click
   }
 }));
 
+$("modeRepeat").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  saveCfg((c) => { c.repeat_track = on; }, on ? "Repeat track is on" : "Repeat track is off");
+});
+$("modeShuffle").addEventListener("change", (e) => {
+  const on = e.target.checked;
+  saveCfg((c) => { c.shuffle = on; }, on ? "Shuffle is on" : "Shuffle is off");
+});
+$("modeStopAfter").addEventListener("change", (e) => send({ cmd: "stop_after", on: e.target.checked }));
+
 $("volume").addEventListener("input", () => { volumeBusy = true; });
 $("volume").addEventListener("change", () => {
   volumeBusy = false;
@@ -308,6 +318,8 @@ function renderLive() {
   $("vur").style.width = Math.min(100, l.peak_r * 100) + "%";
   $("wait").textContent = l.wait_until ? (l.wait_label || "Waiting") + " " + new Date(l.wait_until * 1000).toLocaleTimeString() : "";
   $("notify").textContent = l.notify || "";
+  $("modeStopAfter").checked = !!l.stop_after;
+  if (cfg) { $("modeRepeat").checked = !!cfg.repeat_track; $("modeShuffle").checked = !!cfg.shuffle; }
   const key = JSON.stringify(l.encoders);
   if (key !== encKey) { encKey = key; renderEncoders(); }
   const ck = JSON.stringify(l.carts);

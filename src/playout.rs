@@ -468,6 +468,11 @@ pub struct Playout {
     rec_mirror: Option<crate::recorder::RecStatus>,
     /// the last recorder problem written to the log
     rec_error: String,
+    // ---- play modes
+    /// stop when the item on air ends instead of going on (one-off; cleared when it fires or on Stop)
+    pub stop_after: bool,
+    /// the row Shuffle plays next (picked ahead so "Coming up next" can show it)
+    pub shuffle_next: Option<usize>,
 }
 
 #[path = "sync.rs"]
@@ -601,6 +606,8 @@ impl Playout {
             rec_pending: None,
             rec_mirror: None,
             rec_error: String::new(),
+            stop_after: false,
+            shuffle_next: None,
         }
     }
 
@@ -660,27 +667,32 @@ impl Playout {
                 // timed pause or early hour marker: silence until the time comes
                 if Local::now() >= until {
                     self.wait_until = None;
-                    if !self.advance(0.0) {
+                    if !self.auto_next(Some(0.0)) {
                         self.state = PlayState::Stopped;
                     }
                 }
             } else if ended {
-                if !self.advance(0.0) {
+                if !self.auto_next(Some(0.0)) {
                     self.state = PlayState::Stopped;
                 }
+            } else if self.stop_after {
+                // let the item on air play out; the end of it stops playback
             } else if let (Some(c), false, true) = (self.active_cues, self.triggered_next, teaser <= 0.0) {
                 // cue-driven (smart or hand-edited) transition: bring the next track in at the mix point;
                 // the outgoing track finishes on its own fade / cue out
                 if st.pos >= c.mix && c.mix < c.cue_out - 0.01 {
                     self.triggered_next = true;
-                    self.advance_cued();
+                    self.auto_next(None); // the outgoing track keeps its own fade
                 }
             } else if teaser > 0.0 && !self.triggered_next && st.pos >= teaser {
                 self.triggered_next = true;
-                self.advance(xf.min(2.0));
+                self.auto_next(Some(xf.min(2.0)));
             } else if self.active_cues.is_none() && xf > 0.05 && !self.triggered_next && st.total > xf + 1.0 && st.total - st.pos <= xf {
                 self.triggered_next = true;
-                self.advance(xf);
+                self.auto_next(Some(xf));
+            }
+            if self.state == PlayState::Playing {
+                self.plan_shuffle();
             }
             if self.state == PlayState::Playing && self.wait_until.is_none() {
                 self.check_markers();
@@ -1056,6 +1068,19 @@ impl Playout {
                 return Some(m);
             }
         }
+        if self.cfg.shuffle {
+            if let Some(i) = self.take_shuffle_pick() {
+                return Some(i);
+            }
+            // every row has played: Loop starts a new shuffled round
+            if self.cfg.loop_playlist && n > 0 {
+                self.playlist.iter_mut().for_each(|e| e.played = false);
+                if let Some(i) = self.take_shuffle_pick() {
+                    return Some(i);
+                }
+            }
+            return self.fill_from_library();
+        }
         let nxt = match self.current {
             Some(c) if c + 1 < n => Some(c + 1),
             None if n > 0 => Some(0),
@@ -1068,6 +1093,11 @@ impl Playout {
             self.playlist.iter_mut().for_each(|e| e.played = false);
             return Some(0);
         }
+        self.fill_from_library()
+    }
+
+    /// "Auto-fill from library": a random library track added at the end.
+    fn fill_from_library(&mut self) -> Option<usize> {
         if self.cfg.random_fill {
             if let Some(t) = self.library.choose(&mut rand::thread_rng()).cloned() {
                 self.playlist.push(PlEntry::file(t));
@@ -1077,14 +1107,102 @@ impl Playout {
         None
     }
 
+    /// Rows Shuffle may pick: ones not played yet that play something. Commands, events, pauses,
+    /// comments and hour rows keep their place and are never picked (hour markers still go off on
+    /// time, as they do without Shuffle).
+    fn shuffle_candidates(&self) -> Vec<usize> {
+        self.playlist
+            .iter()
+            .enumerate()
+            .filter(|&(i, e)| {
+                !e.played
+                    && Some(i) != self.current
+                    && !matches!(
+                        e.kind,
+                        ItemKind::Command(_)
+                            | ItemKind::Comment(_)
+                            | ItemKind::Pause(_)
+                            | ItemKind::HourMarker { .. }
+                            | ItemKind::HourInfo { .. }
+                            | ItemKind::Event { .. }
+                    )
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The row Shuffle plays next: the one picked ahead if it can still play, or a new random pick.
+    fn take_shuffle_pick(&mut self) -> Option<usize> {
+        let cands = self.shuffle_candidates();
+        match self.shuffle_next.take() {
+            Some(i) if cands.contains(&i) => Some(i),
+            _ => cands.choose(&mut rand::thread_rng()).copied(),
+        }
+    }
+
+    /// Keep Shuffle's next pick up to date (so "Coming up next" and pre-analysis know it).
+    fn plan_shuffle(&mut self) {
+        if !self.cfg.shuffle {
+            self.shuffle_next = None;
+            return;
+        }
+        let cands = self.shuffle_candidates();
+        if self.shuffle_next.is_some_and(|i| cands.contains(&i)) {
+            return;
+        }
+        self.shuffle_next = cands.choose(&mut rand::thread_rng()).copied();
+        if let Some(n) = self.shuffle_next.and_then(|i| self.playlist.get(i)).filter(|e| e.is_file()).map(|e| e.track.path.clone()) {
+            self.request_analysis(&n);
+        }
+    }
+
+    /// The row that plays after the one on air, as far as it can be known (None: the queue is
+    /// empty, or Shuffle hasn't picked yet). Comments and hour markers are passed over.
+    pub fn upcoming(&self) -> Option<usize> {
+        if self.cfg.repeat_track && self.current.and_then(|c| self.playlist.get(c)).is_some_and(|e| e.is_file()) {
+            return self.current;
+        }
+        if self.cfg.shuffle {
+            return self.shuffle_next.filter(|&i| i < self.playlist.len());
+        }
+        let from = self.current.map(|i| i + 1).unwrap_or(0);
+        (from..self.playlist.len()).find(|&i| !matches!(self.playlist[i].kind, ItemKind::Comment(_) | ItemKind::HourMarker { .. }))
+    }
+
+    /// Turn "Stop after this track" on or off.
+    pub fn set_stop_after(&mut self, on: bool) {
+        if self.forward(|_| sync::Cmd::StopAfter { on }) {
+            self.stop_after = on;
+            return;
+        }
+        if self.stop_after != on {
+            self.stop_after = on;
+            self.say(if on { "Playback will stop after this track" } else { "Playback will carry on after this track" });
+        }
+    }
+
+    /// The item on air ended (or reached its mix point) by itself: honour Stop after this track
+    /// and Repeat track, then go on as usual. False when nothing more plays.
+    fn auto_next(&mut self, old_fade: Option<f32>) -> bool {
+        if self.stop_after {
+            self.stop_after = false;
+            self.say("Stopped after the track, as asked");
+            return false;
+        }
+        // an hour marker that is due, or the rest of a container, comes before a repeat
+        if self.cfg.repeat_track && self.pending_jump.is_none() && self.sub_queue.is_empty() {
+            if let Some(c) = self.current.filter(|&c| self.playlist.get(c).is_some_and(|e| e.is_file())) {
+                if self.start_index(c, old_fade) {
+                    return true;
+                }
+            }
+        }
+        self.advance_inner(old_fade)
+    }
+
     /// Move to the next playable item. Returns false if nothing could be started.
     pub fn advance(&mut self, xfade: f32) -> bool {
         self.advance_inner(Some(xfade))
-    }
-
-    /// Advance at a cue mix point: the outgoing track keeps its own fade.
-    fn advance_cued(&mut self) -> bool {
-        self.advance_inner(None)
     }
 
     fn advance_inner(&mut self, old_fade: Option<f32>) -> bool {
@@ -2205,6 +2323,7 @@ impl Playout {
         self.wait_until = None;
         self.sub_queue.clear();
         self.pending_jump = None;
+        self.stop_after = false;
     }
 
     pub fn next(&mut self) {
@@ -3600,5 +3719,70 @@ mod tests {
         p.run_command("FLY TO THE MOON");
         p.drain_log();
         assert!(p.log.iter().any(|l| l.error && l.text.contains("Unknown command")));
+    }
+
+    #[test]
+    fn shuffle_picks_unplayed_rows_that_play_something() {
+        let mut p = playout();
+        p.cfg.shuffle = true;
+        p.playlist = vec![
+            file("a", 60.0),
+            PlEntry::special(ItemKind::Command("STOP".into()), "", 0.0),
+            file("b", 60.0),
+            PlEntry::special(ItemKind::Comment("note".into()), "", 0.0),
+            file("c", 60.0),
+        ];
+        p.current = Some(0);
+        p.playlist[0].played = true;
+        let mut seen = vec![];
+        for _ in 0..2 {
+            let i = p.next_index().expect("an unplayed track");
+            assert!(i == 2 || i == 4, "only tracks are picked, not {i}");
+            assert!(!seen.contains(&i), "a row isn't picked twice in a round");
+            p.playlist[i].played = true;
+            p.current = Some(i);
+            seen.push(i);
+        }
+        assert_eq!(p.next_index(), None, "the round is over and Loop is off");
+        p.cfg.loop_playlist = true;
+        assert!(p.next_index().is_some_and(|i| p.playlist[i].is_file()), "Loop starts a new round");
+        // the pick made ahead is the one that plays
+        p.playlist.iter_mut().for_each(|e| e.played = false);
+        p.current = None;
+        p.state = PlayState::Playing;
+        p.plan_shuffle();
+        let ahead = p.upcoming();
+        assert!(ahead.is_some());
+        assert_eq!(p.next_index(), ahead);
+    }
+
+    #[test]
+    fn repeat_track_and_stop_after_this_track() {
+        let mut p = playout();
+        let wav = std::env::temp_dir().join("rm_repeat_test.wav");
+        crate::engine::write_wav(&wav, &vec![0.1; crate::engine::SR as usize], 2, crate::engine::SR).unwrap();
+        let entry = |t: &str| PlEntry::file(Track { title: t.into(), ..Track::from_path(&wav) });
+        p.playlist = vec![entry("one"), entry("two"), entry("three")];
+        assert!(p.play_index(0, 0.0));
+        p.state = PlayState::Playing;
+        // Repeat track plays the same row again when it ends…
+        p.cfg.repeat_track = true;
+        assert_eq!(p.upcoming(), Some(0));
+        assert!(p.auto_next(Some(0.0)));
+        assert_eq!(p.current, Some(0));
+        // …but Next still moves on
+        p.next();
+        assert_eq!(p.current, Some(1));
+        p.cfg.repeat_track = false;
+        assert_eq!(p.upcoming(), Some(2));
+        // Stop after this track: nothing more starts, and it turns itself off
+        p.set_stop_after(true);
+        assert!(!p.auto_next(Some(0.0)));
+        assert!(!p.stop_after);
+        assert_eq!(p.current, Some(1));
+        // Stop clears it too
+        p.set_stop_after(true);
+        p.stop();
+        assert!(!p.stop_after);
     }
 }
