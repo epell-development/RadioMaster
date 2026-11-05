@@ -107,8 +107,9 @@ impl App {
             });
             return;
         }
-        self.dlg(move || {
-            let mut d = rfd::FileDialog::new().set_title(title_text(what));
+        let fd = self.file_dialog();
+        self.sys_dlg(move || {
+            let mut d = fd.set_title(title_text(what));
             if let Pick::File(name, exts) | Pick::Files(name, exts) = what {
                 if !exts.is_empty() {
                     d = d.add_filter(name, exts);
@@ -288,8 +289,9 @@ impl App {
         if upload {
             let (tx, rx) = mpsc::channel();
             let (fs, dir, ctx, what) = (fs.clone(), p.dir.clone(), ctx.clone(), p.what);
+            let fd = self.file_dialog();
             thread::spawn(move || {
-                let mut d = rfd::FileDialog::new();
+                let mut d = fd;
                 if let Pick::File(name, exts) | Pick::Files(name, exts) = what {
                     if !exts.is_empty() {
                         d = d.add_filter(name, exts);

@@ -83,6 +83,8 @@ enum Dlg {
     SchedPath(usize, PathBuf),
     /// file for the event row being added / edited
     EventPath(PathBuf),
+    /// the system file dialog didn't open (see `App::sys_dlg`)
+    NoFileDialog,
     RotFolder(usize, PathBuf),
     RenderWav(PathBuf),
     AdPath(usize, PathBuf),
@@ -186,6 +188,8 @@ enum PlAct {
 
 #[path = "tools.rs"]
 mod tools;
+#[path = "tutorial.rs"]
+mod tutorial;
 use tools::ToolWin;
 #[path = "adsui.rs"]
 mod adsui;
@@ -284,6 +288,14 @@ pub struct App {
     te_scroll: bool,
     dlg_tx: mpsc::Sender<Dlg>,
     dlg_rx: mpsc::Receiver<Dlg>,
+    /// the system file dialog, owned by the main window (so it opens in front of RadioMaster)
+    file_dlg: Option<rfd::FileDialog>,
+    /// the system file dialog couldn't open: say so, and how to type the path instead
+    no_file_dialog: bool,
+    /// the Getting started tour, at this step (None: not shown)
+    tutorial: Option<usize>,
+    /// frames left to bring the tour back in front of the window a step opened
+    tutorial_raise: u8,
     tag_edit: Option<Track>,
     show_about: bool,
     seek_drag: Option<f32>,
@@ -589,6 +601,7 @@ pub(super) fn action_edit(
     o: &ActionOpts,
 ) -> bool {
     let mut browse = false;
+    let before = *action;
     egui::ComboBox::from_id_salt(("act", id)).selected_text(tr(action.label())).width(290.0).height(400.0).show_ui(ui, |ui| {
         for a in ActionKind::ALL {
             if a != ActionKind::InsertItem || o.items {
@@ -596,6 +609,10 @@ pub(super) fn action_edit(
             }
         }
     });
+    if *action != before && action.needs_path() != before.needs_path() {
+        // a template or playlist name isn't a file (and a file isn't a template name)
+        path.clear();
+    }
     if action.needs_template() {
         if o.templates.iter().all(|t| t != path) {
             *path = o.templates.first().cloned().unwrap_or_default();
@@ -615,8 +632,10 @@ pub(super) fn action_edit(
     } else if *action == ActionKind::Command {
         ui.add(egui::TextEdit::singleline(path).desired_width(260.0).hint_text("VOLUME 80 · ENCODER START 1 · RULE Jingles"));
     } else if action.needs_path() {
-        ui.add(egui::TextEdit::singleline(path).desired_width(300.0));
-        browse = ui.button("…").on_hover_text(tr("Browse")).clicked();
+        let hint = if *action == ActionKind::LoadPlaylistAndPlay { tr("the .m3u playlist file") } else { tr("the audio file") };
+        ui.add(egui::TextEdit::singleline(path).desired_width(300.0).hint_text(hint))
+            .on_hover_text(tr("Click … to choose the file, or type or paste its full path here"));
+        browse = ui.button("…").on_hover_text(tr("Choose the file")).clicked();
     }
     if action.needs_arg() {
         if *action == ActionKind::SetVolume {
@@ -740,6 +759,10 @@ impl App {
             te_scroll: true,
             dlg_tx,
             dlg_rx,
+            file_dlg: None,
+            no_file_dialog: false,
+            tutorial: tutorial::first_run(),
+            tutorial_raise: 0,
             tag_edit: None,
             show_about: false,
             tool_open: Default::default(),
@@ -859,6 +882,27 @@ impl App {
                 let _ = tx.send(d);
                 ctx.request_repaint();
             }
+        });
+    }
+
+    /// A system file dialog to build on, owned by the main window: on Windows an unowned dialog
+    /// started from a background thread can open behind RadioMaster, so clicking Browse looked like
+    /// it did nothing.
+    fn file_dialog(&self) -> rfd::FileDialog {
+        self.file_dlg.clone().unwrap_or_default()
+    }
+
+    /// Like `dlg`, for a closure that shows a system file dialog. A dialog that "closes" faster than
+    /// anyone could press Cancel never opened (on Linux: no xdg-desktop-portal and no zenity), so the
+    /// user is told instead of nothing happening.
+    fn sys_dlg<F: FnOnce() -> Option<Dlg> + Send + 'static>(&self, f: F) {
+        self.dlg(move || {
+            let start = std::time::Instant::now();
+            let d = f();
+            if d.is_none() && start.elapsed() < Duration::from_millis(400) {
+                return Some(Dlg::NoFileDialog);
+            }
+            d
         });
     }
 
@@ -1032,6 +1076,7 @@ impl App {
                         e.path = p.to_string_lossy().to_string();
                     }
                 }
+                Dlg::NoFileDialog => self.no_file_dialog = true,
                 Dlg::EventPath(p) => {
                     if let Some(d) = self.item_dlg.as_mut().filter(|d| d.kind == pltools::DlgKind::Event) {
                         d.text = p.to_string_lossy().to_string();
@@ -1101,9 +1146,8 @@ impl App {
                     if ui.button(tr("Save playlist as…")).clicked() {
                         let name =
                             format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));
-                        self.dlg(move || {
-                            rfd::FileDialog::new().add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u)
-                        });
+                        let fd = self.file_dialog();
+                        self.sys_dlg(move || fd.add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u));
                         ui.close_menu();
                     }
                     ui.separator();
@@ -1324,6 +1368,10 @@ impl App {
                     if ui.button(tr("Check for updates…")).clicked() {
                         crate::updater::check(self.updates.clone(), repainter(ctx), true);
                         self.show_update = true;
+                        ui.close_menu();
+                    }
+                    if ui.button(tr("Getting started…")).on_hover_text(tr("A short tour of the main parts of RadioMaster")).clicked() {
+                        self.open_tutorial();
                         ui.close_menu();
                     }
                     if ui.button(tr("About RadioMaster")).clicked() {
@@ -2584,8 +2632,9 @@ impl App {
         });
         if import {
             // a profile is a file on this computer, connected or not
-            self.dlg(|| {
-                let f = rfd::FileDialog::new().add_filter("Station profile", &["json"]).pick_file()?;
+            let fd = self.file_dialog();
+            self.sys_dlg(move || {
+                let f = fd.add_filter("Station profile", &["json"]).pick_file()?;
                 let name: String =
                     f.file_stem()?.to_string_lossy().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
                 let dir = data_dir().join("profiles");
@@ -3345,7 +3394,8 @@ impl App {
                 }
             }
             if ui.small_button(tr("Choose…")).on_hover_text(tr("Pick the ffmpeg program")).clicked() {
-                self.dlg(|| rfd::FileDialog::new().pick_file().map(Dlg::FfmpegPath));
+                let fd = self.file_dialog();
+                self.sys_dlg(move || fd.pick_file().map(Dlg::FfmpegPath));
             }
             if ui.small_button("⟳").on_hover_text(tr("Look again")).clicked() {
                 self.ffmpeg_found = None;
@@ -3955,6 +4005,9 @@ impl eframe::App for App {
             330
         }));
         self.browsers.set_main(frame);
+        if self.file_dlg.is_none() {
+            self.file_dlg = Some(rfd::FileDialog::new().set_parent(frame));
+        }
         self.browsers.start_frame();
         // If an embedded web view kept keyboard focus, take it back as soon as the user clicks our UI.
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.focused) {
@@ -4088,6 +4141,8 @@ impl eframe::App for App {
             crate::updater::check(self.updates.clone(), repainter(ctx), false);
         }
         self.update_window(ctx, &mut core);
+        self.tutorial_window(ctx, &mut core);
+        self.no_file_dialog_window(ctx);
         self.apply_tab_ops(&mut core);
         // A native web view paints above everything egui draws, so hide the main window's views
         // whenever an egui window, menu, combo list or popup overlaps them.

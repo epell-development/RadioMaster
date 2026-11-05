@@ -190,9 +190,8 @@ impl App {
             }
             "save_playlist" if edit => {
                 let name = format!("{}.m3u", core.tabs.get(self.view_pl).map(|t| t.name.clone()).unwrap_or_else(|| "playlist".into()));
-                self.dlg(move || {
-                    rfd::FileDialog::new().add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u)
-                });
+                let fd = self.file_dialog();
+                self.sys_dlg(move || fd.add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u));
             }
             "move_up" | "move_down" if edit && !self.sel.is_empty() => {
                 let sel = self.sel.clone();
