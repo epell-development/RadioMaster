@@ -4022,9 +4022,9 @@ impl eframe::App for App {
             330
         }));
         self.browsers.set_main(frame);
-        if self.file_dlg.is_none() {
-            self.file_dlg = Some(rfd::FileDialog::new().set_parent(frame));
-        }
+        // taken again every frame (it only copies the window handle), so it can't go stale if the
+        // window is ever recreated, or if the handle wasn't ready on the first frame
+        self.file_dlg = Some(rfd::FileDialog::new().set_parent(frame));
         self.browsers.start_frame();
         // If an embedded web view kept keyboard focus, take it back as soon as the user clicks our UI.
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.focused) {
