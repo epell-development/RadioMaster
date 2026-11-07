@@ -1,6 +1,7 @@
 //! Advertisement scheduler: one list of advert / jingle rules (every N songs, every N minutes or
 //! hours, at set times — each limited to dates, days and hours) with an editor beside it, and the
-//! Adverts list (each advert with its own run dates).
+//! Adverts list (each advert with its own run dates, the ad breaks it's in, and a printable schedule).
+//! An ad break is an advert rule that plays the adverts assigned to it, one after the other.
 use super::*;
 use crate::config::{Ad, AdRule, RotPick, Trigger};
 
@@ -46,8 +47,14 @@ pub(super) fn days_edit(ui: &mut egui::Ui, days: &mut [bool; 7]) {
     });
 }
 
-fn kind_tag(ui: &mut egui::Ui, adverts: bool) {
-    let (t, c) = if adverts { (tr("ADVERT"), ADVERT) } else { (tr("JINGLE"), JINGLE) };
+fn kind_tag(ui: &mut egui::Ui, r: &AdRule) {
+    let (t, c) = if r.is_break() {
+        (tr("AD BREAK"), ADVERT)
+    } else if r.adverts {
+        (tr("ADVERT"), ADVERT)
+    } else {
+        (tr("JINGLE"), JINGLE)
+    };
     egui::Frame::new().fill(c).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
         ui.label(RichText::new(t).small().strong().color(Color32::WHITE));
     });
@@ -86,9 +93,17 @@ impl App {
         }
         // ---- the rules
         let mut add: Option<bool> = None;
+        let mut add_break = false;
         let mut act: Option<(&str, usize)> = None;
         egui::SidePanel::left("ads_rule_list").resizable(true).default_width(330.0).width_range(240.0..=520.0).show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(tr("➕ Ad break"))
+                    .on_hover_text(tr("A set time when the adverts you assign to it play one after the other"))
+                    .clicked()
+                {
+                    add_break = true;
+                }
                 if ui.button(tr("➕ Advert rule")).clicked() {
                     add = Some(true);
                 }
@@ -108,7 +123,7 @@ impl App {
                             ui.set_width(ui.available_width());
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut r.enabled, "").on_hover_text(tr("On / off"));
-                                kind_tag(ui, r.adverts);
+                                kind_tag(ui, r);
                                 ui.add(egui::Label::new(RichText::new(&r.name).strong()).truncate());
                             });
                             let live = r.in_force(&now);
@@ -158,6 +173,13 @@ impl App {
                 use_ad_list: adverts && !core.cfg.ads.is_empty(),
                 ..Default::default()
             });
+            self.ads.sel = Some(id);
+        }
+        if add_break {
+            use chrono::Timelike;
+            let id = core.cfg.new_rule_id();
+            let next_hour = (Local::now().hour() + 1) % 24;
+            core.cfg.ad_rules.push(AdRule::new_break(id, (next_hour, 0)));
             self.ads.sel = Some(id);
         }
         if let Some((what, i)) = act {
@@ -392,6 +414,18 @@ impl App {
             .small()
             .color(GRAY),
         );
+        if r.adverts {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr("After the adverts"));
+                ui.checkbox(&mut core.cfg.random_fill, tr("play random songs from the music library when the playlist runs out"))
+                    .on_hover_text(tr(
+                        "The same as Auto-fill from library in the playlist. It's for the whole station, not just this rule.",
+                    ));
+            });
+            if core.cfg.random_fill && core.cfg.library_folders.is_empty() {
+                ui.label(RichText::new(tr("Add a music library folder in Settings → Library first.")).small().color(AMBER));
+            }
+        }
         ui.add_space(8.0);
 
         // ---- 3. when the rule is in force
@@ -502,6 +536,10 @@ impl App {
         let now = Local::now();
         let mut del = None;
         let rules: Vec<AdRule> = core.cfg.ad_rules.iter().filter(|r| r.adverts && r.use_ad_list).cloned().collect();
+        // (break, advert, in it?) ticked this frame
+        let mut assign: Vec<(u64, u64, bool)> = vec![];
+        // (advert, from, to) for a printable schedule
+        let mut print: Option<(u64, chrono::NaiveDate, chrono::NaiveDate)> = None;
         egui::ScrollArea::vertical().id_salt("ads_list_scroll").auto_shrink([false, false]).show(ui, |ui| {
             for i in 0..core.cfg.ads.len() {
                 let a: &mut Ad = &mut core.cfg.ads[i];
@@ -525,6 +563,28 @@ impl App {
                                 Some(Dlg::AdPath(i, v.into_iter().next()?))
                             });
                         }
+                        ui.menu_button(tr("🖶 Schedule"), |ui| {
+                            ui.label(RichText::new(tr("Save as PDF and open it to print")).small().color(GRAY));
+                            let today = now.date_naive();
+                            let day = |s: &str| chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok();
+                            let start = day(&a.start_date).map_or(today, |d| d.max(today));
+                            for (label, days) in [("Next 7 days", 7), ("Next 4 weeks", 28), ("Next 3 months", 91)] {
+                                if ui.button(tr(label)).clicked() {
+                                    print = Some((a.id, start, start + chrono::Duration::days(days - 1)));
+                                    ui.close_menu();
+                                }
+                            }
+                            let whole = day(&a.end_date).zip(Some(day(&a.start_date).unwrap_or(today)));
+                            let resp = ui.add_enabled(whole.is_some(), egui::Button::new(tr("Its whole run (start to end date)")));
+                            if let Some((end, from)) = whole {
+                                if resp.clicked() {
+                                    print = Some((a.id, from, end.max(from)));
+                                    ui.close_menu();
+                                }
+                            } else {
+                                resp.on_disabled_hover_text(tr("Give the advert an end date first"));
+                            }
+                        });
                         if delete_button(ui, ("advert", i), tr("this advert")) {
                             del = Some(i);
                         }
@@ -537,25 +597,56 @@ impl App {
                         ui.add_space(10.0);
                         days_edit(ui, &mut a.days);
                     });
-                    let by: Vec<&str> = rules.iter().filter(|r| r.plays_ad(a)).map(|r| r.name.as_str()).collect();
-                    ui.label(
-                        RichText::new(if by.is_empty() {
-                            tr("No rule plays this advert.").to_string()
-                        } else {
-                            format!("{} {}", tr("Played by:"), by.join(", "))
-                        })
-                        .small()
-                        .color(GRAY),
-                    );
+                    // the ad breaks it's in: tick to add it, untick to take it out
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(tr("Ad breaks:")).small());
+                        for r in rules.iter().filter(|r| r.is_break()) {
+                            let mut on = r.ad_ids.contains(&a.id);
+                            if ui.toggle_value(&mut on, r.name.as_str()).on_hover_text(r.summary()).changed() {
+                                assign.push((r.id, a.id, on));
+                            }
+                        }
+                        if !rules.iter().any(|r| r.is_break()) {
+                            ui.label(RichText::new(tr("none yet — add one in Rules with ➕ Ad break")).small().color(GRAY));
+                        }
+                    });
+                    let others: Vec<&str> = rules.iter().filter(|r| !r.is_break() && r.plays_ad(a)).map(|r| r.name.as_str()).collect();
+                    if !others.is_empty() {
+                        ui.label(RichText::new(format!("{} {}", tr("Also played by:"), others.join(", "))).small().color(GRAY));
+                    } else if !rules.iter().any(|r| r.plays_ad(a)) {
+                        ui.label(RichText::new(tr("Not in any ad break: it won't play.")).small().color(AMBER));
+                    }
                 });
             }
             if core.cfg.ads.is_empty() {
                 ui.label(RichText::new(tr("No adverts yet. Add one, pick its audio file and the dates it should run.")).color(GRAY));
             }
         });
+        for (rule, ad, on) in assign {
+            core.cfg.set_ad_in_break(rule, ad, on);
+        }
+        if let Some((id, from, to)) = print {
+            self.ask_ad_schedule(core, id, from, to);
+        }
         if let Some(i) = del {
             core.cfg.remove_ad(i);
         }
+    }
+
+    /// Ask where to save an advert's schedule as PDF (it's written when the dialog returns).
+    fn ask_ad_schedule(&mut self, core: &Playout, id: u64, from: chrono::NaiveDate, to: chrono::NaiveDate) {
+        let name = core.cfg.ads.iter().find(|a| a.id == id).map(|a| a.label()).unwrap_or_default();
+        let name: String =
+            name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect::<String>().trim().replace(' ', "-");
+        let file = format!("schedule_{name}_{from}_{to}.pdf");
+        self.dlg(move || {
+            rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .set_file_name(&file)
+                .save_file()
+                // the logo and signature go on it like on the other PDF reports
+                .map(|p| Dlg::SaveAdSchedule(id, from, to, p, crate::report::Brand::load().0))
+        });
     }
 }
 
