@@ -766,7 +766,8 @@ impl App {
         self.az_head(ui, core, "files", "Station media");
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr("☁ Upload files here…")).clicked() {
-                self.dlg(|| rfd::FileDialog::new().add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AzUpload));
+                let fd = self.file_dialog();
+                self.sys_dlg(move || fd.add_filter("Audio", &crate::library::EXTS).pick_files().map(Dlg::AzUpload));
             }
             ui.add(egui::TextEdit::singleline(&mut self.az.new_folder).hint_text(tr("new folder name")).desired_width(130.0));
             if ui.add_enabled(!self.az.new_folder.trim().is_empty(), egui::Button::new(tr("📁 Create folder"))).clicked() {

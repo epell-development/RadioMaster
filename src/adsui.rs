@@ -639,9 +639,9 @@ impl App {
         let name: String =
             name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect::<String>().trim().replace(' ', "-");
         let file = format!("schedule_{name}_{from}_{to}.pdf");
-        self.dlg(move || {
-            rfd::FileDialog::new()
-                .add_filter("PDF", &["pdf"])
+        let fd = self.file_dialog();
+        self.sys_dlg(move || {
+            fd.add_filter("PDF", &["pdf"])
                 .set_file_name(&file)
                 .save_file()
                 // the logo and signature go on it like on the other PDF reports

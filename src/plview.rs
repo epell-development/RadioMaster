@@ -203,9 +203,8 @@ impl App {
                 TabOp::SaveM3u(i) => {
                     self.view_pl = i;
                     let name = format!("{}.m3u", core.tabs[i].name);
-                    self.dlg(move || {
-                        rfd::FileDialog::new().add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u)
-                    });
+                    let fd = self.file_dialog();
+                    self.sys_dlg(move || fd.add_filter("Playlist", &["m3u"]).set_file_name(&name).save_file().map(Dlg::SaveM3u));
                 }
                 TabOp::LoadM3u(i) => {
                     self.view_pl = i;

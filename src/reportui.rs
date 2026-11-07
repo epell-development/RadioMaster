@@ -307,8 +307,9 @@ impl App {
                 .color(GRAY),
             );
             if let Some(which) = pick {
-                self.dlg(move || {
-                    let p = rfd::FileDialog::new().add_filter("PNG / JPEG", &["png", "jpg", "jpeg"]).pick_file()?;
+                let fd = self.file_dialog();
+                self.sys_dlg(move || {
+                    let p = fd.add_filter("PNG / JPEG", &["png", "jpg", "jpeg"]).pick_file()?;
                     Some(Dlg::BrandImage(which, Brand::store(which, &p)))
                 });
             }
@@ -337,9 +338,8 @@ impl App {
             Export::ProofOnePdf => (format!("proof-of-play_{item}_{period}.pdf"), "pdf"),
             Export::PlaysOneCsv => (format!("plays_{item}_{period}.csv"), "csv"),
         };
-        self.dlg(move || {
-            rfd::FileDialog::new().add_filter(ext.to_uppercase(), &[ext]).set_file_name(&name).save_file().map(Dlg::SaveReport)
-        });
+        let fd = self.file_dialog();
+        self.sys_dlg(move || fd.add_filter(ext.to_uppercase(), &[ext]).set_file_name(&name).save_file().map(Dlg::SaveReport));
     }
 
     pub(super) fn tab_reports(&mut self, ui: &mut egui::Ui, core: &mut Playout) {

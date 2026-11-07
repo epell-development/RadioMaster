@@ -1077,12 +1077,12 @@ impl App {
                 self.sel = (0..core.tab_len(v)).collect();
             }
             if item(ui, true, tr("Render playlist to WAV…"), "") {
-                self.dlg(|| rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_file_name("mix.wav").save_file().map(Dlg::RenderWav));
+                let fd = self.file_dialog();
+                self.sys_dlg(move || fd.add_filter("WAV", &["wav"]).set_file_name("mix.wav").save_file().map(Dlg::RenderWav));
             }
             if item(ui, true, tr("Export as CSV…"), "") {
-                self.dlg(|| {
-                    rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("playlist.csv").save_file().map(Dlg::ExportCsv)
-                });
+                let fd = self.file_dialog();
+                self.sys_dlg(move || fd.add_filter("CSV", &["csv"]).set_file_name("playlist.csv").save_file().map(Dlg::ExportCsv));
             }
             if item(ui, edit, tr("Clear playlist"), "") {
                 core.with_tab(v, |c| c.clear_playlist());

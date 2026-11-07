@@ -477,7 +477,8 @@ impl App {
                 .on_hover_text(tr("Another folder to look for moved files in (besides the library folders)"))
                 .clicked()
             {
-                self.dlg(|| rfd::FileDialog::new().pick_folder().map(Dlg::CleanupFolder));
+                let fd = self.file_dialog();
+                self.sys_dlg(move || fd.pick_folder().map(Dlg::CleanupFolder));
             }
             if let Some(p) = &self.clean.extra {
                 ui.label(RichText::new(short(p)).small().color(GRAY));
