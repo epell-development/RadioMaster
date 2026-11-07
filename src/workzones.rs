@@ -29,14 +29,17 @@ pub enum Tab {
     SongRequests,
     AuxPlaylist,
     TrackInfo,
+    /// the picture of the video file on air
+    Video,
     /// Web panel number n (0-based; the first four are WebPlayout…WebCustom).
     Web(u16),
 }
 impl Tab {
     /// Tabs that can go in a panel, in the order of the "+" menu.
-    pub const PANEL: [Tab; 12] = [
+    pub const PANEL: [Tab; 13] = [
         Tab::AuxPlaylist,
         Tab::TrackInfo,
+        Tab::Video,
         Tab::Carts,
         Tab::Search,
         Tab::FileExplorer,
@@ -84,6 +87,7 @@ impl Tab {
             Tab::SongRequests => "Song Requests",
             Tab::AuxPlaylist => "AUX Playlist",
             Tab::TrackInfo => "Track Info",
+            Tab::Video => "Video",
             Tab::Web(_) => "Web",
         }
     }

@@ -114,6 +114,10 @@ enum Dlg {
     Devices(Vec<String>, Vec<String>, Option<String>),
     /// the play history for Reports
     History(Vec<crate::report::Play>),
+    /// the station's logo and signature for PDF reports (read on opening Reports)
+    Brand(crate::report::Brand, Vec<String>),
+    /// a logo or signature was chosen (and copied into the data folder)
+    BrandImage(crate::report::BrandImage, Result<image::RgbaImage, String>),
     /// a message for the status bar and log
     Say(String),
     /// a profile file was copied into the profiles folder
@@ -398,6 +402,8 @@ pub struct App {
     left_w: f32,
     right_w: f32,
     art_rx: Option<mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>>,
+    /// the Video window and panels
+    video: crate::video::Viewer,
     /// File → Connect to Server
     srv: serverui::ServerUi,
     files: fileui::FileUi,
@@ -660,12 +666,10 @@ fn action_pick(action: ActionKind) -> Pick {
 }
 
 /// Where generator tracks come from: a category, or the files of an advert / jingle rule
-/// (stored as "rule:<id>"). `rules` = (id, name, adverts). `time` also offers a time announcement
-/// (for inserts).
-fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)], time: bool) {
+/// (stored as "rule:<id>"). `rules` = (id, name, adverts).
+fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)]) {
     let shown = match cur.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) {
         Some(rid) => rules.iter().find(|r| r.0 == rid).map(|r| format!("⚡ {}", r.1)).unwrap_or_else(|| tr("(deleted rule)").to_string()),
-        None if cur == crate::generator::TIME_SOURCE => format!("⏰ {}", tr("Time announcement")),
         None => cur.clone(),
     };
     egui::ComboBox::from_id_salt(id).selected_text(shown).width(170.0).show_ui(ui, |ui| {
@@ -680,10 +684,6 @@ fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, c
                 let tag = if *adverts { tr("advert") } else { tr("jingle") };
                 ui.selectable_value(cur, format!("rule:{rid}"), format!("⚡ {name}  ({tag})"));
             }
-        }
-        if time {
-            ui.separator();
-            ui.selectable_value(cur, crate::generator::TIME_SOURCE.to_string(), format!("⏰ {}", tr("Time announcement")));
         }
     });
 }
@@ -772,6 +772,7 @@ impl App {
             left_w: 300.0,
             right_w: 400.0,
             art_rx: None,
+            video: Default::default(),
             srv: Default::default(),
             files: Default::default(),
             seek_drag: None,
@@ -1019,6 +1020,21 @@ impl App {
                     }
                 }
                 Dlg::History(all) => self.rep.set_history(all),
+                Dlg::Brand(b, problems) => {
+                    self.rep.set_brand(b);
+                    for m in problems {
+                        core.say(m.clone());
+                        self.rep.msg = m;
+                    }
+                }
+                Dlg::BrandImage(which, res) => match res {
+                    Ok(img) => self.rep.set_brand_image(which, Some(img)),
+                    Err(e) => {
+                        let msg = format!("Couldn't use that picture: {e}");
+                        core.say(msg.clone());
+                        self.rep.msg = msg;
+                    }
+                },
                 Dlg::Say(m) => core.say(m),
                 Dlg::ProfileImported(name) => {
                     core.say(format!("Imported the profile {name}"));
@@ -1270,6 +1286,7 @@ impl App {
                         ToolWin::FileExplorer,
                         ToolWin::Cleanup,
                         ToolWin::Notepad,
+                        ToolWin::Video,
                         ToolWin::Plugins,
                     ] {
                         let sc = match w {
@@ -4134,6 +4151,7 @@ impl eframe::App for App {
         });
         self.repeat_window(ctx, &mut core);
         self.keys_window(ctx);
+        self.video.end_frame();
         self.az_take_downloads(&mut core);
         if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
             // at start-up, then every 6 hours for stations that run for weeks

@@ -146,6 +146,7 @@ impl App {
         match selected {
             Some(tab) if tab.is_web() => self.web_pane(ui, pane, tab),
             Some(Tab::AuxPlaylist) => self.tab_aux_playlist(ui, pane, core),
+            Some(Tab::Video) => self.tab_video(ui, core), // fills the panel
             Some(tab) => {
                 // `both`: a wide tool scrolls sideways instead of pushing the panel wider
                 egui::ScrollArea::both().id_salt(("pane", pane.key())).auto_shrink([false, false]).show(ui, |ui| match tab {
@@ -405,6 +406,13 @@ impl App {
 
     // ---------------------------------------------------------- track info
     /// Last / on air / next with their details, plus notes the presenter keeps about each song and artist.
+    /// The picture of the video file on air (a panel tab and Tools → Video).
+    pub(super) fn tab_video(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        let st = &core.status;
+        let path = core.on_air.as_ref().filter(|_| st.has_track).map(|t| t.path.clone());
+        self.video.show(ui, path.as_deref(), st.pos, core.state == PlayState::Playing);
+    }
+
     fn tab_track_info(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let cur = core.current;
         let st = core.status.clone();

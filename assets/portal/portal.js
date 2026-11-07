@@ -583,7 +583,7 @@ $("autoSave").addEventListener("click", () => saveCfg((c) => {
 $("tplAdd").addEventListener("click", () => editTemplate(-1));
 $("catAdd").addEventListener("click", () => editCategory(-1));
 
-/// Rows of (source, numbers…) with add and remove: template steps and markers.
+/// Rows of (source, numbers…) with add and remove: template steps.
 function stepRows(items, make, fields, addText) {
   const box = el("div");
   const draw = () => {
@@ -607,9 +607,9 @@ function stepRows(items, make, fields, addText) {
 
 function editTemplate(i) {
   const t = i >= 0 ? JSON.parse(JSON.stringify(cfg.templates[i]))
-    : { name: "New template", minutes: 120, pattern: [{ category: (cfg.categories[0] || {}).name || "Music", count: 1 }], markers: [], artist_gap: 5, hour_markers: false };
+    : { name: "New template", minutes: 120, pattern: [{ category: (cfg.categories[0] || {}).name || "Music", count: 1 }], artist_gap: 5, hour_markers: false };
   t.pattern = t.pattern || [];
-  t.markers = t.markers || [];
+  delete t.markers; // generator inserts were removed; the station's ad rules play jingles and adverts
   const first = (sources()[0] || ["Music"])[0];
   const name = el("input", { value: t.name, required: true });
   const minutes = num(t.minutes, 1, 1440 * 7);
@@ -620,8 +620,6 @@ function editTemplate(i) {
     el("div", { class: "pair" }, field("Length (minutes)", minutes), field("Songs before an artist repeats", gap)),
     el("div", { class: "sub" }, el("strong", {}, "Steps"), el("p", { class: "muted small" }, "Played in order, then again from the top, until the length is reached."),
       stepRows(t.pattern, () => ({ category: first, count: 1 }), [["count", "×", 1, 50]], "＋ Step")),
-    el("div", { class: "sub" }, el("strong", {}, "Markers"), el("p", { class: "muted small" }, "Put in every so many minutes, e.g. a station ID every 30 minutes."),
-      stepRows(t.markers, () => ({ category: first, every_mins: 30, count: 1 }), [["every_mins", "every (min)", 1, 1440], ["count", "×", 1, 20]], "＋ Marker")),
     hourRow,
   ], () => {
     const n = name.value.trim();
@@ -665,7 +663,7 @@ function editCategory(i) {
       if (k >= 0) x.categories[k] = c; else x.categories.push(c);
       // the templates follow a renamed category
       if (old !== null && old !== n) {
-        (x.templates || []).forEach((t) => [...(t.pattern || []), ...(t.markers || [])].forEach((p) => { if (p.category === old) p.category = n; }));
+        (x.templates || []).forEach((t) => (t.pattern || []).forEach((p) => { if (p.category === old) p.category = n; }));
       }
     });
   });

@@ -650,6 +650,8 @@ impl Playout {
                 *sh = self.cfg.azuracast.clone();
             }
         }
+        // video files whose sound needs ffmpeg use the one chosen in Settings
+        crate::media::set_ffmpeg_choice(&self.cfg.ffmpeg_path);
         let st = self.engine.status();
         let ended = self.engine.take_ended();
         self.status = st.clone();
@@ -1460,13 +1462,18 @@ impl Playout {
     }
 
     /// Whether a file is an advert, a jingle or a song (for the play history and reports).
+    /// What a file is in the play history (and the reports): adverts from the Adverts list or an
+    /// advert rule, jingles from the cart wall or a jingle rule, anything else is a song.
     pub fn kind_of(&self, path: &Path) -> &'static str {
-        let in_rule =
-            |adverts: bool| {
-                self.cfg.rotations.iter().filter(|r| r.adverts == adverts).any(|r| {
-                    (!r.folder.trim().is_empty() && path.starts_with(r.folder.trim())) || r.files.iter().any(|f| Path::new(f) == path)
-                })
-            };
+        let in_rule = |adverts: bool| {
+            self.cfg.ad_rules.iter().filter(|r| r.adverts == adverts && !(r.adverts && r.use_ad_list)).any(|r| {
+                if !r.files.is_empty() {
+                    r.files.iter().any(|f| Path::new(f) == path)
+                } else {
+                    !r.folder.trim().is_empty() && path.starts_with(r.folder.trim())
+                }
+            })
+        };
         if self.cfg.ads.iter().any(|a| Path::new(&a.path) == path) || in_rule(true) {
             "advert"
         } else if self.cfg.carts.iter().any(|c| Path::new(&c.path) == path) || in_rule(false) {
@@ -2938,11 +2945,11 @@ impl Playout {
             self.say(format!("Template '{name}' not found"));
             return None;
         };
-        // advert / jingle rules used as pattern steps or markers: their files join the pool
+        // advert / jingle rules used as pattern steps: their files join the pool
         let mut lib = self.library.clone();
         let mut preset: HashMap<String, Vec<usize>> = HashMap::new();
         let sources = tpl.pattern.iter().chain(tpl.dayparts.iter().flat_map(|d| d.pattern.iter())).map(|p| &p.category);
-        let sources: Vec<String> = sources.chain(tpl.markers.iter().map(|m| &m.category)).cloned().collect();
+        let sources: Vec<String> = sources.cloned().collect();
         for src in &sources {
             let Some(id) = src.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) else { continue };
             if preset.contains_key(src) {
@@ -2958,21 +2965,14 @@ impl Playout {
         let mut t = self.generate_start(append);
         let span = |tr: &Track| self.span_of(tr);
         let made = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset, t.naive_local(), &span);
-        if !made.iter().any(|g| matches!(g, crate::generator::Gen::Track { insert: false, .. })) {
+        if made.is_empty() {
             self.say("Generator produced nothing — scan the library and check category filters");
             return None;
         }
         let mut rows = vec![];
-        for g in made {
-            let (row, span) = match g {
-                crate::generator::Gen::Track { track, .. } => {
-                    let span = self.span_of(&track);
-                    (PlEntry::file(track), span)
-                }
-                crate::generator::Gen::TimeAnnounce => {
-                    (PlEntry::special(ItemKind::TimeAnnounce, "", crate::generator::TIME_SECS), crate::generator::TIME_SECS)
-                }
-            };
+        for track in made {
+            let span = self.span_of(&track);
+            let row = PlEntry::file(track);
             if tpl.hour_markers {
                 use chrono::Timelike;
                 let after = t + CDur::milliseconds((span * 1000.0) as i64);
@@ -3231,6 +3231,19 @@ mod tests {
 
     fn marker(t: DateTime<Local>, hard: bool, wait: bool) -> PlEntry {
         PlEntry::special(ItemKind::HourMarker { hour: t.hour(), minute: t.minute(), hard, wait }, "", 0.0)
+    }
+
+    #[test]
+    fn plays_from_rules_are_logged_as_adverts_and_jingles() {
+        use crate::config::AdRule;
+        let mut p = playout();
+        p.cfg.ad_rules = vec![
+            AdRule { id: 1, adverts: true, folder: "/ads".into(), ..Default::default() },
+            AdRule { id: 2, adverts: false, files: vec!["/j/id.mp3".into()], ..Default::default() },
+        ];
+        assert_eq!(p.kind_of(Path::new("/ads/sponsor.mp3")), "advert");
+        assert_eq!(p.kind_of(Path::new("/j/id.mp3")), "jingle");
+        assert_eq!(p.kind_of(Path::new("/music/song.mp3")), "song");
     }
 
     #[test]
@@ -3636,7 +3649,7 @@ mod tests {
 
     #[test]
     fn generated_rows_follow_the_clock_and_go_in() {
-        use crate::config::{Category, Marker, PatternItem, Template};
+        use crate::config::{Category, PatternItem, Template};
         let mut p = playout();
         p.library = (0..30)
             .map(|i| Track {
@@ -3652,12 +3665,12 @@ mod tests {
             name: "Clock".into(),
             minutes: 130,
             pattern: vec![PatternItem { category: "Music".into(), count: 1 }],
-            markers: vec![Marker { category: crate::generator::TIME_SOURCE.into(), on_clock: true, every_mins: 60, ..Default::default() }],
+            hour_markers: true,
             ..Default::default()
         }];
         let rows = p.generated_rows("Clock", false).unwrap();
-        let ann = rows.iter().filter(|r| matches!(r.kind, ItemKind::TimeAnnounce)).count();
-        assert!((2..=3).contains(&ann), "one per top of the hour in 130 minutes ({ann})");
+        let marks = rows.iter().filter(|r| matches!(r.kind, ItemKind::HourMarker { .. })).count();
+        assert!((2..=3).contains(&marks), "one per top of the hour in 130 minutes ({marks})");
         assert!(p.playlist.is_empty(), "a preview changes nothing");
         p.use_generated(rows.clone(), false);
         assert_eq!(p.playlist.len(), rows.len());
