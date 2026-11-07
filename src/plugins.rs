@@ -320,7 +320,7 @@ pub fn write_example() -> std::io::Result<PathBuf> {
     Ok(folder())
 }
 
-/// Open a folder in the file manager.
+/// Open a folder in the file manager (or a file in its usual app).
 pub fn open_folder(p: &Path) {
     #[cfg(windows)]
     let _ = Command::new("explorer").arg(p).spawn();

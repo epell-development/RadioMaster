@@ -6,7 +6,7 @@ Add yourself in a pull request when you contribute code, a translation, artwork 
 Format: `- Name or handle — what you did`
 
 ## Team
-- epell-development — project lead, DovaFM Digital Entertainment Group
+- epell — project lead, DovaFM Digital Entertainment Group
 
 ## Code
 
