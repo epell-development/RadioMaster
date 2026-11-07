@@ -644,7 +644,8 @@ impl App {
                 .add_filter("PDF", &["pdf"])
                 .set_file_name(&file)
                 .save_file()
-                .map(|p| Dlg::SaveAdSchedule(id, from, to, p))
+                // the logo and signature go on it like on the other PDF reports
+                .map(|p| Dlg::SaveAdSchedule(id, from, to, p, crate::report::Brand::load().0))
         });
     }
 }

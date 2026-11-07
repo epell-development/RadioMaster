@@ -1,13 +1,10 @@
-//! Playlist Generator: categories, templates (pattern, time-of-day patterns, inserts by songs /
-//! minutes / set times, length, separation) and a preview of the running order before it goes in.
+//! Playlist Generator: categories, templates (pattern, time-of-day patterns, length, separation) and a preview of the running order before it goes in.
 use super::adsui::section;
 use super::*;
-use crate::config::{Category, Daypart, GenLength, Marker, PatternItem, Template, Trigger};
+use crate::config::{Category, Daypart, GenLength, PatternItem, Template};
 
 #[derive(Default)]
 pub(super) struct GenUi {
-    /// time to add to an insert "at set times"
-    pub new_time: (u32, u32),
     pub preview: Option<GenPreview>,
     /// bring the preview into view on the next frame
     pub show_preview: bool,
@@ -20,20 +17,6 @@ pub(super) struct GenPreview {
     pub rows: Vec<PlEntry>,
     /// (start time, length) of each row
     pub times: Vec<(chrono::DateTime<Local>, f32)>,
-}
-
-/// "all day" or from … to hours (from == to means all day).
-fn hours_edit(ui: &mut egui::Ui, from: &mut u32, to: &mut u32) {
-    let mut all_day = *from == *to;
-    if ui.checkbox(&mut all_day, tr("all day")).changed() {
-        (*from, *to) = if all_day { (0, 0) } else { (6, 22) };
-    }
-    if !all_day {
-        ui.label(tr("from"));
-        ui.add(egui::DragValue::new(from).range(0..=23).custom_formatter(|v, _| format!("{:02}:00", v as u32)));
-        ui.label(tr("to"));
-        ui.add(egui::DragValue::new(to).range(0..=23).custom_formatter(|v, _| format!("{:02}:00", v as u32)));
-    }
 }
 
 fn hhmm(ui: &mut egui::Ui, h: &mut u32, m: &mut u32) {
@@ -55,7 +38,7 @@ fn pattern_edit(
         ui.horizontal(|ui| {
             ui.label(format!("{}.", k + 1));
             ui.add(egui::DragValue::new(&mut p.count).range(1..=20).suffix(" ×"));
-            source_combo(ui, ("pat", id, k), &mut p.category, cats, rules, false);
+            source_combo(ui, ("pat", id, k), &mut p.category, cats, rules);
             if ui.small_button("✖").on_hover_text(tr("Remove this step")).clicked() {
                 pdel = Some(k);
             }
@@ -74,7 +57,6 @@ impl App {
         let cat_names: Vec<String> = core.cfg.categories.iter().map(|c| c.name.clone()).collect();
         let tpl_names: Vec<String> = core.cfg.templates.iter().map(|t| t.name.clone()).collect();
         let rules: Vec<(u64, String, bool)> = core.cfg.ad_rules.iter().map(|r| (r.id, r.name.clone(), r.adverts)).collect();
-        let first_jingle = rules.iter().find(|r| !r.2).map(|r| format!("rule:{}", r.0));
         let mut gen: Option<(String, bool)> = None;
         let mut preview: Option<(String, bool)> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -87,7 +69,7 @@ impl App {
                 ui.add(egui::DragValue::new(&mut core.cfg.auto_min_mins).range(1..=600).suffix(" min left"));
             });
             ui.label(
-                RichText::new(tr("The template's times of day and timed inserts follow the clock from where the new tracks start."))
+                RichText::new(tr("The template's times of day follow the clock from where the new tracks start."))
                     .small()
                     .color(GRAY),
             );
@@ -255,82 +237,6 @@ impl App {
             if ui.button(tr("➕ Add time of day")).clicked() {
                 t.dayparts.push(Daypart { pattern: t.pattern.clone(), ..Default::default() });
             }
-            ui.add_space(8.0);
-
-            section(ui, "4", tr("Inserts"));
-            ui.label(
-                RichText::new(tr("Jingles, adverts, talk or a time announcement, like the advert / jingle rules: after a number of songs, every so often, or at set times. Timed ones go in after the song that's playing when the time comes."))
-                    .color(GRAY),
-            );
-            let mut mdel = None;
-            for (k, m) in t.markers.iter_mut().enumerate() {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(tr("Insert"));
-                        if m.category != crate::generator::TIME_SOURCE {
-                            ui.add(egui::DragValue::new(&mut m.count).range(1..=10).suffix(" ×"));
-                        }
-                        source_combo(ui, ("mk", k), &mut m.category, &cat_names, &rules, true);
-                        if delete_button(ui, ("insert", self.tpl_sel, k), tr("this insert")) {
-                            mdel = Some(k);
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.radio_value(&mut m.trigger, Trigger::Songs, tr("after every"));
-                        ui.add_enabled(m.trigger == Trigger::Songs, egui::DragValue::new(&mut m.every_songs).range(1..=100).suffix(" songs"));
-                        ui.radio_value(&mut m.trigger, Trigger::Minutes, tr("every"));
-                        ui.add_enabled_ui(m.trigger == Trigger::Minutes, |ui| {
-                            ui.add(egui::DragValue::new(&mut m.every_mins).range(1..=1440).suffix(" min"));
-                            ui.checkbox(&mut m.on_clock, tr("on the clock"))
-                                .on_hover_text(tr("Every 60 minutes on the clock = at the top of each hour. Off = counted from the start of the playlist."));
-                        });
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.radio_value(&mut m.trigger, Trigger::Times, tr("at"));
-                        ui.add_enabled_ui(m.trigger == Trigger::Times, |ui| {
-                            let mut tdel = None;
-                            for (j, (h, mi)) in m.times.iter().enumerate() {
-                                if ui.button(format!("{h:02}:{mi:02}  ✖")).on_hover_text(tr("Remove this time")).clicked() {
-                                    tdel = Some(j);
-                                }
-                            }
-                            if let Some(j) = tdel {
-                                m.times.remove(j);
-                            }
-                            let (h, mi) = &mut self.gen.new_time;
-                            hhmm(ui, h, mi);
-                            if ui.button(tr("➕ Add time")).clicked() && !m.times.contains(&(*h, *mi)) {
-                                m.times.push((*h, *mi));
-                                m.times.sort();
-                            }
-                        });
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(tr("Hours"));
-                        hours_edit(ui, &mut m.from_hour, &mut m.to_hour);
-                    });
-                });
-            }
-            if let Some(k) = mdel {
-                t.markers.remove(k);
-            }
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(first_jingle.is_some(), egui::Button::new(tr("➕ Add jingles")))
-                    .on_hover_text(tr("Uses the files of a jingle rule (Advertisement scheduler) every 15 minutes"))
-                    .on_disabled_hover_text(tr("Make a jingle rule in the Advertisement scheduler first, or add a Jingles category"))
-                    .clicked()
-                {
-                    t.markers.push(Marker { category: first_jingle.clone().unwrap_or_default(), every_mins: 15, ..Default::default() });
-                }
-                if ui.button(tr("➕ Add time announcement")).on_hover_text(tr("At the top of every hour")).clicked() {
-                    t.markers.push(Marker { category: crate::generator::TIME_SOURCE.into(), on_clock: true, ..Default::default() });
-                }
-                if ui.button(tr("➕ Add insert")).clicked() {
-                    t.markers.push(Marker { category: cat_names.first().cloned().unwrap_or_default(), ..Default::default() });
-                }
-            });
             ui.add_space(8.0);
 
             ui.separator();

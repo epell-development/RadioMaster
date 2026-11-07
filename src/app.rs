@@ -89,7 +89,7 @@ enum Dlg {
     CatFolder(usize, PathBuf),
     SaveReport(PathBuf),
     /// (advert id, from, to, file) for an advert's printable schedule
-    SaveAdSchedule(u64, chrono::NaiveDate, chrono::NaiveDate, PathBuf),
+    SaveAdSchedule(u64, chrono::NaiveDate, chrono::NaiveDate, PathBuf, crate::report::Brand),
     AnnounceFolder(PathBuf),
     /// folder for show recordings
     RecFolder(PathBuf),
@@ -114,6 +114,10 @@ enum Dlg {
     Devices(Vec<String>, Vec<String>, Option<String>),
     /// the play history for Reports
     History(Vec<crate::report::Play>),
+    /// the station's logo and signature for PDF reports (read on opening Reports)
+    Brand(crate::report::Brand, Vec<String>),
+    /// a logo or signature was chosen (and copied into the data folder)
+    BrandImage(crate::report::BrandImage, Result<image::RgbaImage, String>),
     /// a message for the status bar and log
     Say(String),
     /// a profile file was copied into the profiles folder
@@ -367,6 +371,8 @@ pub struct App {
     profile_map: Option<ProfileMap>,
     accounts: crate::auth::Accounts,
     logged_in: Option<crate::auth::Operator>,
+    /// "Sign in…" was chosen while sign-in is turned off: show the sign-in screen anyway
+    sign_in_now: bool,
     login_name: String,
     login_password: String,
     auth_error: String,
@@ -386,6 +392,8 @@ pub struct App {
     left_w: f32,
     right_w: f32,
     art_rx: Option<mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>>,
+    /// the Video window and panels
+    video: crate::video::Viewer,
     /// File → Connect to Server
     srv: serverui::ServerUi,
     files: fileui::FileUi,
@@ -641,12 +649,10 @@ fn action_pick(action: ActionKind) -> Pick {
 }
 
 /// Where generator tracks come from: a category, or the files of an advert / jingle rule
-/// (stored as "rule:<id>"). `rules` = (id, name, adverts). `time` also offers a time announcement
-/// (for inserts).
-fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)], time: bool) {
+/// (stored as "rule:<id>"). `rules` = (id, name, adverts).
+fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, cats: &[String], rules: &[(u64, String, bool)]) {
     let shown = match cur.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) {
         Some(rid) => rules.iter().find(|r| r.0 == rid).map(|r| format!("⚡ {}", r.1)).unwrap_or_else(|| tr("(deleted rule)").to_string()),
-        None if cur == crate::generator::TIME_SOURCE => format!("⏰ {}", tr("Time announcement")),
         None => cur.clone(),
     };
     egui::ComboBox::from_id_salt(id).selected_text(shown).width(170.0).show_ui(ui, |ui| {
@@ -661,10 +667,6 @@ fn source_combo(ui: &mut egui::Ui, id: impl std::hash::Hash, cur: &mut String, c
                 let tag = if *adverts { tr("advert") } else { tr("jingle") };
                 ui.selectable_value(cur, format!("rule:{rid}"), format!("⚡ {name}  ({tag})"));
             }
-        }
-        if time {
-            ui.separator();
-            ui.selectable_value(cur, crate::generator::TIME_SOURCE.to_string(), format!("⏰ {}", tr("Time announcement")));
         }
     });
 }
@@ -749,6 +751,7 @@ impl App {
             left_w: 300.0,
             right_w: 400.0,
             art_rx: None,
+            video: Default::default(),
             srv: Default::default(),
             files: Default::default(),
             seek_drag: None,
@@ -825,6 +828,7 @@ impl App {
             profile_map: None,
             accounts: crate::auth::Accounts::load(),
             logged_in: None,
+            sign_in_now: false,
             login_name: String::new(),
             login_password: String::new(),
             auth_error: String::new(),
@@ -974,6 +978,21 @@ impl App {
                     }
                 }
                 Dlg::History(all) => self.rep.set_history(all),
+                Dlg::Brand(b, problems) => {
+                    self.rep.set_brand(b);
+                    for m in problems {
+                        core.say(m.clone());
+                        self.rep.msg = m;
+                    }
+                }
+                Dlg::BrandImage(which, res) => match res {
+                    Ok(img) => self.rep.set_brand_image(which, Some(img)),
+                    Err(e) => {
+                        let msg = format!("Couldn't use that picture: {e}");
+                        core.say(msg.clone());
+                        self.rep.msg = msg;
+                    }
+                },
                 Dlg::Say(m) => core.say(m),
                 Dlg::ProfileImported(name) => {
                     core.say(format!("Imported the profile {name}"));
@@ -1007,10 +1026,10 @@ impl App {
                     core.say(msg.clone());
                     self.rep.msg = msg;
                 }
-                Dlg::SaveAdSchedule(id, from, to, p) => {
+                Dlg::SaveAdSchedule(id, from, to, p, brand) => {
                     if let Some(ad) = core.cfg.ads.iter().find(|a| a.id == id) {
                         let s = crate::report::ad_schedule(&core.cfg, ad, from, to);
-                        let pdf = crate::report::pdf_ad_schedule(&Self::station_name(core), ad, from, to, &s);
+                        let pdf = crate::report::pdf_ad_schedule(&Self::station_name(core), ad, from, to, &s, brand);
                         match std::fs::write(&p, pdf) {
                             Ok(()) => {
                                 core.say(format!("Saved {}", p.display()));
@@ -1138,11 +1157,23 @@ impl App {
                         self.show_users = true;
                         ui.close_menu();
                     }
-                    if ui.button(tr("Log out")).clicked() {
+                    if self.logged_in.as_ref().is_some_and(|u| u.is_open_station()) {
+                        // sign-in is off: signing in is only worth offering once there are accounts
+                        if self.accounts.users.iter().any(|u| !u.disabled)
+                            && ui.button(tr("Sign in…")).on_hover_text(tr("Sign in with an operator account")).clicked()
+                        {
+                            self.logged_in = None;
+                            self.sign_in_now = true;
+                            self.login_password.clear();
+                            self.auth_error.clear();
+                            ui.close_menu();
+                        }
+                    } else if ui.button(tr("Log out")).clicked() {
                         if self.srv.signed_in_remotely() {
                             self.disconnect(core);
                         }
                         self.logged_in = None;
+                        self.sign_in_now = false;
                         self.login_password.clear();
                         self.auth_error.clear();
                         ui.close_menu();
@@ -1227,6 +1258,7 @@ impl App {
                         ToolWin::FileExplorer,
                         ToolWin::Cleanup,
                         ToolWin::Notepad,
+                        ToolWin::Video,
                         ToolWin::Plugins,
                     ] {
                         let sc = match w {
@@ -1665,14 +1697,16 @@ impl App {
             let now = core.now();
             let st = core.status.clone();
             let title = Some(core.on_air_text()).filter(|t| !t.is_empty()).unwrap_or_else(|| "No track playing".into());
-            let next_i = core.current.map(|i| i + 1).unwrap_or(0);
-            let coming = core
-                .playlist
-                .iter()
-                .skip(next_i)
-                .find(|e| !matches!(e.kind, crate::items::ItemKind::Comment(_) | crate::items::ItemKind::HourMarker { .. }))
-                .map(|p| p.title())
-                .unwrap_or_else(|| "Queue empty".into());
+            let coming = if core.stop_after && core.state != PlayState::Stopped {
+                tr("Stops after this track").to_string()
+            } else {
+                match core.upcoming().and_then(|i| core.playlist.get(i)) {
+                    Some(e) if core.cfg.repeat_track && core.upcoming() == core.current => format!("{} {}", tr("Again:"), e.title()),
+                    Some(e) => e.title(),
+                    None if core.cfg.shuffle && core.state != PlayState::Stopped => tr("Shuffle: picking…").to_string(),
+                    None => "Queue empty".into(),
+                }
+            };
             let previous =
                 core.history.iter().rev().nth(if st.has_track { 1 } else { 0 }).map(|h| h.text.clone()).unwrap_or_else(|| "—".into());
             let marker = core.secs_to_next_marker();
@@ -2159,6 +2193,8 @@ impl App {
                                 ui.checkbox(&mut core.cfg.loop_playlist,"Loop the playlist");
                                 ui.checkbox(&mut core.cfg.auto_enabled,"Enable automated playlist top-up");
                                 ui.checkbox(&mut core.cfg.random_fill,"Fill from music library");
+                                ui.checkbox(&mut core.cfg.repeat_track, tr("Repeat track"));
+                                ui.checkbox(&mut core.cfg.shuffle, tr("Shuffle"));
                                 ui.separator();
                                 ui.heading(tr("Transitions"));
                                 self.smart_fade_settings(ui, core);
@@ -2217,7 +2253,23 @@ impl App {
                             },
                             SettingsPage::Accounts=>{
                                 let admin=self.logged_in.as_ref().is_some_and(|u|u.admin);
-                                if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.show_users=true;}
+                                let mut ask=self.accounts.sign_in_required();
+                                let can=admin && (ask || self.accounts.has_admin());
+                                if ui
+                                    .add_enabled(can, egui::Checkbox::new(&mut ask, tr("Ask for a username and password when RadioMaster starts")))
+                                    .on_disabled_hover_text(if admin { tr("Create an administrator account first, so someone can sign in") } else { tr("Only administrators can change this") })
+                                    .changed()
+                                {
+                                    if let Err(e)=self.accounts.set_sign_in_required(ask){self.auth_error=e;}
+                                }
+                                if ask {
+                                    ui.small(tr("Everyone signs in with their own account and gets only the access it allows."));
+                                } else {
+                                    ui.small(tr("RadioMaster opens straight to the station with full access, so anyone at this computer can change settings and accounts. Turn this on to make people sign in."));
+                                }
+                                if admin && !self.auth_error.is_empty() && !self.show_users {ui.colored_label(RED,&self.auth_error);}
+                                ui.add_space(6.0);
+                                if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.auth_error.clear();self.show_users=true;}
                                 if !admin {ui.label(tr("Only administrators can manage user accounts."));}
                                 ui.small(tr("Accounts gate the local UI; secure your Windows account and streaming API separately."));
                             },
@@ -2271,9 +2323,30 @@ impl App {
                     self.login_password.clear();
                     if self.logged_in.is_some() {
                         self.login_name.clear(); // the "add a user" form reuses this box
+                        self.sign_in_now = false;
                     }
                 }
+                if !self.accounts.sign_in_required() && ui.button(tr("Cancel")).on_hover_text(tr("Back to the station without signing in")).clicked() {
+                    self.sign_in_now = false;
+                    self.srv.show_connect = false;
+                    self.srv.from_login = false;
+                    self.login_password.clear();
+                    self.auth_error.clear();
+                }
                 ui.colored_label(RED, &self.auth_error);
+                if !self.accounts.users.is_empty() {
+                    ui.add_space(8.0);
+                    ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(tr("Forgot your password? Another administrator can set a new one in File → Users…. If no administrator can sign in, close RadioMaster and delete operators.json from its settings folder: it then starts without asking, and your playlists and settings are kept."))
+                                .small()
+                                .color(GRAY),
+                        );
+                        if ui.small_button(tr("Open the settings folder")).clicked() {
+                            crate::plugins::open_folder(&data_dir());
+                        }
+                    });
+                }
                 ui.add_space(14.0);
                 ui.separator();
                 ui.add_space(6.0);
@@ -3920,6 +3993,10 @@ impl eframe::App for App {
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.focused) {
             self.browsers.focus_parent("");
         }
+        if self.logged_in.is_none() && !self.sign_in_now && !self.accounts.sign_in_required() {
+            // sign-in is turned off (or there are no accounts yet): straight in
+            self.logged_in = Some(crate::auth::Operator::open_station());
+        }
         if self.logged_in.is_none() {
             self.browsers.block("");
             self.browsers.finish();
@@ -4037,6 +4114,7 @@ impl eframe::App for App {
         });
         self.repeat_window(ctx, &mut core);
         self.keys_window(ctx);
+        self.video.end_frame();
         self.az_take_downloads(&mut core);
         if core.cfg.check_updates && self.update_next.is_none_or(|t| std::time::Instant::now() >= t) {
             // at start-up, then every 6 hours for stations that run for weeks

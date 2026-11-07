@@ -200,6 +200,14 @@ impl std::fmt::Debug for Operator {
 }
 
 impl Operator {
+    /// Who runs RadioMaster when sign-in is turned off: an administrator with no account.
+    pub fn open_station() -> Self {
+        Operator { name: String::new(), password_hash: String::new(), admin: true, perms: Perms::default(), disabled: false }
+    }
+    /// The stand-in from `open_station`, not a real account.
+    pub fn is_open_station(&self) -> bool {
+        self.name.is_empty() && self.password_hash.is_empty()
+    }
     /// What this account may do: everything for an administrator, else its permissions.
     #[allow(dead_code)] // (RadioMaster Server's)
     pub fn effective(&self) -> Perms {
@@ -214,6 +222,10 @@ impl Operator {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Accounts {
     pub users: Vec<Operator>,
+    /// Ask for a username and password when RadioMaster starts. Unset (files saved before this
+    /// setting existed) means yes once accounts exist; with no accounts RadioMaster never asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_sign_in: Option<bool>,
 }
 
 pub fn hash(password: &str) -> Result<String, String> {
@@ -300,9 +312,25 @@ impl Accounts {
         self.users.iter().find(|u| !u.disabled && u.name == name)
     }
     /// At least one administrator can sign in.
-    #[allow(dead_code)] // (RadioMaster Server's)
     pub fn has_admin(&self) -> bool {
         self.admins() > 0
+    }
+    /// Whether RadioMaster asks who you are when it starts: only while an administrator can sign
+    /// in, so turning it on (or losing the operators file) can never lock everyone out.
+    pub fn sign_in_required(&self) -> bool {
+        self.require_sign_in.unwrap_or(true) && self.has_admin()
+    }
+    /// Turn the sign-in screen on or off. On needs an active administrator account first.
+    pub fn set_sign_in_required(&mut self, on: bool) -> Result<(), String> {
+        if on && !self.has_admin() {
+            return Err("Create an administrator account first, so someone can sign in".into());
+        }
+        let was = self.require_sign_in.replace(on);
+        if let Err(e) = self.save() {
+            self.require_sign_in = was;
+            return Err(e);
+        }
+        Ok(())
     }
     pub fn login(&self, name: &str, password: &str) -> Option<Operator> {
         self.users.iter().find(|u| !u.disabled && u.name == name && verify(&u.password_hash, password)).cloned()
@@ -329,6 +357,30 @@ mod tests {
         let pr = Perms::presenter();
         assert!(pr.tool(tool::TRACK_EDITOR) && !pr.tool(tool::AUDIO_FX) && pr.edit_playlists && !pr.settings);
         assert!(!pr.tool(tool::LIBRARY_CLEANUP));
+    }
+
+    #[test]
+    fn sign_in_is_optional() {
+        let admin =
+            || Operator { name: "studio".into(), password_hash: String::new(), admin: true, perms: Perms::default(), disabled: false };
+        // a new install has no accounts: straight in
+        let none: Accounts = serde_json::from_str(r#"{"users":[]}"#).unwrap();
+        assert!(!none.sign_in_required());
+        // an operators file from before v0.2.11 keeps asking
+        let mut old: Accounts = serde_json::from_str(r#"{"users":[]}"#).unwrap();
+        old.users.push(admin());
+        assert!(old.require_sign_in.is_none() && old.sign_in_required());
+        old.require_sign_in = Some(false);
+        assert!(!old.sign_in_required());
+        // a disabled administrator can't sign in, so nobody is asked
+        old.require_sign_in = Some(true);
+        old.users[0].disabled = true;
+        assert!(!old.sign_in_required());
+        // the setting survives a save and load, and old files stay as they were
+        assert_eq!(serde_json::to_string(&Accounts::default()).unwrap(), r#"{"users":[]}"#);
+        let back: Accounts = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+        assert_eq!(back.require_sign_in, Some(true));
+        assert!(Operator::open_station().is_open_station() && !admin().is_open_station());
     }
 
     #[test]

@@ -79,6 +79,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .meters div { height: 4px; width: 0; background: var(--good); border-radius: 2px; }
 .controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 10px; }
 .onair .controls button { min-width: 52px; font-size: 1.1rem; flex: 1 0 52px; }
+.modes { gap: 14px; margin: 0 0 8px; }
+.modes label { display: inline-flex; align-items: center; gap: 6px; }
 .volume input { flex: 1; }
 
 ol.rows { list-style: none; margin: 0; padding: 0; max-height: 70vh; overflow-y: auto; }

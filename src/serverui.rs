@@ -42,7 +42,7 @@ struct Connected {
 }
 
 pub(super) struct ServerUi {
-    show_connect: bool,
+    pub(super) show_connect: bool,
     address: String,
     user: String,
     password: String,
@@ -180,6 +180,7 @@ impl App {
         self.connect(core, s, Some(profile));
         self.srv.remote_login = true;
         self.srv.from_login = false;
+        self.sign_in_now = false;
         self.logged_in = Some(crate::auth::Operator {
             name,
             password_hash: String::new(),

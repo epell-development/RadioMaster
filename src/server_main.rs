@@ -17,6 +17,7 @@ mod library;
 #[path = "link.rs"]
 mod link;
 mod live;
+mod media;
 mod mic;
 mod playout;
 mod plugins;

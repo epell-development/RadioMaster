@@ -21,10 +21,11 @@ pub(super) enum ToolWin {
     Scheduler,
     Cleanup,
     FileExplorer,
+    Video,
 }
 
 impl ToolWin {
-    pub(super) const ALL: [ToolWin; 14] = [
+    pub(super) const ALL: [ToolWin; 15] = [
         ToolWin::FadeEditor,
         ToolWin::Generator,
         ToolWin::Ads,
@@ -39,6 +40,7 @@ impl ToolWin {
         ToolWin::Scheduler,
         ToolWin::Cleanup,
         ToolWin::FileExplorer,
+        ToolWin::Video,
     ];
     /// Whether an operator with these permissions may open this tool.
     pub(super) fn allowed(self, p: &crate::auth::Perms) -> bool {
@@ -57,6 +59,7 @@ impl ToolWin {
             ToolWin::Notepad => p.tool(tool::NOTEPAD),
             ToolWin::Cleanup => p.tool(tool::LIBRARY_CLEANUP),
             ToolWin::FileExplorer => p.tool(tool::FILE_EXPLORER),
+            ToolWin::Video => true,
         }
     }
 
@@ -76,6 +79,7 @@ impl ToolWin {
             ToolWin::Scheduler => "Event scheduler",
             ToolWin::Cleanup => "Library cleanup",
             ToolWin::FileExplorer => "File explorer",
+            ToolWin::Video => "Video",
         }
     }
     pub(super) fn icon(self) -> &'static str {
@@ -94,6 +98,7 @@ impl ToolWin {
             ToolWin::Scheduler => "⏰",
             ToolWin::Cleanup => "✨",
             ToolWin::FileExplorer => "📁",
+            ToolWin::Video => "🎬",
         }
     }
     fn size(self) -> [f32; 2] {
@@ -112,6 +117,7 @@ impl ToolWin {
             ToolWin::Scheduler => [900.0, 560.0],
             ToolWin::Cleanup => [900.0, 600.0],
             ToolWin::FileExplorer => [640.0, 600.0],
+            ToolWin::Video => [640.0, 400.0],
         }
     }
 }
@@ -387,6 +393,10 @@ impl App {
                         self.tab_cleanup(ui, core); // its lists scroll on their own
                         return;
                     }
+                    if w == ToolWin::Video {
+                        self.tab_video(ui, core); // fills the window
+                        return;
+                    }
                     if w == ToolWin::FileExplorer {
                         egui::ScrollArea::vertical().id_salt("fx_window").auto_shrink([false, false]).show(ui, |ui| {
                             self.tab_file_explorer(ui, "window".into(), core);
@@ -405,7 +415,7 @@ impl App {
                         ToolWin::AzuraCast => {}
                         ToolWin::Reports => self.tab_reports(ui, core),
                         ToolWin::History => self.tab_history(ui, core),
-                        ToolWin::FadeEditor | ToolWin::Cleanup | ToolWin::FileExplorer => {}
+                        ToolWin::FadeEditor | ToolWin::Cleanup | ToolWin::FileExplorer | ToolWin::Video => {}
                     });
                 },
             );
