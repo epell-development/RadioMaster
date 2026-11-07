@@ -2938,11 +2938,11 @@ impl Playout {
             self.say(format!("Template '{name}' not found"));
             return None;
         };
-        // advert / jingle rules used as pattern steps or markers: their files join the pool
+        // advert / jingle rules used as pattern steps: their files join the pool
         let mut lib = self.library.clone();
         let mut preset: HashMap<String, Vec<usize>> = HashMap::new();
         let sources = tpl.pattern.iter().chain(tpl.dayparts.iter().flat_map(|d| d.pattern.iter())).map(|p| &p.category);
-        let sources: Vec<String> = sources.chain(tpl.markers.iter().map(|m| &m.category)).cloned().collect();
+        let sources: Vec<String> = sources.cloned().collect();
         for src in &sources {
             let Some(id) = src.strip_prefix("rule:").and_then(|s| s.parse::<u64>().ok()) else { continue };
             if preset.contains_key(src) {
@@ -2958,21 +2958,14 @@ impl Playout {
         let mut t = self.generate_start(append);
         let span = |tr: &Track| self.span_of(tr);
         let made = crate::generator::generate(&tpl, &self.cfg.categories, &lib, &preset, t.naive_local(), &span);
-        if !made.iter().any(|g| matches!(g, crate::generator::Gen::Track { insert: false, .. })) {
+        if made.is_empty() {
             self.say("Generator produced nothing — scan the library and check category filters");
             return None;
         }
         let mut rows = vec![];
-        for g in made {
-            let (row, span) = match g {
-                crate::generator::Gen::Track { track, .. } => {
-                    let span = self.span_of(&track);
-                    (PlEntry::file(track), span)
-                }
-                crate::generator::Gen::TimeAnnounce => {
-                    (PlEntry::special(ItemKind::TimeAnnounce, "", crate::generator::TIME_SECS), crate::generator::TIME_SECS)
-                }
-            };
+        for track in made {
+            let span = self.span_of(&track);
+            let row = PlEntry::file(track);
             if tpl.hour_markers {
                 use chrono::Timelike;
                 let after = t + CDur::milliseconds((span * 1000.0) as i64);
@@ -3636,7 +3629,7 @@ mod tests {
 
     #[test]
     fn generated_rows_follow_the_clock_and_go_in() {
-        use crate::config::{Category, Marker, PatternItem, Template};
+        use crate::config::{Category, PatternItem, Template};
         let mut p = playout();
         p.library = (0..30)
             .map(|i| Track {
@@ -3652,12 +3645,12 @@ mod tests {
             name: "Clock".into(),
             minutes: 130,
             pattern: vec![PatternItem { category: "Music".into(), count: 1 }],
-            markers: vec![Marker { category: crate::generator::TIME_SOURCE.into(), on_clock: true, every_mins: 60, ..Default::default() }],
+            hour_markers: true,
             ..Default::default()
         }];
         let rows = p.generated_rows("Clock", false).unwrap();
-        let ann = rows.iter().filter(|r| matches!(r.kind, ItemKind::TimeAnnounce)).count();
-        assert!((2..=3).contains(&ann), "one per top of the hour in 130 minutes ({ann})");
+        let marks = rows.iter().filter(|r| matches!(r.kind, ItemKind::HourMarker { .. })).count();
+        assert!((2..=3).contains(&marks), "one per top of the hour in 130 minutes ({marks})");
         assert!(p.playlist.is_empty(), "a preview changes nothing");
         p.use_generated(rows.clone(), false);
         assert_eq!(p.playlist.len(), rows.len());

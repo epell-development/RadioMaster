@@ -539,43 +539,6 @@ impl Default for PatternItem {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(default)]
-pub struct Marker {
-    /// a category name, "rule:<id>" for the files of an advert / jingle rule, or
-    /// `generator::TIME_SOURCE` for a time announcement
-    pub category: String,
-    /// after every N songs, every N minutes, or at set times (like an advert / jingle rule)
-    pub trigger: Trigger,
-    pub every_songs: u32,
-    pub every_mins: u32,
-    /// every N minutes counted from the top of the hour (:00, :15…) instead of from the start
-    pub on_clock: bool,
-    /// (hour, minute) for `Trigger::Times`
-    pub times: Vec<(u32, u32)>,
-    /// how many to insert each time
-    pub count: u32,
-    /// only between these hours (from == to: all day)
-    pub from_hour: u32,
-    pub to_hour: u32,
-}
-impl Default for Marker {
-    fn default() -> Self {
-        Self {
-            category: "Music".into(),
-            // inserts made before 0.2.9 only had "every N minutes"
-            trigger: Trigger::Minutes,
-            every_songs: 4,
-            every_mins: 60,
-            on_clock: false,
-            times: vec![],
-            count: 1,
-            from_hour: 0,
-            to_hour: 0,
-        }
-    }
-}
-
 /// A different pattern for part of the day, e.g. talk and fewer songs on weekday mornings.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -620,7 +583,6 @@ pub struct Template {
     pub pattern: Vec<PatternItem>,
     /// patterns used instead of `pattern` at some times of day (the first that covers the time wins)
     pub dayparts: Vec<Daypart>,
-    pub markers: Vec<Marker>,
     pub artist_gap: u32,
     /// the same song doesn't come back within this many minutes (0 = whenever its pool runs out)
     pub song_gap_mins: u32,
@@ -636,7 +598,6 @@ impl Default for Template {
             until: (0, 0),
             pattern: vec![PatternItem::default()],
             dayparts: vec![],
-            markers: vec![],
             artist_gap: 5,
             song_gap_mins: 0,
             hour_markers: false,
@@ -1105,6 +1066,16 @@ mod rule_tests {
         assert_eq!((b.trigger, b.times.clone(), b.use_ad_list, b.pick), (Trigger::Times, vec![(15, 45)], true, RotPick::All));
         assert_ne!(j.id, b.id);
         assert!(c.rotations.is_empty() && c.ad_breaks.is_empty());
+    }
+
+    #[test]
+    fn templates_saved_with_inserts_still_load() {
+        // generator inserts ("markers") were removed; old settings still load with everything else
+        let old = r#"{"templates":[{"name":"Day","minutes":90,"artist_gap":3,
+                      "markers":[{"category":"rule:1","trigger":"Minutes","every_mins":15,"count":1}]}]}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert_eq!(c.templates.len(), 1);
+        assert_eq!((c.templates[0].name.as_str(), c.templates[0].minutes, c.templates[0].artist_gap), ("Day", 90, 3));
     }
 
     #[test]
