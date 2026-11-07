@@ -47,7 +47,7 @@ parking_lot = "0.12"
 rand = "0.8"
 rfd = "0.15"
 anyhow = "1"
-symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm"] }
+symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "aac", "isomp4", "mkv", "flac", "vorbis", "ogg", "wav", "pcm"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 argon2 = { version = "0.5", features = ["std"] }
 tiny_http = "0.12"

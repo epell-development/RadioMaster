@@ -14,8 +14,8 @@ pub(super) enum Pick {
     Files(&'static str, &'static [&'static str]),
 }
 
-/// Audio files, for `Pick::File` / `Pick::Files`.
-pub(super) const AUDIO: (&str, &[&str]) = ("Audio", &crate::library::EXTS);
+/// Audio and video files, for `Pick::File` / `Pick::Files`.
+pub(super) const AUDIO: (&str, &[&str]) = ("Audio and video", &crate::library::EXTS);
 /// Playlists.
 pub(super) const M3U: (&str, &[&str]) = ("Playlist", &["m3u", "m3u8"]);
 

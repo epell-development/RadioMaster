@@ -16,6 +16,7 @@ mod items;
 mod library;
 mod link;
 mod live;
+mod media;
 mod mic;
 mod midi;
 mod pdf;
@@ -29,6 +30,7 @@ mod stream;
 mod theme;
 mod tls;
 mod updater;
+mod video;
 mod workzones;
 
 use parking_lot::Mutex;

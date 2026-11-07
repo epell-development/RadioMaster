@@ -6,7 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-pub const EXTS: [&str; 9] = ["mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "mp4", "opus"];
+/// Video files: their sound plays like any other track, and the Video window shows the picture.
+pub const VIDEO_EXTS: [&str; 11] = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "mpg", "mpeg", "3gp"];
+/// Every file a playlist or the library takes: sound files, then `VIDEO_EXTS`.
+pub const EXTS: [&str; 19] = [
+    "mp3", "flac", "ogg", "oga", "wav", "m4a", "aac", "opus", "mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "mpg", "mpeg", "3gp",
+];
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -77,12 +82,23 @@ impl Track {
                 }
             }
         }
+        // a video that lofty can't measure (MKV, WebM, AVI…): ask ffmpeg
+        if t.duration <= 0.0 && is_video(p) {
+            if let Some(info) = crate::media::probe(p) {
+                t.duration = info.duration;
+            }
+        }
         t
     }
 }
 
 pub fn is_audio(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).map(|e| EXTS.contains(&e.to_ascii_lowercase().as_str())).unwrap_or(false)
+}
+
+/// Whether this is a video file (by its extension).
+pub fn is_video(p: &Path) -> bool {
+    p.extension().and_then(|e| e.to_str()).map(|e| VIDEO_EXTS.contains(&e.to_ascii_lowercase().as_str())).unwrap_or(false)
 }
 
 pub fn audio_files_in(dir: &Path) -> Vec<PathBuf> {
@@ -354,4 +370,17 @@ pub fn drive_roots() -> &'static [PathBuf] {
             Vec::new()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_kind_of_file_is_listed() {
+        assert_eq!(EXTS[EXTS.len() - VIDEO_EXTS.len()..], VIDEO_EXTS);
+        assert!(is_video(Path::new("clip.MP4")));
+        assert!(is_audio(Path::new("clip.webm")));
+        assert!(!is_video(Path::new("song.mp3")));
+    }
 }
