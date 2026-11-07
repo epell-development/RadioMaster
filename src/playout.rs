@@ -1460,13 +1460,18 @@ impl Playout {
     }
 
     /// Whether a file is an advert, a jingle or a song (for the play history and reports).
+    /// What a file is in the play history (and the reports): adverts from the Adverts list or an
+    /// advert rule, jingles from the cart wall or a jingle rule, anything else is a song.
     pub fn kind_of(&self, path: &Path) -> &'static str {
-        let in_rule =
-            |adverts: bool| {
-                self.cfg.rotations.iter().filter(|r| r.adverts == adverts).any(|r| {
-                    (!r.folder.trim().is_empty() && path.starts_with(r.folder.trim())) || r.files.iter().any(|f| Path::new(f) == path)
-                })
-            };
+        let in_rule = |adverts: bool| {
+            self.cfg.ad_rules.iter().filter(|r| r.adverts == adverts && !(r.adverts && r.use_ad_list)).any(|r| {
+                if !r.files.is_empty() {
+                    r.files.iter().any(|f| Path::new(f) == path)
+                } else {
+                    !r.folder.trim().is_empty() && path.starts_with(r.folder.trim())
+                }
+            })
+        };
         if self.cfg.ads.iter().any(|a| Path::new(&a.path) == path) || in_rule(true) {
             "advert"
         } else if self.cfg.carts.iter().any(|c| Path::new(&c.path) == path) || in_rule(false) {
@@ -3224,6 +3229,19 @@ mod tests {
 
     fn marker(t: DateTime<Local>, hard: bool, wait: bool) -> PlEntry {
         PlEntry::special(ItemKind::HourMarker { hour: t.hour(), minute: t.minute(), hard, wait }, "", 0.0)
+    }
+
+    #[test]
+    fn plays_from_rules_are_logged_as_adverts_and_jingles() {
+        use crate::config::AdRule;
+        let mut p = playout();
+        p.cfg.ad_rules = vec![
+            AdRule { id: 1, adverts: true, folder: "/ads".into(), ..Default::default() },
+            AdRule { id: 2, adverts: false, files: vec!["/j/id.mp3".into()], ..Default::default() },
+        ];
+        assert_eq!(p.kind_of(Path::new("/ads/sponsor.mp3")), "advert");
+        assert_eq!(p.kind_of(Path::new("/j/id.mp3")), "jingle");
+        assert_eq!(p.kind_of(Path::new("/music/song.mp3")), "song");
     }
 
     #[test]

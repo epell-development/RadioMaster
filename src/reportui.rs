@@ -1,8 +1,9 @@
 //! Reports tool: what played (songs, adverts, jingles…) in a period, per item, with CSV and PDF
 //! exports — a summary report, or proof of play for one item or for each item.
 use super::*;
-use crate::report::{self, Filter, Meta, Play, Row};
+use crate::report::{self, Brand, BrandImage, Filter, Meta, Play, Row};
 use chrono::{Datelike, NaiveDate};
+use std::time::{Duration, Instant};
 
 /// Which plays a report shows.
 #[derive(Clone, Copy, PartialEq)]
@@ -80,6 +81,19 @@ pub(super) struct RepUi {
     pub pick: Option<usize>,
     pub export: Option<Export>,
     pub msg: String,
+    /// the last play in the history when it was read: a newer one means read it again
+    seen: Option<(String, String)>,
+    /// when a newer play was noticed (read a moment later, once it has reached the disk)
+    changed_at: Option<Instant>,
+    /// the day "today" was when the period was last set (a period ending today follows the clock)
+    day: NaiveDate,
+    /// the station's logo, signature and name for PDF reports
+    pub brand: Brand,
+    brand_asked: bool,
+    /// previews of the logo and signature (made again when `tex_dirty`)
+    tex: [Option<egui::TextureHandle>; 2],
+    tex_dirty: bool,
+    name_dirty: bool,
 }
 
 impl Default for RepUi {
@@ -100,6 +114,14 @@ impl Default for RepUi {
             pick: None,
             export: None,
             msg: String::new(),
+            seen: None,
+            changed_at: None,
+            day: today,
+            brand: Brand::default(),
+            brand_asked: false,
+            tex: [None, None],
+            tex_dirty: false,
+            name_dirty: false,
         }
     }
 }
@@ -118,6 +140,39 @@ impl RepUi {
         self.loaded = true;
         self.loading = false;
         self.key.clear();
+    }
+
+    /// A logo or signature was chosen or removed.
+    pub(super) fn set_brand_image(&mut self, which: BrandImage, img: Option<image::RgbaImage>) {
+        match which {
+            BrandImage::Logo => self.brand.logo = img,
+            BrandImage::Signature => self.brand.signature = img,
+        }
+        self.tex_dirty = true;
+    }
+
+    pub(super) fn set_brand(&mut self, brand: Brand) {
+        self.brand = brand;
+        self.tex_dirty = true;
+    }
+
+    /// After midnight, a period that ended "today" moves on with the clock.
+    fn follow_today(&mut self) {
+        let today = Local::now().date_naive();
+        if today == self.day {
+            return;
+        }
+        let old = self.day.format("%Y-%m-%d").to_string();
+        let week = (self.day - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
+        if self.from == week && self.to == old {
+            self.set_period(today - chrono::Duration::days(6), today);
+        } else if self.to == old {
+            if self.from == old {
+                self.from = today.format("%Y-%m-%d").to_string();
+            }
+            self.to = today.format("%Y-%m-%d").to_string();
+        }
+        self.day = today;
     }
 
     fn filter(&self) -> Option<Filter> {
@@ -161,7 +216,7 @@ impl RepUi {
         let f = self.filter().ok_or("check the dates (YYYY-MM-DD)")?;
         let plays = self.plays();
         let one = self.pick.and_then(|i| self.rows.get(i)).cloned();
-        let meta = Meta { station, title: self.kind.title().to_string(), filter: f };
+        let meta = Meta { station, title: self.kind.title().to_string(), filter: f, brand: self.brand.clone() };
         let only = |r: &Row| -> Vec<&Play> { plays.iter().copied().filter(|p| p.text == r.name && p.kind == r.kind).collect() };
         let bytes: Vec<u8> = match what {
             Export::SummaryPdf => report::pdf_summary(&meta, &self.rows, &plays),
@@ -185,6 +240,83 @@ impl RepUi {
 impl App {
     pub(super) fn station_name(core: &Playout) -> String {
         core.cfg.encoders.iter().map(|e| e.stream_name.trim()).find(|n| !n.is_empty()).unwrap_or("RadioMaster").to_string()
+    }
+
+    /// The station's logo, signature and name: chosen once, put on every PDF report.
+    fn report_branding(&mut self, ui: &mut egui::Ui) {
+        if self.rep.tex_dirty {
+            self.rep.tex_dirty = false;
+            let tex = |name: &str, img: &Option<image::RgbaImage>| {
+                img.as_ref().map(|i| {
+                    let ci = egui::ColorImage::from_rgba_unmultiplied([i.width() as usize, i.height() as usize], i.as_raw());
+                    ui.ctx().load_texture(name, ci, egui::TextureOptions::LINEAR)
+                })
+            };
+            self.rep.tex = [tex("rep_logo", &self.rep.brand.logo), tex("rep_signature", &self.rep.brand.signature)];
+        }
+        egui::CollapsingHeader::new(tr("Logo and signature on PDF reports")).id_salt("rep_brand").show(ui, |ui| {
+            let mut pick = None;
+            let mut remove = None;
+            ui.horizontal_wrapped(|ui| {
+                for (k, which, label) in [(0, BrandImage::Logo, "Logo"), (1, BrandImage::Signature, "Signature")] {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(tr(label)).strong());
+                        let size = egui::vec2(170.0, 60.0);
+                        match &self.rep.tex[k] {
+                            Some(t) => {
+                                // a light card, as on the PDF (a dark logo on a dark theme still shows)
+                                egui::Frame::new().fill(egui::Color32::WHITE).inner_margin(4.0).corner_radius(4.0).show(ui, |ui| {
+                                    ui.add(egui::Image::new(t).max_size(size));
+                                });
+                            }
+                            None => {
+                                ui.label(RichText::new(tr("None chosen")).color(GRAY));
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.small_button(tr("Choose…")).on_hover_text(tr("A PNG or JPEG picture")).clicked() {
+                                pick = Some(which);
+                            }
+                            if self.rep.tex[k].is_some() && super::delete_button(ui, ("rep_brand", k), tr(label)) {
+                                remove = Some(which);
+                            }
+                        });
+                    });
+                    ui.add_space(16.0);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr("Signed by"));
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.rep.brand.signed_by).desired_width(220.0).hint_text(tr("name and position")),
+                );
+                if r.changed() {
+                    self.rep.name_dirty = true;
+                }
+                if self.rep.name_dirty && !r.has_focus() {
+                    self.rep.name_dirty = false;
+                    let name = self.rep.brand.signed_by.clone();
+                    thread::spawn(move || Brand::save_name(&name));
+                }
+            });
+            ui.label(
+                RichText::new(tr(
+                    "Chosen once and kept in the RadioMaster data folder. The logo goes at the top of every PDF report; the signature and name sign off proof of play (and the other reports). A signature on white paper gets its white made see-through.",
+                ))
+                .small()
+                .color(GRAY),
+            );
+            if let Some(which) = pick {
+                self.dlg(move || {
+                    let p = rfd::FileDialog::new().add_filter("PNG / JPEG", &["png", "jpg", "jpeg"]).pick_file()?;
+                    Some(Dlg::BrandImage(which, Brand::store(which, &p)))
+                });
+            }
+            if let Some(which) = remove {
+                self.rep.set_brand_image(which, None);
+                thread::spawn(move || Brand::remove(which));
+            }
+        });
     }
 
     fn ask_export(&mut self, what: Export) {
@@ -211,7 +343,28 @@ impl App {
     }
 
     pub(super) fn tab_reports(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        if !self.rep.brand_asked {
+            self.rep.brand_asked = true;
+            self.dlg(|| {
+                let (brand, problems) = Brand::load();
+                Some(Dlg::Brand(brand, problems))
+            });
+        }
+        self.rep.follow_today();
+        // something new went on air: read the history again a moment later (the play is written
+        // to the file in the background, and a server writes its own)
+        let last = core.history.last().map(|h| (h.time.clone(), h.text.clone()));
+        if self.rep.loaded && last != self.rep.seen {
+            let at = *self.rep.changed_at.get_or_insert_with(Instant::now);
+            if at.elapsed() >= Duration::from_secs(3) {
+                self.rep.loaded = false;
+            } else {
+                ui.ctx().request_repaint_after(Duration::from_secs(3));
+            }
+        }
         if !self.rep.loaded && !self.rep.loading {
+            self.rep.seen = last;
+            self.rep.changed_at = None;
             // a station's history grows for years: read it off the UI thread
             self.rep.loading = true;
             // while connected, the server's history (the station plays there)
@@ -328,6 +481,7 @@ impl App {
         if !self.rep.msg.is_empty() {
             ui.label(RichText::new(&self.rep.msg).small().color(GRAY));
         }
+        self.report_branding(ui);
         let _ = core;
         ui.separator();
 
