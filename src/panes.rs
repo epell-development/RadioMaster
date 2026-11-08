@@ -406,7 +406,7 @@ impl App {
 
     // ---------------------------------------------------------- track info
     /// Last / on air / next with their details, plus notes the presenter keeps about each song and artist.
-    /// The picture of the video file on air (a panel tab and Tools → Video).
+    /// The picture of the video file on air (a panel tab and View → Video).
     pub(super) fn tab_video(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let st = &core.status;
         let path = core.on_air.as_ref().filter(|_| st.has_track).map(|t| t.path.clone());

@@ -4,7 +4,7 @@ A plugin is a small program, in any language, that RadioMaster runs when somethi
 Use plugins to post the current song to Discord, update a website, flip a studio "ON AIR" light,
 log to your own database, or control RadioMaster from another system.
 
-Open **Tools → Plugins → Open plugins folder**. RadioMaster creates the folder (and a working example)
+Open **Settings → Plugins → Open plugins folder**. RadioMaster creates the folder (and a working example)
 inside its data folder (`%APPDATA%\RadioMaster\plugins` on Windows).
 
 ## Making a plugin
