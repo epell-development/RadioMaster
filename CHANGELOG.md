@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.2.11 — 2026-11-08
+Ad breaks with a printable schedule per advert, show recording, video files, Repeat / Shuffle / Stop after, an optional sign-in screen and a Getting started tour
+
+**New**
+- Ad breaks: tick which adverts play in each break, add random songs after it, and save a printable
+  PDF schedule for one advert (Adverts list → Schedule) to hand to the advertiser
+- Advert rules can play every advert or only the adverts you tick; adverts get an advertiser / company
+  name and show which rules play them
+- Show recorder (Tools → Show recorder, Settings → Show recording): records the on-air mix around the
+  clock to hourly files in dated folders, as MP3 (64–320 kbps), FLAC or WAV, and deletes old files after
+  the number of days you choose. When connected to a server, the server records
+- Video files (MP4, MOV, MKV, WebM…) play like songs, and a Video window (or panel) shows the picture
+- Play modes in the playlist header: Repeat track, Shuffle, and Stop after this track
+- The sign-in screen is optional: untick "Ask for a username and password when RadioMaster starts" in
+  Settings → Users & access control and RadioMaster opens straight to the station; File → Sign in…
+  switches to an operator account
+- Proof of play reports can carry your station logo, a signature and a "signed by" name
+- Getting started: a nine-step tour of the main parts that opens once on a new computer, and again
+  from Help → Getting started
+
+**Fixed**
+- Proof of play logged adverts and jingles played by rules as songs, and open reports didn't pick up
+  new plays until they were run again
+- Browse did nothing in the Event scheduler (and other file pickers) when the system file dialog
+  couldn't open or opened behind RadioMaster; dialogs now open in front, and RadioMaster says so when
+  the system can't show one
+- "Hear the station here" cut in and out every few seconds behind Cloudflare, nginx, IIS or another
+  proxy
+
+**Changed**
+- Playlist generator: the Inserts step is gone, since advert and jingle rules already play during a
+  generated playlist; templates saved with inserts still load
+- Website: Google shows "RadioMaster" as the site name
+
 ## v0.2.10 — 2026-11-01
 Advert breaks that start on time, named and coloured cart pads, quick seeking in the playing track, your own sound card buffer size, and a universal Mac app
 
