@@ -317,7 +317,7 @@ impl App {
                         .small()
                         .color(GRAY),
                 );
-                if self.srv.from_login {
+                if self.srv.from_login && !self.accounts.server_only() {
                     ui.label(
                         RichText::new(tr("Signing in here skips the local login. Your local session is put aside and comes back when you disconnect."))
                             .small()
@@ -526,7 +526,28 @@ impl App {
             self.logged_in = None;
             self.login_password.clear();
             self.srv.show_settings = false;
+            if self.accounts.server_only() {
+                // nothing to run here: straight back to connecting
+                self.hold_local_station(core);
+                self.open_connect(true);
+            }
         }
+    }
+
+    /// Server-only computer, nobody signed in here: stop the local station and keep it off the air.
+    pub(super) fn hold_local_station(&mut self, core: &mut Playout) {
+        for i in 0..core.handles.len() {
+            if core.handles[i].as_ref().is_some_and(|h| h.is_running()) {
+                core.stop_encoder(i);
+            }
+        }
+        core.stop();
+        core.stop_carts();
+        core.stop_recording();
+        self.mic_stream = None;
+        self.mic_on = false;
+        self.mic_paused = false;
+        core.held = true;
     }
 
     /// After disconnecting: the local session is back; offer the station profiles, or a copy of the

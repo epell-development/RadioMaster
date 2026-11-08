@@ -446,6 +446,9 @@ pub struct Playout {
     // ---- RadioMaster Server
     /// set while this playout mirrors a RadioMaster Server: actions go to the server and nothing is saved here
     pub link: Option<crossbeam_channel::Sender<sync::Cmd>>,
+    /// server-only computer and nobody signed in here: the local station is held (no scheduler,
+    /// no automatic next track) so nothing goes on air from this computer
+    pub held: bool,
     /// jingles playing on the server
     mirror_carts: Vec<PathBuf>,
     /// playlist files the server can't find (a mirror never checks this machine's disk)
@@ -479,7 +482,13 @@ pub struct Playout {
 pub mod sync;
 
 impl Playout {
+    #[allow(dead_code)] // (RadioMaster Server's and the tests')
     pub fn new(engine: Engine, cfg: Config) -> Self {
+        Self::new_held(engine, cfg, false)
+    }
+
+    /// `held`: a server-only computer (see `Playout::held`); its encoders don't start with the app.
+    pub fn new_held(engine: Engine, cfg: Config, held: bool) -> Self {
         std::thread::spawn(live::clean_speech_files);
         let log_sink: LogSink = Arc::new(Mutex::new(vec![]));
         let mut plugins = crate::plugins::Plugins::new(log_sink.clone());
@@ -499,8 +508,9 @@ impl Playout {
         let mut p = Self::build(engine, cfg, library, cues, plays, plugins, log_sink);
         p.reindex();
         p.load_tabs();
+        p.held = held;
         for i in 0..n_enc {
-            if p.cfg.encoders[i].start_with_app {
+            if p.cfg.encoders[i].start_with_app && !held {
                 p.start_encoder(i);
             }
         }
@@ -595,6 +605,7 @@ impl Playout {
             speech_ready: String::new(),
             plugins,
             link: None,
+            held: false,
             mirror_carts: vec![],
             mirror_missing: Default::default(),
             remote_waves: None,
@@ -638,6 +649,10 @@ impl Playout {
             // mirroring a server: the server plays and schedules, this copy only shows it
             self.drain_log();
             self.follow_mirror_pos();
+            return;
+        }
+        if self.held {
+            self.drain_log();
             return;
         }
         self.drain_scan();
