@@ -2011,7 +2011,61 @@ impl App {
                     });
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(2.0);
+            ui.separator();
+            self.play_modes(ui, core);
+            ui.add_space(2.0);
+        });
+    }
+
+    /// The row of play mode and automation switches under the player
+    /// (they used to crowd the playlist header).
+    fn play_modes(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        let toggle = |ui: &mut egui::Ui, value: bool, text: &str| ui.selectable_label(value, text);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("PLAY MODE")).small().color(GRAY));
+            let v = core.cfg.loop_playlist;
+            if toggle(ui, v, tr("🔁 Loop")).on_hover_text(tr("Start the playlist again from the top when it ends")).clicked() {
+                core.cfg.loop_playlist = !v;
+            }
+            ui.add_enabled_ui(self.perm.playback, |ui| {
+                let v = core.cfg.repeat_track;
+                if toggle(ui, v, tr("🔂 Repeat track"))
+                    .on_hover_text(tr("Play the track on air again when it ends, until this is turned off"))
+                    .clicked()
+                {
+                    core.cfg.repeat_track = !v;
+                }
+                let v = core.cfg.shuffle;
+                if toggle(ui, v, tr("🔀 Shuffle"))
+                    .on_hover_text(tr(
+                        "Play the rows that haven't played yet in random order (commands, pauses and hour markers are never picked)",
+                    ))
+                    .clicked()
+                {
+                    core.cfg.shuffle = !v;
+                }
+                let v = core.stop_after;
+                if toggle(ui, v, tr("🔚 Stop after this track"))
+                    .on_hover_text(tr("Stop when the item on air ends (turns itself off once it has)"))
+                    .clicked()
+                {
+                    core.set_stop_after(!v);
+                }
+            });
+            ui.separator();
+            ui.label(RichText::new(tr("AUTOMATION")).small().color(GRAY));
+            let v = core.cfg.auto_enabled;
+            if toggle(ui, v, tr("Auto-playlist")).on_hover_text(tr("Top up the playlist automatically when it runs low")).clicked() {
+                core.cfg.auto_enabled = !v;
+            }
+            let v = core.cfg.random_fill;
+            if toggle(ui, v, tr("Auto-fill from library"))
+                .on_hover_text(tr("Add a random library track at the end when the playlist runs out"))
+                .clicked()
+            {
+                core.cfg.random_fill = !v;
+            }
         });
     }
 

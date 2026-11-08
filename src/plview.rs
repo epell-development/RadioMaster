@@ -364,32 +364,24 @@ impl App {
                         .on_hover_text(tr("Edit this playlist freely. Play any row (or right-click the tab) to put it on air."));
                 }
                 ui.label(RichText::new(format!("{} items · {}", core.playlist.len(), fmt(core.total_secs()))).color(GRAY));
-                ui.checkbox(&mut core.cfg.loop_playlist, tr("Loop"));
-                ui.add_enabled_ui(self.perm.playback, |ui| {
-                    ui.checkbox(&mut core.cfg.repeat_track, tr("Repeat track"))
-                        .on_hover_text(tr("Play the track on air again when it ends, until this is turned off"));
-                    ui.checkbox(&mut core.cfg.shuffle, tr("Shuffle")).on_hover_text(tr(
-                        "Play the rows that haven't played yet in random order (commands, pauses and hour markers are never picked)",
-                    ));
-                    let mut sa = core.stop_after;
+                // the play modes and automation switches sit under the player (App::play_modes);
+                // only the view options for this list stay here, on the right
+                let mut view_opts = |ui: &mut egui::Ui| {
                     if ui
-                        .checkbox(&mut sa, tr("Stop after this track"))
-                        .on_hover_text(tr("Stop when the item on air ends (turns itself off once it has)"))
+                        .checkbox(&mut core.cfg.hour_lines, tr("Hour lines"))
+                        .on_hover_text(tr("Show a line where each new hour starts"))
                         .changed()
                     {
-                        core.set_stop_after(sa);
+                        self.hour_check = None;
                     }
-                });
-                ui.checkbox(&mut core.cfg.auto_enabled, tr("Auto-playlist"));
-                ui.checkbox(&mut core.cfg.random_fill, tr("Auto-fill from library"));
-                ui.checkbox(&mut self.workzones.follow, tr("Follow"))
-                    .on_hover_text(tr("Keep the playing track near the top as songs finish (the last one played stays in view)"));
-                if ui
-                    .checkbox(&mut core.cfg.hour_lines, tr("Hour lines"))
-                    .on_hover_text(tr("Show a line where each new hour starts"))
-                    .changed()
-                {
-                    self.hour_check = None;
+                    ui.checkbox(&mut self.workzones.follow, tr("Follow"))
+                        .on_hover_text(tr("Keep the playing track near the top as songs finish (the last one played stays in view)"));
+                };
+                // on the right when there's room; on a narrow panel they wrap onto the next line instead
+                if ui.available_width() >= 200.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), view_opts);
+                } else {
+                    view_opts(ui);
                 }
             });
 
