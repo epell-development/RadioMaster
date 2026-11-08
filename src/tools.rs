@@ -5,7 +5,7 @@ use crate::audio::{PreviewPlayer, PreviewSide};
 use crate::fade::{detect_bpm, detect_level, smart_cues, Cues, FadeMode, Waveform, BIN};
 use eframe::egui::{Align2, FontId, Pos2, Rect, Sense, Stroke};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub(super) enum ToolWin {
     FadeEditor,
     Generator,
@@ -370,61 +370,145 @@ impl App {
                 }
                 _ => w.label().to_string(),
             };
-            Self::window_for(ctx, &title, w.size()).id(egui::Id::new(("tool_window", w as u8))).open(&mut open).resizable(true).show(
-                ctx,
-                |ui| {
-                    if w == ToolWin::FadeEditor {
-                        self.track_editor(ui, core);
-                        return;
-                    }
-                    if w == ToolWin::AzuraCast {
-                        self.az_manager(ui, core);
-                        return;
-                    }
-                    if w == ToolWin::Reports {
-                        self.tab_reports(ui, core); // has its own scrolling list
-                        return;
-                    }
-                    if w == ToolWin::Ads {
-                        self.tab_ads(ui, core); // list + editor, each scrolling
-                        return;
-                    }
-                    if w == ToolWin::Cleanup {
-                        self.tab_cleanup(ui, core); // its lists scroll on their own
-                        return;
-                    }
-                    if w == ToolWin::Video {
-                        self.tab_video(ui, core); // fills the window
-                        return;
-                    }
-                    if w == ToolWin::FileExplorer {
-                        egui::ScrollArea::vertical().id_salt("fx_window").auto_shrink([false, false]).show(ui, |ui| {
-                            self.tab_file_explorer(ui, "window".into(), core);
-                        });
-                        return;
-                    }
-                    egui::ScrollArea::both().id_salt(("tool_scroll", w as u8)).auto_shrink([false, false]).show(ui, |ui| match w {
-                        ToolWin::Generator => self.tab_generator(ui, core),
-                        ToolWin::Ads => self.tab_ads(ui, core),
-                        ToolWin::AudioFx => self.tab_dsp(ui, core),
-                        ToolWin::Streams => self.tab_streaming(ui, core),
-                        ToolWin::Recorder => self.tab_recording(ui, core),
-                        ToolWin::Notepad => self.tab_segment(ui, core),
-                        ToolWin::Plugins => self.tab_plugins(ui, core),
-                        ToolWin::Scheduler => self.tab_scheduler(ui, core),
-                        ToolWin::AzuraCast => {}
-                        ToolWin::Reports => self.tab_reports(ui, core),
-                        ToolWin::History => self.tab_history(ui, core),
-                        ToolWin::FadeEditor | ToolWin::Cleanup | ToolWin::FileExplorer | ToolWin::Video => {}
-                    });
-                },
-            );
+            // popped out: its own OS window, which can be dragged to another screen
+            let mut drawn = false;
+            if self.workzones.popped(w.label()).is_some() {
+                drawn = self.popped_tool(ctx, core, w, &mut open);
+            }
+            if !drawn {
+                let mut pop = false;
+                Self::window_for(ctx, &title, w.size()).id(egui::Id::new(("tool_window", w as u8))).open(&mut open).resizable(true).show(
+                    ctx,
+                    |ui| {
+                        if self.pop_out_supported {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .small_button(tr("🗖 Pop out"))
+                                        .on_hover_text(tr("Open this tool in its own window, which you can move to another screen"))
+                                        .clicked()
+                                    {
+                                        pop = true;
+                                    }
+                                },
+                            );
+                        }
+                        self.tool_body(ui, core, w);
+                    },
+                );
+                if pop {
+                    self.workzones.set_popped(w.label(), true);
+                    self.tool_spawn.remove(&w);
+                }
+            }
             if !open || (w == ToolWin::FadeEditor && self.fade_edit.as_ref().is_some_and(|f| f.msg == "\u{0}close")) {
                 self.tool_open.remove(&w);
+                self.tool_spawn.remove(&w);
                 if w == ToolWin::FadeEditor {
                     self.preview = None;
                     self.fade_edit = None;
                 }
+            }
+        }
+    }
+
+    /// Draw a popped-out tool in its own OS window. Returns false when this platform can't open
+    /// extra windows (the tool is then shown inside the main window as usual).
+    fn popped_tool(&mut self, ctx: &egui::Context, core: &mut Playout, w: ToolWin, open: &mut bool) -> bool {
+        let saved = self.workzones.popped(w.label()).cloned().unwrap_or_default();
+        // The builder must stay identical frame to frame: egui turns any change into a move/resize
+        // command, so the window is placed once from the saved layout and then left alone.
+        let (size0, pos0) = *self.tool_spawn.entry(w).or_insert((saved.size.unwrap_or(w.size()), saved.pos));
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(format!("{} — RadioMaster", tr(w.label())))
+            .with_inner_size(size0)
+            .with_min_inner_size([280.0, 200.0]);
+        if let Some(icon) = self.icon.clone() {
+            builder = builder.with_icon(icon);
+        }
+        if let Some(p) = pos0 {
+            builder = builder.with_position(p);
+        }
+        let mut drawn = true;
+        let mut put_back = false;
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("tool_popout", w as u8)), builder, |ctx, class| {
+            if class == egui::ViewportClass::Embedded {
+                drawn = false;
+                self.pop_out_supported = false;
+                return;
+            }
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui.small_button(tr("⇲ Put back")).on_hover_text(tr("Move this tool back into the main window")).clicked() {
+                            put_back = true;
+                        }
+                        if let (ToolWin::FadeEditor, Some(fe)) = (w, &self.fade_edit) {
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.strong(fe.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+                            });
+                        }
+                    },
+                );
+                self.tool_body(ui, core, w);
+            });
+            let (close, outer, inner) = ctx.input(|i| (i.viewport().close_requested(), i.viewport().outer_rect, i.viewport().inner_rect));
+            // remember where the user put it (rounded, so sub-pixel jitter doesn't count as a change)
+            if let Some(p) = self.workzones.popped.iter_mut().find(|p| p.tool == w.label()) {
+                if let Some(r) = outer {
+                    let xy = [r.min.x.round(), r.min.y.round()];
+                    if p.pos != Some(xy) {
+                        p.pos = Some(xy);
+                    }
+                }
+                if let Some(r) = inner {
+                    let sz = [r.width().round(), r.height().round()];
+                    if p.size != Some(sz) {
+                        p.size = Some(sz);
+                    }
+                }
+            }
+            if close {
+                *open = false;
+            }
+        });
+        if put_back {
+            self.workzones.set_popped(w.label(), false);
+            self.tool_spawn.remove(&w);
+        }
+        drawn
+    }
+
+    /// The contents of a tool window (the same in the main window and popped out).
+    fn tool_body(&mut self, ui: &mut egui::Ui, core: &mut Playout, w: ToolWin) {
+        match w {
+            ToolWin::FadeEditor => self.track_editor(ui, core),
+            ToolWin::AzuraCast => self.az_manager(ui, core),
+            ToolWin::Reports => self.tab_reports(ui, core), // has its own scrolling list
+            ToolWin::Ads => self.tab_ads(ui, core),         // list + editor, each scrolling
+            ToolWin::Cleanup => self.tab_cleanup(ui, core), // its lists scroll on their own
+            ToolWin::Video => self.tab_video(ui, core),     // fills the window
+            ToolWin::FileExplorer => {
+                egui::ScrollArea::vertical().id_salt("fx_window").auto_shrink([false, false]).show(ui, |ui| {
+                    self.tab_file_explorer(ui, "window".into(), core);
+                });
+            }
+            _ => {
+                egui::ScrollArea::both().id_salt(("tool_scroll", w as u8)).auto_shrink([false, false]).show(ui, |ui| match w {
+                    ToolWin::Generator => self.tab_generator(ui, core),
+                    ToolWin::AudioFx => self.tab_dsp(ui, core),
+                    ToolWin::Streams => self.tab_streaming(ui, core),
+                    ToolWin::Recorder => self.tab_recording(ui, core),
+                    ToolWin::Notepad => self.tab_segment(ui, core),
+                    ToolWin::Plugins => self.tab_plugins(ui, core),
+                    ToolWin::Scheduler => self.tab_scheduler(ui, core),
+                    ToolWin::History => self.tab_history(ui, core),
+                    _ => {}
+                });
             }
         }
     }
