@@ -83,7 +83,7 @@ OpenBoss install are copied across on first start). If the program ever crashes,
 | Playlist Generator Pro… (Ctrl+G) | category/template generator |
 | Add file / folder / URL (Alt+F / Alt+D / Alt+U) | URL = relay an internet stream for a set time or until Next |
 | Add Line Input… | play the input device live (for a set time or until Next) |
-| Add command… (Alt+C) | `STOP`, `PAUSE`, `VOLUME 80`, `ENCODER START 1`, `ENCODER STOP 1`, `LOAD file.m3u`, `PLAYLIST name`, `RUN program args` |
+| Add command… (Alt+C) | `STOP`, `PAUSE`, `PLAY`, `NEXT`, `VOLUME 80`, `CART 3`, `INSERT file`, `ENCODER START 1`, `ENCODER STOP 1`, `LOAD file.m3u`, `PLAYLIST name`, `PLUGIN name action`, `RUN program args` (full list in [PLUGINS.md](PLUGINS.md#station-commands)) |
 | Add event… | runs a scheduler action when playback reaches the row: put another playlist on air, play this one again from the top, generate tracks, adverts/jingles, a file, encoders, volume, a command |
 | Add timed pause… (Ctrl+P) | silence for a set time |
 | Add teaser… | faded snippets of the next N tracks |

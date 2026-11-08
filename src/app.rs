@@ -190,6 +190,8 @@ enum PlAct {
     Edit(usize),
     CopyTo(usize),
     MoveTo(usize),
+    /// a plugin's right-click item (index into `plugin_row_items`)
+    Plugin(usize),
 }
 
 #[path = "tools.rs"]
@@ -216,6 +218,8 @@ use fileui::{Pick, AUDIO, M3U};
 mod panes;
 #[path = "pltools.rs"]
 mod pltools;
+#[path = "pluginui.rs"]
+mod pluginui;
 #[path = "plview.rs"]
 mod plview;
 #[path = "recui.rs"]
@@ -309,6 +313,8 @@ pub struct App {
     seek_to: String,
     mic_stream: Option<rodio::cpal::Stream>,
     mic_on: bool,
+    /// the microphone state plugins were last told about
+    plugin_mic: bool,
     /// playback was paused by the mic (Pause mode) and resumes when it goes off
     mic_paused: bool,
     tpl_sel: usize,
@@ -781,6 +787,7 @@ impl App {
             seek_to: String::new(),
             mic_stream: None,
             mic_on: false,
+            plugin_mic: false,
             mic_paused: false,
             tpl_sel: 0,
             gen: Default::default(),
@@ -1365,6 +1372,7 @@ impl App {
                     ui.separator();
                     self.tool_menu_item(ui, core, ToolWin::Plugins);
                 });
+                self.plugins_menu(ui, core);
                 ui.menu_button(tr("Help"), |ui| {
                     if ui
                         .add(
@@ -1414,6 +1422,7 @@ impl App {
                         self.launch_tool(core, w);
                     }
                 }
+                self.plugin_buttons(ui, core);
                 ui.separator();
                 for n in 1..=3u8 {
                     if ui
@@ -3741,7 +3750,7 @@ impl App {
     }
 
     fn tab_plugins(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
-        ui.label(tr("Plugins are small programs, in any language, that RadioMaster runs when something happens on air — a song starts, the hour changes, an encoder drops. They can also send station commands back."));
+        ui.label(tr("Plugins are small programs, in any language, that RadioMaster runs when something happens on air — a song starts, the hour changes, an encoder drops. They can control playback and playlists, and add their own menu items, toolbar buttons, playlist right-click items, windows and settings."));
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr("📂 Open plugins folder")).clicked() {
                 match crate::plugins::write_example() {
@@ -3765,6 +3774,8 @@ impl App {
         }
         let mut toggle: Option<(String, bool)> = None;
         let mut test: Option<usize> = None;
+        let mut open_panel: Option<String> = None;
+        let mut settings_changed = false;
         for (i, d) in core.plugins.defs.iter().enumerate() {
             let id = crate::plugins::Plugins::id_of(d);
             let mut on = !core.cfg.plugins_off.contains(&id);
@@ -3797,7 +3808,43 @@ impl App {
                 if let Some(e) = &d.error {
                     ui.colored_label(RED, e);
                 }
+                if let Some(u) = core.plugins.ui.get(&id) {
+                    if !u.status.is_empty() {
+                        ui.label(RichText::new(&u.status).small());
+                    }
+                    let mut adds = vec![];
+                    if !u.menu.is_empty() {
+                        adds.push(format!("{} {}", u.menu.len(), tr("menu item(s)")));
+                    }
+                    if !u.buttons.is_empty() {
+                        adds.push(format!("{} {}", u.buttons.len(), tr("toolbar button(s)")));
+                    }
+                    if !u.playlist_menu.is_empty() {
+                        adds.push(format!("{} {}", u.playlist_menu.len(), tr("playlist right-click item(s)")));
+                    }
+                    if !adds.is_empty() || u.has_panel() {
+                        ui.horizontal_wrapped(|ui| {
+                            if !adds.is_empty() {
+                                ui.label(RichText::new(format!("{} {}", tr("Adds"), adds.join(", "))).small().color(GRAY));
+                            }
+                            if u.has_panel() && ui.small_button(format!("{} {}", tr("Open"), u.panel_title)).clicked() {
+                                open_panel = Some(id.clone());
+                            }
+                        });
+                    }
+                }
+                if !d.settings.is_empty() && d.error.is_none() {
+                    let saved = core.cfg.plugin_settings.entry(id.clone()).or_default();
+                    settings_changed |= Self::plugin_settings_ui(ui, d, saved);
+                }
             });
+        }
+        if let Some(u) = open_panel.and_then(|id| core.plugins.ui.get_mut(&id)) {
+            u.open = true;
+        }
+        if settings_changed {
+            let (saved, off) = (core.cfg.plugin_settings.clone(), core.cfg.plugins_off.clone());
+            core.plugins.set_saved(saved, &off);
         }
         if let Some(i) = test {
             let ev = core.plugins.defs[i].events.first().cloned().unwrap_or_else(|| "track_started".into());
@@ -3819,14 +3866,14 @@ impl App {
         ui.separator();
         ui.strong(tr("Events"));
         egui::Grid::new("plugin_events").num_columns(2).spacing([14.0, 2.0]).show(ui, |ui| {
-            for (e, what) in crate::plugins::EVENTS {
-                ui.label(RichText::new(e).monospace());
-                ui.label(what);
+            for (e, what) in crate::plugins::EVENTS.iter().chain(crate::plugins::DIRECT_EVENTS.iter()) {
+                ui.label(RichText::new(*e).monospace());
+                ui.label(*what);
                 ui.end_row();
             }
         });
         ui.label(
-            RichText::new(tr("A plugin controls RadioMaster by printing lines such as  RM: VOLUME 60  or  RM: PLAYLIST Evening."))
+            RichText::new(tr("A plugin controls RadioMaster by printing lines such as  RM: VOLUME 60  or  RM: PLAYLIST Evening, and adds controls with JSON lines such as  RM: {\"do\": \"buttons\", …}  (see How to write one)."))
                 .small()
                 .color(GRAY),
         );
@@ -4150,6 +4197,11 @@ impl eframe::App for App {
             self.find_window(ctx, c);
         });
         self.repeat_window(ctx, &mut core);
+        self.plugin_windows(ctx, &mut core);
+        if self.plugin_mic != self.mic_on {
+            self.plugin_mic = self.mic_on;
+            core.plugin_event("mic", serde_json::json!({ "on": self.mic_on }));
+        }
         self.keys_window(ctx);
         self.video.end_frame();
         self.az_take_downloads(&mut core);

@@ -482,10 +482,7 @@ impl Playout {
     pub fn new(engine: Engine, cfg: Config) -> Self {
         std::thread::spawn(live::clean_speech_files);
         let log_sink: LogSink = Arc::new(Mutex::new(vec![]));
-        let mut plugins = crate::plugins::Plugins::new(log_sink.clone());
-        if !cfg.plugins_off.is_empty() {
-            plugins.reload(&cfg.plugins_off);
-        }
+        let plugins = crate::plugins::Plugins::new(log_sink.clone(), &cfg.plugins_off, cfg.plugin_settings.clone());
         let library: Vec<Track> =
             std::fs::read_to_string(data_dir().join("library.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         let cues: HashMap<PathBuf, Cues> = std::fs::read_to_string(data_dir().join("cues.json"))
@@ -744,10 +741,9 @@ impl Playout {
             }
         }
 
-        // plugins: commands they sent, the hourly event, encoder changes
-        for (from, cmd) in self.plugins.take_commands() {
-            self.say(format!("{from}: {cmd}"));
-            self.run_command(&cmd);
+        // plugins: commands and messages they sent, the hourly event, encoder changes
+        for (id, name, msg) in self.plugins.take_requests() {
+            self.plugin_request(&id, &name, &msg);
         }
         let h = chrono::Timelike::hour(&now);
         if h != self.plugin_hour {
@@ -1442,6 +1438,162 @@ impl Playout {
         self.plugins.emit(event, data, &off);
     }
 
+    /// A JSON message (or station command) a plugin sent: see PLUGINS.md.
+    fn plugin_request(&mut self, id: &str, name: &str, m: &serde_json::Value) {
+        let text = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let off = self.cfg.plugins_off.clone();
+        match m.get("do").and_then(|v| v.as_str()).unwrap_or_default() {
+            "command" => {
+                let cmd = text("text");
+                self.say(format!("{name}: {cmd}"));
+                self.run_command(&cmd);
+            }
+            "notify" => self.say(format!("{name}: {}", text("text"))),
+            "get" => {
+                let what = text("what");
+                let data = self.plugin_state(&what, m);
+                let request = m.get("request").cloned().unwrap_or(serde_json::Value::Null);
+                self.plugins.send(id, "reply", json!({ "request": request, "what": what, "data": data }), &off);
+            }
+            "insert" => {
+                // {"do":"insert","paths":[…],"at":"next"|"end","playlist":"name"}
+                let paths: Vec<PathBuf> = m
+                    .get("paths")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|p| p.as_str()).map(PathBuf::from).filter(|p| p.exists()).collect())
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    self.say(format!("{name}: insert: none of those files were found"));
+                    return;
+                }
+                let tab = match text("playlist") {
+                    t if t.is_empty() => Some(self.playing_tab),
+                    t => self.tabs.iter().position(|x| x.name.eq_ignore_ascii_case(t.trim())),
+                };
+                let Some(tab) = tab else {
+                    self.say(format!("{name}: insert: no playlist called \"{}\"", text("playlist")));
+                    return;
+                };
+                let next = text("at") != "end";
+                self.with_tab(tab, |p| if next { p.insert_next(paths) } else { p.add_paths(paths) });
+            }
+            other => self.say(format!("{name}: unknown message \"{other}\"")),
+        }
+    }
+
+    /// What a plugin can ask for with {"do":"get","what":…}.
+    fn plugin_state(&self, what: &str, m: &serde_json::Value) -> serde_json::Value {
+        let row = |p: &Self, i: usize, e: &PlEntry| {
+            json!({
+                "row": i,
+                "title": e.track.title,
+                "artist": e.track.artist,
+                "label": e.title(),
+                "path": if e.is_file() { e.track.path.to_string_lossy().to_string() } else { String::new() },
+                "kind": if e.is_file() { p.kind_of(&e.track.path) } else { "item" },
+                "duration": p.row_span(e),
+                "played": e.played,
+            })
+        };
+        match what {
+            "status" => {
+                let state = match self.state {
+                    PlayState::Playing => "playing",
+                    PlayState::Paused => "paused",
+                    PlayState::Stopped => "stopped",
+                };
+                let t = self.on_air.clone().unwrap_or_default();
+                json!({
+                    "state": state,
+                    "on_air": self.on_air_text(),
+                    "title": t.title,
+                    "artist": t.artist,
+                    "album": t.album,
+                    "path": t.path.to_string_lossy(),
+                    "position": self.status.pos,
+                    "duration": self.status.total,
+                    "volume": (self.cfg.volume * 100.0).round(),
+                    "playlist": self.tabs.get(self.playing_tab).map(|t| t.name.clone()).unwrap_or_default(),
+                    "row": self.current,
+                    "next": self.upcoming().and_then(|i| self.playlist.get(i)).map(|e| e.title()),
+                    "stop_after": self.stop_after,
+                    "shuffle": self.cfg.shuffle,
+                    "repeat_track": self.cfg.repeat_track,
+                    "loop": self.cfg.loop_playlist,
+                })
+            }
+            "playlist" => {
+                // the playlist on air, or the one named in "playlist"
+                let name = m.get("playlist").and_then(|v| v.as_str()).unwrap_or_default();
+                let tab = if name.is_empty() {
+                    Some(self.playing_tab)
+                } else {
+                    self.tabs.iter().position(|t| t.name.eq_ignore_ascii_case(name.trim()))
+                };
+                match tab {
+                    Some(t) => json!({
+                        "name": self.tabs[t].name,
+                        "on_air": t == self.playing_tab,
+                        "current": if t == self.playing_tab { self.current } else { self.tabs[t].current },
+                        "rows": self.tab_rows(t).iter().enumerate().map(|(i, e)| row(self, i, e)).collect::<Vec<_>>(),
+                    }),
+                    None => serde_json::Value::Null,
+                }
+            }
+            "playlists" => json!(self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(i, t)| json!({ "name": t.name, "on_air": i == self.playing_tab, "rows": self.tab_len(i) }))
+                .collect::<Vec<_>>()),
+            "history" => json!(self
+                .history
+                .iter()
+                .rev()
+                .take(100)
+                .map(|h| json!({ "time": h.time, "text": h.text, "kind": h.kind }))
+                .collect::<Vec<_>>()),
+            "carts" => json!(self
+                .cfg
+                .carts
+                .iter()
+                .enumerate()
+                .map(|(i, c)| json!({ "pad": i + 1, "label": c.label, "path": c.path }))
+                .collect::<Vec<_>>()),
+            "encoders" => json!(self
+                .cfg
+                .encoders
+                .iter()
+                .enumerate()
+                .map(|(i, e)| json!({ "encoder": i + 1, "name": e.name, "state": self.enc_states.get(i).cloned().unwrap_or_else(|| "stopped".into()) }))
+                .collect::<Vec<_>>()),
+            "templates" => json!(self.cfg.templates.iter().map(|t| t.name.clone()).collect::<Vec<_>>()),
+            "rules" => json!(self.cfg.ad_rules.iter().map(|r| r.name.clone()).collect::<Vec<_>>()),
+            "library" => {
+                // {"search": "words"}: up to 200 tracks whose artist, title, album or genre has every word
+                let words: Vec<String> = m
+                    .get("search")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect();
+                json!(self
+                    .library
+                    .iter()
+                    .filter(|t| {
+                        let hay = format!("{} {} {} {}", t.artist, t.title, t.album, t.genre).to_lowercase();
+                        words.iter().all(|w| hay.contains(w.as_str()))
+                    })
+                    .take(200)
+                    .map(|t| json!({ "title": t.title, "artist": t.artist, "album": t.album, "genre": t.genre, "year": t.year, "path": t.path.to_string_lossy(), "duration": t.duration }))
+                    .collect::<Vec<_>>())
+            }
+            _ => json!({ "error": format!("unknown \"what\": {what} (status, playlist, playlists, history, carts, encoders, templates, rules, library)") }),
+        }
+    }
+
     /// Something other than a file started (stream, line input, teaser…).
     fn started_other(&mut self, label: String) {
         self.active_cues = None;
@@ -1775,9 +1927,11 @@ impl Playout {
     }
 
     // ------------------------------------------------------------- commands
-    /// Station commands for "Add command…" rows:
-    /// STOP, PAUSE, VOLUME <0-100>, ENCODER START <n>, ENCODER STOP <n>, LOAD <file.m3u>,
-    /// PLAYLIST <tab name>, RUN <program and arguments>.
+    /// Station commands for "Add command…" rows, the scheduler, remote controls and plugins:
+    /// STOP, PAUSE, PLAY, RESUME, NEXT, PREV, SEEK <secs>, STOPAFTER [ON|OFF], VOLUME <0-100>, CART <n>,
+    /// ENCODER START <n>, ENCODER STOP <n>, LOAD <file.m3u>, INSERT <file>, ADD <file>,
+    /// PLAYLIST <tab name>, GENERATE / APPEND <template>, RULE <name>, PLUGIN <plugin> <action>,
+    /// RUN <program and arguments>.
     pub fn run_command(&mut self, cmd: &str) {
         if self.forward(|tab| sync::Cmd::Command { tab, text: cmd.to_string() }) {
             return;
@@ -1844,6 +1998,44 @@ impl Playout {
                         self.fire_rule(id, None);
                     }
                     None => self.say(format!("RULE: no advert / jingle rule called \"{name}\"")),
+                }
+            }
+            Some("PLAY") => self.play_pressed(None),
+            Some("RESUME") => {
+                if self.state == PlayState::Paused {
+                    self.pause_toggle();
+                }
+            }
+            Some("NEXT") => self.next(),
+            Some("PREV") | Some("PREVIOUS") => self.prev(),
+            Some("SEEK") => match arg(1).parse::<f32>() {
+                Ok(s) => self.seek(s.max(0.0)),
+                Err(_) => self.say("Unknown command: SEEK needs a number of seconds"),
+            },
+            Some("STOPAFTER") => self.set_stop_after(!arg(1).eq_ignore_ascii_case("OFF")),
+            Some("CART") => match arg(1).parse::<usize>() {
+                Ok(n) if n >= 1 => self.trigger_cart(n - 1),
+                _ => self.say("Unknown command: CART needs a pad number (1 is the first pad)"),
+            },
+            Some("INSERT") | Some("ADD") => {
+                // INSERT <file> = play it next, ADD <file> = add it after the playlist
+                let p = PathBuf::from(rest(1));
+                if !p.exists() {
+                    self.say(format!("{}: file not found: {}", arg(0).to_uppercase(), p.display()));
+                } else if arg(0).eq_ignore_ascii_case("INSERT") {
+                    self.insert_next(vec![p]);
+                } else {
+                    self.add_paths(vec![p]);
+                }
+            }
+            Some("PLUGIN") => {
+                // PLUGIN <plugin> <action>: sends that plugin an "action" event
+                match self.plugins.find(&rest(1)) {
+                    Some((id, action)) => {
+                        let off = self.cfg.plugins_off.clone();
+                        self.plugins.action(&id, &action, "command", json!({}), &off);
+                    }
+                    None => self.say(format!("PLUGIN: no plugin called \"{}\"", rest(1))),
                 }
             }
             Some("RUN") => {
@@ -2300,6 +2492,7 @@ impl Playout {
             PlayState::Paused => {
                 self.engine.set_paused(false);
                 self.state = PlayState::Playing;
+                self.plugin_event("resumed", json!({}));
             }
             _ => {
                 let i = selected.or(self.current).unwrap_or(0);
@@ -2318,10 +2511,12 @@ impl Playout {
             PlayState::Playing => {
                 self.engine.set_paused(true);
                 self.state = PlayState::Paused;
+                self.plugin_event("paused", json!({}));
             }
             PlayState::Paused => {
                 self.engine.set_paused(false);
                 self.state = PlayState::Playing;
+                self.plugin_event("resumed", json!({}));
             }
             _ => {}
         }
@@ -2389,6 +2584,11 @@ impl Playout {
                         // jingles from the cart wall go into the play history (and the jingle report)
                         let t = self.entry_for(Path::new(&p)).track;
                         self.log_history(&t.label(), "jingle", Some(&t.path), t.duration);
+                        let label = self.cfg.carts.get(idx).map(|c| c.label.clone()).unwrap_or_default();
+                        self.plugin_event(
+                            "cart",
+                            json!({ "pad": idx + 1, "label": label, "title": t.title, "artist": t.artist, "path": t.path.to_string_lossy() }),
+                        );
                     }
                 }
             }
