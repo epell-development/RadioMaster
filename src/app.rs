@@ -736,7 +736,7 @@ impl App {
         let (dlg_tx, dlg_rx) = mpsc::channel();
         let notify = core.lock().notify.clone();
         core.lock().plugin_event("app_start", serde_json::json!({ "version": crate::updater::CURRENT }));
-        App {
+        let mut app = App {
             notify,
             core,
             audio,
@@ -862,7 +862,12 @@ impl App {
             user_pw: HashMap::new(),
             user_delete: None,
             break_snooze: 5,
+        };
+        if app.accounts.server_only() {
+            // only connecting to a server is offered: start right there
+            app.open_connect(true);
         }
+        app
     }
 
     /// A window that always fits on screen, centred, with a sensible size.
@@ -1215,6 +1220,11 @@ impl App {
                     } else if ui.button(tr("Log out")).clicked() {
                         if self.srv.signed_in_remotely() {
                             self.disconnect(core);
+                        } else if self.accounts.server_only() {
+                            // an administrator was looking after this server-only computer
+                            self.disconnect(core);
+                            self.hold_local_station(core);
+                            self.open_connect(true);
                         }
                         self.logged_in = None;
                         self.sign_in_now = false;
@@ -2315,6 +2325,22 @@ impl App {
                                 } else {
                                     ui.small(tr("RadioMaster opens straight to the station with full access, so anyone at this computer can change settings and accounts. Turn this on to make people sign in."));
                                 }
+                                ui.add_space(6.0);
+                                // enterprise setup: this computer only runs a RadioMaster Server's station
+                                let mut only=self.accounts.server_only();
+                                let real_admin=self.logged_in.as_ref().is_some_and(|u|u.admin && !u.is_open_station());
+                                let can=real_admin || (admin && only);
+                                if ui
+                                    .add_enabled(can, egui::Checkbox::new(&mut only, tr("Only connect to a RadioMaster Server (no local station)")))
+                                    .on_disabled_hover_text(if !admin { tr("Only administrators can change this") } else { tr("Sign in with an administrator account first, so someone can turn this off again") })
+                                    .on_hover_text(tr("For computers in a company setup: people can't run a station on this computer, only sign in to a server"))
+                                    .changed()
+                                {
+                                    if let Err(e)=self.accounts.set_server_only(only){self.auth_error=e;}
+                                }
+                                if only {
+                                    ui.small(tr("RadioMaster starts with Connect to Server. Only administrators can sign in on this computer; disconnecting goes back to the connect screen."));
+                                }
                                 if admin && !self.auth_error.is_empty() && !self.show_users {ui.colored_label(RED,&self.auth_error);}
                                 ui.add_space(6.0);
                                 if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.auth_error.clear();self.show_users=true;}
@@ -2330,6 +2356,7 @@ impl App {
     }
 
     fn authentication(&mut self, ctx: &egui::Context) {
+        let server_only = self.accounts.server_only();
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.vertical_centered(|ui| {
@@ -2341,74 +2368,125 @@ impl App {
                 }
                 ui.heading(tr("Studio Access"));
                 ui.add_space(18.0);
-                if self.accounts.users.is_empty() {
-                    ui.label(tr("First run: create your administrator account."));
+                if server_only {
+                    // enterprise setup: the station lives on a server, there is none on this computer
+                    ui.label(tr("This computer runs stations on a RadioMaster Server. Sign in with your server account."));
+                    ui.add_space(6.0);
+                    if ui
+                        .add_sized([300.0, 30.0], egui::Button::new(RichText::new(tr("Connect to Remote Server…")).strong()))
+                        .on_hover_text(tr("Sign in with the server's username and password"))
+                        .clicked()
+                    {
+                        self.open_connect(true);
+                    }
+                    ui.add_space(24.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    // folded away: it's only for whoever looks after this computer
+                    let id = egui::Id::new("admin_sign_in");
+                    let mut open = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                    let arrow = if open { "⏷" } else { "⏵" };
+                    if ui.small_button(format!("{arrow} {}", tr("Administrator sign-in (this computer)"))).clicked() {
+                        open = !open;
+                        ui.data_mut(|d| d.insert_temp(id, open));
+                    }
+                    if open {
+                        ui.add_space(4.0);
+                        ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(tr("An administrator set this computer to connect to a server only. Administrators can still sign in here to change that in Settings → Users & access control."))
+                                    .small()
+                                    .color(GRAY),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        self.local_sign_in(ui, true);
+                    }
                 } else {
-                    ui.label(tr("Sign in to access station controls."));
-                }
-                ui.add_sized([300.0, 26.0], egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("Username")));
-                ui.add_sized(
-                    [300.0, 26.0],
-                    egui::TextEdit::singleline(&mut self.login_password)
-                        .password(true)
-                        .hint_text(tr("Password (12+ characters for setup)")),
-                );
-                let enter =
-                    ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.login_name.trim().is_empty() && !self.login_password.is_empty();
-                if ui.button(if self.accounts.users.is_empty() { tr("Create administrator") } else { tr("Sign in") }).clicked() || enter {
                     if self.accounts.users.is_empty() {
-                        match self.accounts.add(&self.login_name, &self.login_password, true) {
-                            Ok(()) => {
-                                self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
-                                self.auth_error.clear();
-                            }
-                            Err(e) => self.auth_error = e,
-                        }
+                        ui.label(tr("First run: create your administrator account."));
                     } else {
-                        self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
-                        self.auth_error = if self.logged_in.is_some() { String::new() } else { "Invalid username or password".into() };
+                        ui.label(tr("Sign in to access station controls."));
                     }
-                    self.login_password.clear();
-                    if self.logged_in.is_some() {
-                        self.login_name.clear(); // the "add a user" form reuses this box
-                        self.sign_in_now = false;
+                    self.local_sign_in(ui, false);
+                    ui.add_space(14.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    if ui
+                        .add_sized([300.0, 26.0], egui::Button::new(tr("Connect to Remote Server…")))
+                        .on_hover_text(tr("Run a station on a RadioMaster Server, signing in with the server's username and password instead of a local account"))
+                        .clicked()
+                    {
+                        self.open_connect(true);
                     }
-                }
-                if !self.accounts.sign_in_required() && ui.button(tr("Cancel")).on_hover_text(tr("Back to the station without signing in")).clicked() {
-                    self.sign_in_now = false;
-                    self.srv.show_connect = false;
-                    self.srv.from_login = false;
-                    self.login_password.clear();
-                    self.auth_error.clear();
-                }
-                ui.colored_label(RED, &self.auth_error);
-                if !self.accounts.users.is_empty() {
-                    ui.add_space(8.0);
-                    ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(tr("Forgot your password? Another administrator can set a new one in File → Users…. If no administrator can sign in, close RadioMaster and delete operators.json from its settings folder: it then starts without asking, and your playlists and settings are kept."))
-                                .small()
-                                .color(GRAY),
-                        );
-                        if ui.small_button(tr("Open the settings folder")).clicked() {
-                            crate::plugins::open_folder(&data_dir());
-                        }
-                    });
-                }
-                ui.add_space(14.0);
-                ui.separator();
-                ui.add_space(6.0);
-                if ui
-                    .add_sized([300.0, 26.0], egui::Button::new(tr("Connect to Remote Server…")))
-                    .on_hover_text(tr("Run a station on a RadioMaster Server, signing in with the server's username and password instead of a local account"))
-                    .clicked()
-                {
-                    self.open_connect(true);
                 }
                 ui.add_space(20.0);
             });
             });
         });
+    }
+
+    /// Username, password and sign in (or create the first administrator) for this computer.
+    /// `admins_only`: a server-only computer, where only administrators may sign in here.
+    fn local_sign_in(&mut self, ui: &mut egui::Ui, admins_only: bool) {
+        ui.add_sized([300.0, 26.0], egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("Username")));
+        ui.add_sized(
+            [300.0, 26.0],
+            egui::TextEdit::singleline(&mut self.login_password).password(true).hint_text(tr("Password (12+ characters for setup)")),
+        );
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && !self.srv.show_connect
+            && !self.login_name.trim().is_empty()
+            && !self.login_password.is_empty();
+        if ui.button(if self.accounts.users.is_empty() { tr("Create administrator") } else { tr("Sign in") }).clicked() || enter {
+            if self.accounts.users.is_empty() {
+                match self.accounts.add(&self.login_name, &self.login_password, true) {
+                    Ok(()) => {
+                        self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
+                        self.auth_error.clear();
+                    }
+                    Err(e) => self.auth_error = e,
+                }
+            } else {
+                self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
+                self.auth_error = if self.logged_in.is_some() { String::new() } else { "Invalid username or password".into() };
+                if admins_only && self.logged_in.as_ref().is_some_and(|u| !u.admin) {
+                    self.logged_in = None;
+                    self.auth_error = "This computer only connects to a server: sign in with Connect to Remote Server".into();
+                }
+            }
+            self.login_password.clear();
+            if self.logged_in.is_some() {
+                self.login_name.clear(); // the "add a user" form reuses this box
+                self.sign_in_now = false;
+                self.srv.show_connect = false;
+                self.srv.from_login = false;
+            }
+        }
+        if !self.accounts.sign_in_required()
+            && !admins_only
+            && ui.button(tr("Cancel")).on_hover_text(tr("Back to the station without signing in")).clicked()
+        {
+            self.sign_in_now = false;
+            self.srv.show_connect = false;
+            self.srv.from_login = false;
+            self.login_password.clear();
+            self.auth_error.clear();
+        }
+        ui.colored_label(RED, &self.auth_error);
+        if !self.accounts.users.is_empty() {
+            ui.add_space(8.0);
+            ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(tr("Forgot your password? Another administrator can set a new one in File → Users…. If no administrator can sign in, close RadioMaster and delete operators.json from its settings folder: it then starts without asking, and your playlists and settings are kept."))
+                        .small()
+                        .color(GRAY),
+                );
+                if ui.small_button(tr("Open the settings folder")).clicked() {
+                    crate::plugins::open_folder(&data_dir());
+                }
+            });
+        }
     }
 
     /// Microphone on / off.
@@ -4046,7 +4124,7 @@ impl eframe::App for App {
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.focused) {
             self.browsers.focus_parent("");
         }
-        if self.logged_in.is_none() && !self.sign_in_now && !self.accounts.sign_in_required() {
+        if self.logged_in.is_none() && !self.sign_in_now && !self.accounts.sign_in_required() && !self.accounts.server_only() {
             // sign-in is turned off (or there are no accounts yet): straight in
             self.logged_in = Some(crate::auth::Operator::open_station());
         }
@@ -4090,6 +4168,10 @@ impl eframe::App for App {
         let arc = self.core.clone();
         let mut core = arc.lock();
         let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        if core.held && core.link.is_none() {
+            // an administrator signed in on a server-only computer: the local station runs again
+            core.held = false;
+        }
         if let Some(msg) = self.audio.watchdog() {
             core.say(msg);
         }
