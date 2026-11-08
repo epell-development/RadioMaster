@@ -206,9 +206,10 @@ the login screen. Managing local user accounts isn't available this way.
 
 1. **File → Connect to Server…**, type the server's address (e.g. `192.168.1.20:9259`), the username and the
    password.
-2. RadioMaster asks whether to **save your local session** as a station profile. If you save it, your own
-   playlists and settings come back exactly as they were when you disconnect. If you don't, the server's
-   playlists and settings stay in the app after you disconnect.
+2. RadioMaster asks whether to **save your local session** as a station profile too. Either way, your own
+   playlists, settings and library are put aside and come back exactly as they were when you disconnect.
+   After disconnecting, a window offers **Station profiles…** and **Keep a copy of the server's station**,
+   which replaces your local playlists, settings and library with the server's.
 3. While connected, a green button with the station's name sits left of the RadioMaster logo (amber while
    the connection is being restored). Click it for the details or to disconnect; **File → Disconnect from
    Server** does the same.
