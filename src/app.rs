@@ -2449,10 +2449,10 @@ impl App {
                 }
             } else {
                 self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
-                self.auth_error = if self.logged_in.is_some() { String::new() } else { "Invalid username or password".into() };
+                self.auth_error = if self.logged_in.is_some() { String::new() } else { tr("Invalid username or password").into() };
                 if admins_only && self.logged_in.as_ref().is_some_and(|u| !u.admin) {
                     self.logged_in = None;
-                    self.auth_error = "This computer only connects to a server: sign in with Connect to Remote Server".into();
+                    self.auth_error = tr("This computer only connects to a server: sign in with Connect to Remote Server").into();
                 }
             }
             self.login_password.clear();
