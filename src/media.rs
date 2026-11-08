@@ -7,6 +7,10 @@ use parking_lot::Mutex;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// The ffmpeg chosen in Settings, and the program found for it (looked for once per choice).
 static FFMPEG: Mutex<Option<(String, Option<PathBuf>)>> = Mutex::new(None);
@@ -148,7 +152,12 @@ pub struct SymAudio {
     duration: f32,
     buf: Vec<f32>,
     pos: usize,
+    /// symphonia stopped before the end of the file
+    failed: Arc<AtomicBool>,
 }
+
+/// Packets in a row symphonia may fail to decode (skipped) before it gives up on a file.
+const MAX_BAD: u32 = 100;
 
 impl SymAudio {
     /// Open `path` at `secs` seconds.
@@ -192,7 +201,8 @@ impl SymAudio {
             let time = Time { seconds: secs as u64, frac: secs.fract() as f64 };
             format.seek(SeekMode::Accurate, SeekTo::Time { time, track_id: Some(id) })?;
         }
-        let mut a = SymAudio { format, decoder, track: id, channels, rate, duration, buf: vec![], pos: 0 };
+        let failed = Arc::new(AtomicBool::new(false));
+        let mut a = SymAudio { format, decoder, track: id, channels, rate, duration, buf: vec![], pos: 0, failed };
         // the first packet tells the real layout (some files don't say in the header)
         a.refill();
         Ok(a)
@@ -202,35 +212,59 @@ impl SymAudio {
         self.duration
     }
 
-    /// Decode the next packet of our track. False at the end.
+    /// Decode the next packet of our track. False at the end, or when symphonia can't go on (then
+    /// `failed` is set, and `open_video` hands the rest of the file to ffmpeg).
     fn refill(&mut self) -> bool {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
         use symphonia::core::{audio::SampleBuffer, errors::Error};
         self.buf.clear();
         self.pos = 0;
-        let mut errors = 0;
+        let mut bad = 0;
+        let fail = |a: &mut SymAudio| {
+            a.failed.store(true, Ordering::Relaxed);
+            false
+        };
         loop {
-            let packet = match self.format.next_packet() {
-                Ok(p) => p,
-                Err(_) => return false, // the end, or something unreadable
+            // a damaged or unusual file can make symphonia panic: that is a failure, not a crash
+            let packet = match catch_unwind(AssertUnwindSafe(|| self.format.next_packet())) {
+                Ok(Ok(p)) => p,
+                Ok(Err(Error::IoError(e))) if e.kind() == std::io::ErrorKind::UnexpectedEof => return false, // the end
+                Ok(Err(Error::ResetRequired)) if bad < MAX_BAD => {
+                    bad += 1;
+                    self.decoder.reset();
+                    continue;
+                }
+                _ => return fail(self),
             };
             if packet.track_id() != self.track {
                 continue;
             }
-            match self.decoder.decode(&packet) {
-                Ok(d) => {
-                    let spec = *d.spec();
-                    if d.frames() == 0 {
-                        continue;
-                    }
-                    self.channels = spec.channels.count().max(1) as u16;
-                    self.rate = spec.rate.max(1);
-                    let mut sb = SampleBuffer::<f32>::new(d.capacity() as u64, spec);
-                    sb.copy_interleaved_ref(d);
-                    self.buf.extend_from_slice(sb.samples());
+            let (decoder, buf) = (&mut self.decoder, &mut self.buf);
+            let decoded = catch_unwind(AssertUnwindSafe(|| -> Result<Option<(u16, u32)>, Error> {
+                let d = decoder.decode(&packet)?;
+                if d.frames() == 0 {
+                    return Ok(None);
+                }
+                let spec = *d.spec();
+                let mut sb = SampleBuffer::<f32>::new(d.capacity() as u64, spec);
+                sb.copy_interleaved_ref(d);
+                buf.extend_from_slice(sb.samples());
+                Ok(Some((spec.channels.count().max(1) as u16, spec.rate.max(1))))
+            }));
+            match decoded {
+                Ok(Ok(Some((channels, rate)))) => {
+                    self.channels = channels;
+                    self.rate = rate;
                     return true;
                 }
-                Err(Error::DecodeError(_)) if errors < 10 => errors += 1, // a damaged frame: skip it
-                Err(_) => return false,
+                Ok(Ok(None)) => {}
+                // a damaged frame: skip it (many in a row: give up)
+                Ok(Err(Error::DecodeError(_))) if bad < MAX_BAD => bad += 1,
+                Ok(Err(Error::ResetRequired)) if bad < MAX_BAD => {
+                    bad += 1;
+                    self.decoder.reset();
+                }
+                _ => return fail(self),
             }
         }
     }
@@ -264,13 +298,58 @@ impl rodio::Source for SymAudio {
     }
 }
 
+/// A video file's sound as stereo at `SR`, read by symphonia. If symphonia gives up part way (a
+/// packet it can't decode, a damaged file) or the sound stops well before the file's length, ffmpeg
+/// carries on from where it stopped, so the track is never cut short.
+struct VideoAudio {
+    path: PathBuf,
+    sym: Option<rodio::source::UniformSourceIterator<SymAudio, f32>>,
+    failed: Arc<AtomicBool>,
+    ff: Option<Pcm>,
+    /// where in the file symphonia started, its length (0 = unknown) and the samples it gave
+    start: f32,
+    duration: f32,
+    samples: u64,
+}
+
+impl VideoAudio {
+    /// Where symphonia stopped, if the rest should come from ffmpeg.
+    fn hand_over_at(&self) -> Option<f32> {
+        let at = self.start + self.samples as f32 / (2.0 * SR as f32);
+        let early = self.duration > 0.0 && at < self.duration - 1.0;
+        (self.failed.load(Ordering::Relaxed) || early).then_some(at)
+    }
+}
+
+impl Iterator for VideoAudio {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if let Some(s) = &mut self.sym {
+            if let Some(x) = s.next() {
+                self.samples += 1;
+                return Some(x);
+            }
+            self.sym = None;
+            if let Some(at) = self.hand_over_at() {
+                self.ff = open_audio(&self.path, at).ok().map(|(src, _)| src);
+            }
+            if self.samples % 2 == 1 {
+                return Some(0.0); // finish the frame, so left and right stay in place
+            }
+        }
+        self.ff.as_mut()?.next()
+    }
+}
+
 /// A video file's sound from `secs` on as stereo at `SR`, with its length (0 = unknown): read by
 /// symphonia when it can (MP4/MOV/M4V, MKV/WebM with AAC, Vorbis or FLAC), otherwise by ffmpeg.
 pub fn open_video(path: &Path, secs: f32) -> anyhow::Result<(Pcm, f32)> {
     match SymAudio::open(path, secs) {
         Ok(a) => {
-            let d = a.duration();
-            Ok((Box::new(rodio::source::UniformSourceIterator::<_, f32>::new(a, 2, SR)), d))
+            let (duration, failed) = (a.duration(), a.failed.clone());
+            let sym = Some(rodio::source::UniformSourceIterator::<_, f32>::new(a, 2, SR));
+            let v = VideoAudio { path: path.to_path_buf(), sym, failed, ff: None, start: secs.max(0.0), duration, samples: 0 };
+            Ok((Box::new(v), duration))
         }
         // ffmpeg is the last try, so its message is the one that says what to do
         Err(_) => open_audio(path, secs),
@@ -296,5 +375,30 @@ mod tests {
         let p = parse_probe(text);
         assert_eq!(p.size, None);
         assert!((p.duration - 180.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_damaged_video_still_plays_to_the_end() {
+        // symphonia gave up on this file part way (at about 9 of 20 seconds) and the track ended
+        // there; ffmpeg now carries on from that point
+        let Some(ff) = ffmpeg() else { return }; // no ffmpeg here
+        let dir = std::env::temp_dir().join("rm_test_video_damaged");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("clip.mp4");
+        let made = quiet(&ff)
+            .args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30"])
+            .args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "20", "-c:v", "libx264", "-c:a", "aac"])
+            .arg(&file)
+            .status();
+        if !made.is_ok_and(|s| s.success()) {
+            return; // this ffmpeg can't make H.264
+        }
+        let mut bytes = std::fs::read(&file).unwrap();
+        let junk: Vec<u8> = (0..51_200u32).map(|i| i as u8).collect();
+        bytes[120_000..120_000 + junk.len()].copy_from_slice(&junk);
+        std::fs::write(&file, bytes).unwrap();
+        let (src, _) = open_video(&file, 0.0).unwrap();
+        let secs = src.count() as f32 / 2.0 / SR as f32;
+        assert!(secs > 15.0, "only {secs} s of a 20 s video played");
     }
 }

@@ -256,6 +256,25 @@ impl App {
         }
     }
 
+    /// A menu entry that opens a tool window (Tools menu, View → Video, Settings → Plugins).
+    pub(super) fn tool_menu_item(&mut self, ui: &mut egui::Ui, core: &mut Playout, w: ToolWin) {
+        let sc = match w {
+            ToolWin::Generator => self.controls.key_label("generator"),
+            ToolWin::Scheduler => self.controls.key_label("scheduler"),
+            ToolWin::AudioFx => self.controls.key_label("audio_fx"),
+            ToolWin::Notepad => self.controls.key_label("notepad"),
+            _ => String::new(),
+        };
+        if ui
+            .add_enabled(w.allowed(&self.perm), egui::Button::new(format!("{}  {}…", w.icon(), tr(w.label()))).shortcut_text(sc))
+            .on_disabled_hover_text(tr("Your account isn't allowed to use this tool"))
+            .clicked()
+        {
+            self.launch_tool(core, w);
+            ui.close_menu();
+        }
+    }
+
     /// Open a tool from a menu or button. The track editor starts on the selected (or on-air) track.
     pub(super) fn launch_tool(&mut self, core: &mut Playout, w: ToolWin) {
         if w == ToolWin::FadeEditor && w.allowed(&self.perm) {

@@ -180,7 +180,7 @@ does meanwhile: lowered to the level of the slider next to the mic volume, muted
 
 ## Plugins
 Small programs in any language that run when something happens on air, and can send commands back.
-See [PLUGINS.md](PLUGINS.md) and **Tools → Plugins**.
+See [PLUGINS.md](PLUGINS.md) and **Settings → Plugins**.
 
 ## Translations
 Settings → General → Language. To translate RadioMaster, see [lang/README.md](lang/README.md).

@@ -1283,6 +1283,7 @@ impl App {
                             ui.close_menu();
                         }
                     }
+                    self.tool_menu_item(ui, core, ToolWin::Video);
                     ui.separator();
                     let mut dark = self.workzones.dark;
                     if ui.checkbox(&mut dark, tr("Dark theme")).changed() {
@@ -1318,27 +1319,8 @@ impl App {
                         ToolWin::FileExplorer,
                         ToolWin::Cleanup,
                         ToolWin::Notepad,
-                        ToolWin::Video,
-                        ToolWin::Plugins,
                     ] {
-                        let sc = match w {
-                            ToolWin::Generator => self.controls.key_label("generator"),
-                            ToolWin::Scheduler => self.controls.key_label("scheduler"),
-                            ToolWin::AudioFx => self.controls.key_label("audio_fx"),
-                            ToolWin::Notepad => self.controls.key_label("notepad"),
-                            _ => String::new(),
-                        };
-                        if ui
-                            .add_enabled(
-                                w.allowed(&self.perm),
-                                egui::Button::new(format!("{}  {}…", w.icon(), tr(w.label()))).shortcut_text(sc),
-                            )
-                            .on_disabled_hover_text(tr("Your account isn't allowed to use this tool"))
-                            .clicked()
-                        {
-                            self.launch_tool(core, w);
-                            ui.close_menu();
-                        }
+                        self.tool_menu_item(ui, core, w);
                     }
                     ui.separator();
                     let vt = self.perm.edit_playlists && self.perm.tool(crate::auth::tool::VOICE_TRACK);
@@ -1396,6 +1378,8 @@ impl App {
                         self.show_repeat = true;
                         ui.close_menu();
                     }
+                    ui.separator();
+                    self.tool_menu_item(ui, core, ToolWin::Plugins);
                 });
                 ui.menu_button(tr("Help"), |ui| {
                     if ui
