@@ -6,7 +6,7 @@
 <link rel="icon" href="/img/icon.png">
 <link rel="apple-touch-icon" href="/img/icon.png">
 <title>How to Make a RadioMaster Plugin: Now Playing to Discord, OBS and More</title>
-<meta name="description" content="Write a RadioMaster plugin in any language: run scripts when a song starts, the hour changes or an encoder drops, post now playing to Discord or OBS, and control the station with RM: commands or the remote control API.">
+<meta name="description" content="Write a RadioMaster plugin in any language: run scripts when a song starts or the hour changes, control playback and playlists, and add your own menu items, toolbar buttons, windows and settings to the app.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <link rel="canonical" href="https://radiomaster.dovafm.com/guides/plugins/">
 <meta name="theme-color" content="#080e17">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="RadioMaster">
 <meta property="og:title" content="How to make a RadioMaster plugin">
-<meta property="og:description" content="Run your own scripts when a song starts or the hour changes, and send commands back to RadioMaster.">
+<meta property="og:description" content="Run your own scripts when a song starts, control the station, and add your own buttons, menus and windows to RadioMaster.">
 <meta property="og:url" content="https://radiomaster.dovafm.com/guides/plugins/">
 <meta property="og:image" content="https://radiomaster.dovafm.com/img/main.png">
 <meta property="og:image:width" content="1280">
@@ -23,7 +23,7 @@
 <meta property="og:locale" content="en_GB">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="How to make a RadioMaster plugin">
-<meta name="twitter:description" content="Run your own scripts when a song starts or the hour changes, and send commands back to RadioMaster.">
+<meta name="twitter:description" content="Run your own scripts when a song starts, control the station, and add your own buttons, menus and windows to RadioMaster.">
 <meta name="twitter:image" content="https://radiomaster.dovafm.com/img/main.png">
 <script type="application/ld+json">
 {
@@ -33,7 +33,7 @@
       "@type": "Article",
       "@id": "https://radiomaster.dovafm.com/guides/plugins/#article",
       "headline": "How to make a RadioMaster plugin",
-      "description": "Write a RadioMaster plugin in any language: run scripts when a song starts, the hour changes or an encoder drops, post now playing to Discord or OBS, and control the station with RM: commands or the remote control API.",
+      "description": "Write a RadioMaster plugin in any language: run scripts when a song starts or the hour changes, control playback and playlists, and add your own menu items, toolbar buttons, windows and settings to the app.",
       "image": "https://radiomaster.dovafm.com/img/main.png",
       "datePublished": "2026-10-25",
       "dateModified": "2026-10-25",
@@ -113,8 +113,8 @@
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">RadioMaster</a> / <a href="/guides/">Guides</a> / Make a plugin</nav>
     <p class="eyebrow">Guide · Extend RadioMaster</p>
     <h1 class="page-h">How to make a RadioMaster plugin</h1>
-    <p class="lede" style="margin-top:16px">A plugin is a small program, in any language, that RadioMaster runs when something happens on air. Post the current song to Discord, write it to a file for OBS, light the ON AIR sign, log to your own database, or control the station from another system.</p>
-    <nav class="toc" aria-label="On this page"><a href="#start">Start from the example</a><a href="#manifest">plugin.json</a><a href="#events">Events</a><a href="#data">Event data</a><a href="#control">Control RadioMaster</a><a href="#examples">Examples</a><a href="#api">Remote control API</a></nav>
+    <p class="lede" style="margin-top:16px">A plugin is a small program, in any language, that RadioMaster runs alongside the station. It reacts to what happens on air, controls playback and playlists, asks RadioMaster what is playing, and adds its own menu items, toolbar buttons, playlist right-click items, windows and settings to the app. Post the current song to Discord, light the ON AIR sign, build a studio panel for your presenters, or control the station from another system.</p>
+    <nav class="toc" aria-label="On this page"><a href="#start">Start from the example</a><a href="#manifest">plugin.json</a><a href="#events">Events</a><a href="#data">Event data</a><a href="#control">Control RadioMaster</a><a href="#ask">Ask RadioMaster</a><a href="#controls">Add your own controls</a><a href="#settings">Settings</a><a href="#examples">Examples</a><a href="#api">Remote control API</a></nav>
   </section>
 
   <section class="block">
@@ -137,15 +137,16 @@
   &quot;events&quot;: [&quot;track_started&quot;],
   &quot;mode&quot;: &quot;event&quot;
 }</pre></div>
-      <div class="rundown-table"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td class="k">name, description</td><td>Shown in the Plugins window</td></tr><tr><td class="k">command, args</td><td>The program to run. It starts in the plugin's own folder</td></tr><tr><td class="k">events</td><td>Which events it wants (below), or <code>["*"]</code> for all of them</td></tr><tr><td class="k">mode</td><td><code>"event"</code> (the default) runs once per event. <code>"service"</code> starts with RadioMaster and keeps running</td></tr></tbody></table></div>
+      <div class="rundown-table"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td class="k">name, description</td><td>Shown in the Plugins window</td></tr><tr><td class="k">command, args</td><td>The program to run. It starts in the plugin's own folder</td></tr><tr><td class="k">events</td><td>Which events it wants (below), or <code>["*"]</code> for all of them</td></tr><tr><td class="k">mode</td><td><code>"event"</code> (the default) runs once per event. <code>"service"</code> starts with RadioMaster and keeps running</td></tr><tr><td class="k">settings</td><td>Settings shown under the plugin in Settings → Plugins (<a href="#settings">below</a>)</td></tr><tr><td class="k">menu, buttons, playlist_menu</td><td>Items in the Plugins menu, toolbar buttons, and items in a playlist row's right-click menu (<a href="#controls">below</a>)</td></tr><tr><td class="k">panel</td><td>A window of controls (<a href="#controls">below</a>)</td></tr></tbody></table></div>
+      <p>An event plugin is the simplest: it runs, does its job and exits. A service keeps running, so it can remember things, answer clicks straight away, keep a window up to date and ask RadioMaster questions.</p>
 
       <h2 id="events">Events</h2>
-      <div class="rundown-table"><table><thead><tr><th>Event</th><th>When</th><th>Extra fields</th></tr></thead><tbody><tr><td class="k">app_start</td><td>RadioMaster started</td><td>version</td></tr><tr><td class="k">app_exit</td><td>RadioMaster is closing</td><td></td></tr><tr><td class="k">track_started</td><td>A song, voice track or jingle from the playlist started</td><td>title, artist, album, genre, year, path, duration, text</td></tr><tr><td class="k">item_started</td><td>Another playlist row started (stream relay, line input, speech, teaser…)</td><td>title, text</td></tr><tr><td class="k">playback_stopped</td><td>Playback stopped</td><td></td></tr><tr><td class="k">hour</td><td>The top of every hour</td><td>hour</td></tr><tr><td class="k">encoder</td><td>A stream encoder connected, failed or stopped</td><td>encoder, name, state</td></tr></tbody></table></div>
-      <p>Every event also has <code>event</code> and <code>time</code> (ISO 8601).</p>
+      <div class="rundown-table"><table><thead><tr><th>Event</th><th>When</th><th>Extra fields</th></tr></thead><tbody><tr><td class="k">app_start</td><td>RadioMaster started</td><td>version</td></tr><tr><td class="k">app_exit</td><td>RadioMaster is closing</td><td></td></tr><tr><td class="k">track_started</td><td>A song, voice track or jingle from the playlist started</td><td>title, artist, album, genre, year, path, duration, text</td></tr><tr><td class="k">item_started</td><td>Another playlist row started (stream relay, line input, speech, teaser…)</td><td>title, text</td></tr><tr><td class="k">playback_stopped</td><td>Playback stopped</td><td></td></tr><tr><td class="k">paused, resumed</td><td>Playback was paused, or carried on after a pause</td><td></td></tr><tr><td class="k">cart</td><td>A pad on the cart wall was fired</td><td>pad, label, title, artist, path</td></tr><tr><td class="k">mic</td><td>The microphone was switched on or off</td><td>on</td></tr><tr><td class="k">hour</td><td>The top of every hour</td><td>hour</td></tr><tr><td class="k">encoder</td><td>A stream encoder connected, failed or stopped</td><td>encoder, name, state</td></tr></tbody></table></div>
+      <p>Every event also has <code>event</code> and <code>time</code> (ISO 8601). Three more go to one plugin only, whatever its <code>events</code> list says: <code>action</code> (someone used one of its controls), <code>reply</code> (the answer to a question it asked) and <code>settings</code> (a service's settings, as its first line and whenever they change).</p>
 
       <h2 id="data">How a plugin gets the event</h2>
       <ul>
-        <li><b>Event plugins</b> get the event as one line of JSON on standard input, and as environment variables: <code>RM_EVENT</code>, <code>RM_TITLE</code>, <code>RM_ARTIST</code>, <code>RM_PATH</code> and so on (each field in capitals with <code>RM_</code> in front). A run that takes longer than 60 seconds is stopped.</li>
+        <li><b>Event plugins</b> get the event as one line of JSON on standard input, and as environment variables: <code>RM_EVENT</code>, <code>RM_TITLE</code>, <code>RM_ARTIST</code>, <code>RM_PATH</code> and so on (each field in capitals with <code>RM_</code> in front). Their settings come as <code>settings</code> in the JSON and as <code>RM_SETTING_&lt;ID&gt;</code> variables. A run that takes longer than 60 seconds is stopped.</li>
         <li><b>Service plugins</b> get one JSON line on standard input per event, for as long as RadioMaster runs. When RadioMaster closes, standard input is closed: exit when that happens.</li>
       </ul>
 
@@ -156,7 +157,48 @@ RM: VOLUME 60
 RM: PLAYLIST Evening
 RM: ENCODER START 1
 RM: RULE Station IDs
-RM: GENERATE Overnight</pre></div>
+RM: GENERATE Overnight
+RM: NEXT
+RM: CART 3
+RM: INSERT C:\Jingles\station-id.mp3</pre></div>
+      <p>Plugins can also print JSON messages after <code>RM:</code>. Their <code>"do"</code> says what they are:</p>
+      <div class="rundown-table"><table><thead><tr><th>Message</th><th>Does</th></tr></thead><tbody><tr><td class="k">{"do": "notify", "text": "Hello"}</td><td>Show a line in the status bar</td></tr><tr><td class="k">{"do": "insert", "paths": ["C:\\a.mp3"], "at": "next"}</td><td>Put files after the item on air (<code>"at": "end"</code> adds them at the end; <code>"playlist"</code> picks another tab)</td></tr><tr><td class="k">{"do": "status", "text": "Connected"}</td><td>A short line under the plugin in Settings → Plugins</td></tr><tr><td class="k">{"do": "log", "text": "…"}</td><td>A line in the Log only</td></tr></tbody></table></div>
+
+      <h2 id="ask">Ask RadioMaster</h2>
+      <p>A service can ask with <code>RM: {"do": "get", "what": "status", "request": 1}</code>. The answer comes back on standard input as a <code>reply</code> event with the same <code>request</code> and the answer in <code>data</code>.</p>
+      <div class="rundown-table"><table><thead><tr><th>what</th><th>Answer</th></tr></thead><tbody><tr><td class="k">status</td><td>Playing, paused or stopped; what is on air, position, duration, volume, the playlist on air and what plays next</td></tr><tr><td class="k">playlist</td><td>The rows of the playlist on air, or of <code>"playlist": "Evening"</code></td></tr><tr><td class="k">playlists</td><td>Every playlist tab</td></tr><tr><td class="k">history</td><td>The last 100 plays</td></tr><tr><td class="k">library</td><td>Up to 200 tracks matching <code>"search": "words"</code></td></tr><tr><td class="k">carts, encoders, templates, rules</td><td>The cart wall, the encoders and their state, generator templates, advert and jingle rules</td></tr></tbody></table></div>
+
+      <h2 id="controls">Add your own controls</h2>
+      <p>In <code>plugin.json</code> (or later, with <code>{"do": "menu" | "buttons" | "playlist_menu", "items": […]}</code>):</p>
+      <div class="code"><pre>&quot;menu&quot;: [{ &quot;id&quot;: &quot;open&quot;, &quot;label&quot;: &quot;Show the studio panel&quot; }],
+&quot;buttons&quot;: [{ &quot;id&quot;: &quot;station_id&quot;, &quot;label&quot;: &quot;Station ID&quot;, &quot;tooltip&quot;: &quot;Play the station ID next&quot; }],
+&quot;playlist_menu&quot;: [{ &quot;id&quot;: &quot;shout_out&quot;, &quot;label&quot;: &quot;Shout out this song&quot; }]</pre></div>
+      <p>Menu items go in a <b>Plugins</b> menu in the menu bar, buttons on the toolbar, and playlist items at the bottom of a row's right-click menu. An item with a <code>"command"</code> runs that station command; any other sends the plugin an <code>action</code> event with its <code>id</code>. Playlist items also send the selected <code>rows</code>. The <code>PLUGIN &lt;plugin&gt; &lt;action&gt;</code> station command sends an action too, so command rows and the event scheduler can call a plugin.</p>
+      <p>A plugin can also have a window of its own. Put a <code>panel</code> in <code>plugin.json</code>, or send <code>{"do": "panel", "title": "…", "items": […], "open": true}</code> at any time to update it:</p>
+      <div class="code"><pre>&quot;panel&quot;: {
+  &quot;title&quot;: &quot;Studio panel&quot;,
+  &quot;open&quot;: true,
+  &quot;items&quot;: [
+    { &quot;type&quot;: &quot;heading&quot;, &quot;text&quot;: &quot;Now playing&quot; },
+    { &quot;type&quot;: &quot;progress&quot;, &quot;value&quot;: 0.4, &quot;text&quot;: &quot;1:23 / 3:30&quot; },
+    { &quot;type&quot;: &quot;row&quot;, &quot;items&quot;: [
+      { &quot;type&quot;: &quot;button&quot;, &quot;id&quot;: &quot;next&quot;, &quot;label&quot;: &quot;Next&quot;, &quot;command&quot;: &quot;NEXT&quot; },
+      { &quot;type&quot;: &quot;button&quot;, &quot;id&quot;: &quot;id&quot;, &quot;label&quot;: &quot;Station ID&quot; }
+    ]},
+    { &quot;type&quot;: &quot;slider&quot;, &quot;id&quot;: &quot;volume&quot;, &quot;label&quot;: &quot;Volume&quot;, &quot;min&quot;: 0, &quot;max&quot;: 100, &quot;value&quot;: 80 },
+    { &quot;type&quot;: &quot;text&quot;, &quot;id&quot;: &quot;message&quot;, &quot;label&quot;: &quot;Message&quot; }
+  ]
+}</pre></div>
+      <p>Controls: <code>heading</code>, <code>label</code>, <code>separator</code>, <code>space</code>, <code>button</code>, <code>text</code>, <code>number</code>, <code>slider</code>, <code>checkbox</code>, <code>choice</code>, <code>progress</code>, <code>link</code>, <code>table</code>, and <code>row</code> and <code>group</code> to lay them out. Every action from the window carries the values of all its inputs. The full list of fields is in <a href="https://github.com/epell-development/RadioMaster/blob/main/PLUGINS.md#windows-of-controls">PLUGINS.md</a>.</p>
+
+      <h2 id="settings">Settings</h2>
+      <p>Settings show under the plugin in <b>Settings → Plugins</b> and are saved with RadioMaster's settings:</p>
+      <div class="code"><pre>&quot;settings&quot;: [
+  { &quot;id&quot;: &quot;webhook&quot;, &quot;label&quot;: &quot;Discord webhook&quot;, &quot;type&quot;: &quot;password&quot; },
+  { &quot;id&quot;: &quot;delay&quot;, &quot;label&quot;: &quot;Delay (seconds)&quot;, &quot;type&quot;: &quot;number&quot;, &quot;default&quot;: 5 },
+  { &quot;id&quot;: &quot;style&quot;, &quot;label&quot;: &quot;Style&quot;, &quot;type&quot;: &quot;choice&quot;, &quot;options&quot;: [&quot;Short&quot;, &quot;Long&quot;] }
+]</pre></div>
+      <p>Types: <code>text</code> (the default), <code>password</code>, <code>number</code>, <code>bool</code> and <code>choice</code>.</p>
 
       <h2 id="examples">Examples</h2>
       <h3>Write the current song to a file for OBS (Python)</h3>
@@ -174,9 +216,11 @@ for line in sys.stdin:
     e = json.loads(line)
     if e[&quot;event&quot;] == &quot;hour&quot;:
         print(&quot;RM: VOLUME 70&quot;, flush=True)</pre></div>
+      <h3>A studio panel (a service, Python)</h3>
+      <p>The <a href="https://github.com/epell-development/RadioMaster/tree/main/examples/plugins/studio-panel">studio panel example</a> keeps a window up to date with what's on air, and adds a toolbar button, menu items, a playlist right-click item and settings. Copy its folder into your plugins folder to try it.</p>
       <h3>Shell script (macOS and Linux)</h3>
       <div class="code"><pre>printf &#x27;%s - %s\n&#x27; &quot;$RM_ARTIST&quot; &quot;$RM_TITLE&quot; &gt; nowplaying.txt</pre></div>
-      <p class="tip warn"><b>Only install plugins you trust.</b> Plugins run with your account's rights. While the app is connected to RadioMaster Server, plugins keep running on your own computer.</p>
+      <p class="tip warn"><b>Only install plugins you trust.</b> Plugins run with your account's rights. While the app is connected to RadioMaster Server, the server runs its own plugins; your computer's plugin menus, buttons and windows come back when you disconnect.</p>
 
       <h2 id="api">The remote control API</h2>
       <p>To control RadioMaster from another computer, a stream deck or a web page, turn on the remote control API in <b>Settings → Remote API</b>: tick <b>Enable</b>, choose the port (9258 by default) and an API password, then restart RadioMaster. Every call is a simple GET that answers with JSON:</p>

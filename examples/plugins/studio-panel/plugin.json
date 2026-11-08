@@ -1,0 +1,30 @@
+{
+  "name": "Studio panel (example)",
+  "description": "A window with what's on air, quick buttons and a message box; a toolbar button; a playlist right-click item; Plugins menu items and settings. Needs Python 3.",
+  "command": "python",
+  "args": ["studio_panel.py"],
+  "mode": "service",
+  "events": ["track_started", "item_started", "playback_stopped", "paused", "resumed", "mic"],
+  "settings": [
+    { "id": "station", "label": "Station name", "default": "My Station" },
+    { "id": "station_id", "label": "Station ID jingle", "default": "", "help": "A sound file played by the \"Station ID next\" button" },
+    { "id": "refresh", "label": "Refresh every (seconds)", "type": "number", "default": 5 }
+  ],
+  "panel": {
+    "title": "Studio panel",
+    "open": true,
+    "items": [
+      { "type": "label", "text": "Starting…" }
+    ]
+  },
+  "menu": [
+    { "id": "open", "label": "Show the studio panel" },
+    { "id": "top_of_hour", "label": "Play the top of hour jingles", "command": "RULE Top of hour" }
+  ],
+  "buttons": [
+    { "id": "station_id", "label": "Station ID", "tooltip": "Play the station ID jingle next" }
+  ],
+  "playlist_menu": [
+    { "id": "shout_out", "label": "Shout out this song", "tooltip": "Puts the song in the studio panel's message box" }
+  ]
+}

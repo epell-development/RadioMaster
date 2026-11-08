@@ -573,6 +573,7 @@ pub fn keep_local(new: &mut Config, here: &Config) {
     new.language = here.language.clone();
     new.check_updates = here.check_updates;
     new.plugins_off = here.plugins_off.clone();
+    new.plugin_settings = here.plugin_settings.clone();
     new.ffmpeg_path = here.ffmpeg_path.clone();
     new.hear_server = here.hear_server;
 }
