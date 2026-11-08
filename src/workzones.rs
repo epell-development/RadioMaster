@@ -210,6 +210,18 @@ pub struct AuxWindow {
     pub pl_tab: usize,
 }
 
+/// A tool window popped out of the main window into its own OS window (so it can sit on another
+/// screen). It stays popped out, and reopens where it was left, until it's put back.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct PoppedTool {
+    /// the tool's English name (`ToolWin::label`)
+    pub tool: String,
+    /// last position / size (points)
+    pub pos: Option<[f32; 2]>,
+    pub size: Option<[f32; 2]>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct WebSite {
@@ -255,6 +267,8 @@ pub struct WorkzoneSet {
     pub split: f32,
     pub aux: Vec<AuxWindow>,
     pub next_aux: u64,
+    /// tool windows that open as their own OS windows
+    pub popped: Vec<PoppedTool>,
     pub dark: bool,
     /// the playlist scrolls along with the on-air track
     pub follow: bool,
@@ -288,6 +302,7 @@ impl Default for WorkzoneSet {
             split: 0.5,
             aux: vec![],
             next_aux: 1,
+            popped: vec![],
             dark: false,
             follow: true,
             scale: 1.0,
@@ -388,6 +403,9 @@ impl WorkzoneSet {
         for a in self.aux.iter_mut() {
             a.pane.repair();
         }
+        let mut seen = std::collections::HashSet::new();
+        self.popped.retain(|p| !p.tool.is_empty() && seen.insert(p.tool.clone()));
+        self.popped.truncate(32);
         let max_id = self.aux.iter().map(|a| a.id).max().unwrap_or(0);
         self.next_aux = self.next_aux.max(max_id + 1).max(1);
     }
@@ -467,6 +485,18 @@ impl WorkzoneSet {
         id
     }
 
+    pub fn popped(&self, tool: &str) -> Option<&PoppedTool> {
+        self.popped.iter().find(|p| p.tool == tool)
+    }
+
+    /// Pop a tool window out into its own OS window, or put it back into the main window.
+    pub fn set_popped(&mut self, tool: &str, out: bool) {
+        self.popped.retain(|p| p.tool != tool);
+        if out {
+            self.popped.push(PoppedTool { tool: tool.to_string(), ..Default::default() });
+        }
+    }
+
     pub fn close_aux(&mut self, id: u64) {
         self.aux.retain(|a| a.id != id);
     }
@@ -539,6 +569,24 @@ mod tests {
         back.migrate();
         assert_eq!(back.aux.len(), 1);
         assert!(back.next_aux > b, "ids are never reused");
+    }
+
+    #[test]
+    fn popped_tools_round_trip() {
+        let mut s = WorkzoneSet::default();
+        s.set_popped("Video", true);
+        s.set_popped("Video", true);
+        s.set_popped("Notepad", true);
+        s.popped[0].pos = Some([2000.0, 40.0]);
+        s.set_popped("Notepad", false);
+        let mut back: WorkzoneSet = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        back.migrate();
+        assert_eq!(back.popped.len(), 1);
+        assert_eq!(back.popped("Video").and_then(|p| p.pos), Some([2000.0, 40.0]));
+        assert!(back.popped("Notepad").is_none());
+        // layouts saved before popping out existed load with nothing popped out
+        let old: WorkzoneSet = serde_json::from_str(r#"{"v":3,"panels":2}"#).unwrap();
+        assert!(old.popped.is_empty());
     }
 
     #[test]

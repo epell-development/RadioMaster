@@ -452,6 +452,7 @@
  "Move": "",
  "Move a control… (click to cancel)": "",
  "Move right ▶": "",
+ "Move this tool back into the main window": "",
  "Move to a new Additional window": "",
  "Move to playlist": "",
  "Music folders scanned by the library": "",
@@ -535,6 +536,7 @@
  "Open the Playlist generator": "",
  "Open the Removed tracks folder": "",
  "Open the settings folder": "",
+ "Open this tool in its own window, which you can move to another screen": "",
  "Opus in Ogg (ffmpeg)": "",
  "Orange": "",
  "Outputs": "",
@@ -590,6 +592,7 @@
  "Plugins run with your account's rights — only add ones you trust.": "",
  "Point": "",
  "Poll every (s)": "",
+ "Pop this tab out into its own window, which you can move to another screen": "",
  "Port": "",
  "Portal port": "",
  "Preamp": "",
@@ -1130,6 +1133,7 @@
  "…or choose files": "",
  "…or right-click a playlist row → Track editor.": "",
  "↺ Automatic": "",
+ "⇲ Put back": "",
  "⏭ Queue": "",
  "⏭ Skip AutoDJ song": "",
  "⏭ Skip song": "",
@@ -1261,5 +1265,6 @@
  "🖶 Schedule": "",
  "🗁 Media": "",
  "🗑 Remove": "",
+ "🗖 Pop out": "",
  "🙋 Requests": ""
 }

@@ -329,6 +329,10 @@ pub struct App {
     /// explorer folders being listed in the background (panel key → folder)
     fx_loading: HashMap<String, PathBuf>,
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
+    /// where each popped-out tool window was first placed (see `aux_spawn`)
+    tool_spawn: HashMap<ToolWin, ([f32; 2], Option<[f32; 2]>)>,
+    /// false once a platform turns out unable to open extra OS windows
+    pop_out_supported: bool,
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
     eq_name: String,
@@ -797,6 +801,8 @@ impl App {
             fx_loading: HashMap::new(),
             fx_all: Default::default(),
             aux_spawn: HashMap::new(),
+            tool_spawn: HashMap::new(),
+            pop_out_supported: true,
             layout_checked: std::time::Instant::now(),
             perf: None,
             eq_name: String::new(),

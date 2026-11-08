@@ -60,6 +60,15 @@ impl App {
             })
             .response
             .on_hover_text(tr("Add a tab to this panel"));
+            if !matches!(pane, Pane::Aux(_))
+                && !pt.tabs.is_empty()
+                && ui
+                    .small_button("🗖")
+                    .on_hover_text(tr("Pop this tab out into its own window, which you can move to another screen"))
+                    .clicked()
+            {
+                new_window = Some(pt.active.min(pt.tabs.len() - 1));
+            }
             egui::ScrollArea::horizontal().id_salt(("pane_tabs", pane.key())).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for (i, tab) in pt.tabs.iter().copied().enumerate() {
