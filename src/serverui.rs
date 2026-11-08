@@ -33,12 +33,22 @@ struct Connected {
     link: Link,
     /// this app's own session, put aside while connected
     local: Playout,
-    /// the profile it was saved as (None: the server's playlists and settings stay after disconnecting)
+    /// the profile it was also saved as (None: not saved; it still comes back on disconnect)
     profile: Option<String>,
     /// local encoders that were on air, started again on disconnect
     encoders: Vec<usize>,
     /// the station's sound, playing here (None when "Hear the station here" is off)
     listen: Option<Listener>,
+}
+
+/// Just disconnected: the local session is back, and the server's station can still be copied here.
+struct Left {
+    server: String,
+    tabs: sync::TabsWire,
+    cfg: crate::config::Config,
+    library: Vec<crate::library::Track>,
+    /// "Keep a copy of the server's station" was pressed once: asking to confirm
+    confirm: bool,
 }
 
 pub(super) struct ServerUi {
@@ -74,6 +84,8 @@ pub(super) struct ServerUi {
     /// accounts, updates, restart and stop (administrators)
     pub(super) admin: super::serveradmin::ServerAdmin,
     conn: Option<Connected>,
+    /// the "Disconnected" window
+    left: Option<Left>,
 }
 
 impl Default for ServerUi {
@@ -104,6 +116,7 @@ impl Default for ServerUi {
             tunnel_token: String::new(),
             admin: Default::default(),
             conn: None,
+            left: None,
         }
     }
 }
@@ -125,7 +138,7 @@ impl ServerUi {
 
     /// A window of this tool is open (web views must hide under it).
     pub(super) fn window_open(&self) -> bool {
-        self.show_connect || self.ask.is_some() || self.show_status || self.show_settings || self.admin.window_open()
+        self.show_connect || self.ask.is_some() || self.show_status || self.show_settings || self.left.is_some() || self.admin.window_open()
     }
 }
 
@@ -247,6 +260,7 @@ impl App {
         self.server_audio(core);
         self.connect_window(ctx);
         self.save_session_window(ctx, core);
+        self.disconnected_window(ctx, core);
         self.server_status_window(ctx, core);
         self.server_settings_window(ctx);
         self.server_picker_window(ctx, core);
@@ -381,13 +395,13 @@ impl App {
             egui::ScrollArea::vertical().max_height(ui.available_height() - 40.0).show(ui, |ui| {
                 ui.label(format!("Signed in to {name}. While you're connected, this app shows and runs the server's station; your own playback and encoders stop."));
                 ui.add_space(4.0);
-                ui.label(tr("Save your playlists and settings as a station profile? They come back exactly as they are when you disconnect."));
+                ui.label(tr("Your playlists and settings are put aside and come back exactly as they are when you disconnect. You can also save them as a station profile, to load again later."));
                 ui.horizontal(|ui| {
                     ui.label(tr("Profile:"));
                     ui.add(egui::TextEdit::singleline(&mut self.srv.profile).desired_width(240.0));
                 });
                 ui.label(
-                    RichText::new(tr("If you don't save, the server's playlists and settings stay in this app after you disconnect."))
+                    RichText::new(tr("When you disconnect, you can keep a copy of the server's playlists and settings here instead."))
                         .small()
                         .color(GRAY),
                 );
@@ -453,6 +467,7 @@ impl App {
         core.stop_recording();
         self.mic_stream = None;
         self.mic_on = false;
+        self.srv.left = None;
         core.save_all();
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut local = Playout::mirror_of(core, tx);
@@ -486,24 +501,24 @@ impl App {
         c.link.stop();
         std::mem::swap(core, &mut c.local);
         let mirror = c.local;
-        match &c.profile {
-            Some(p) => {
-                for i in c.encoders {
-                    core.start_encoder(i);
-                }
-                core.say(format!("Disconnected from {}: your local session ({p}) is back", c.link.session.name));
-            }
-            None => {
-                // not saved: carry on with a copy of the server's playlists and settings
-                core.set_tabs(mirror.tabs_wire());
-                core.set_station_cfg(sync::station_cfg(&mirror.cfg));
-                core.set_library(mirror.library.clone());
-                core.save_library();
-                core.save_all();
-                core.say(format!("Disconnected from {}: its playlists and settings stay here", c.link.session.name));
-            }
+        // the local session comes back as it was: the server's station never stays here unasked
+        for i in c.encoders {
+            core.start_encoder(i);
         }
-        drop(mirror);
+        let server = c.link.session.name.clone();
+        match &c.profile {
+            Some(p) => core.say(format!("Disconnected from {server}: your local session ({p}) is back")),
+            None => core.say(format!("Disconnected from {server}: your local session is back")),
+        }
+        if !self.srv.remote_login {
+            self.srv.left = Some(Left {
+                server,
+                tabs: mirror.tabs_wire(),
+                cfg: sync::station_cfg(&mirror.cfg),
+                library: mirror.library,
+                confirm: false,
+            });
+        }
         self.srv.show_status = false;
         self.reset_playlist_view();
         if std::mem::take(&mut self.srv.remote_login) {
@@ -511,6 +526,73 @@ impl App {
             self.logged_in = None;
             self.login_password.clear();
             self.srv.show_settings = false;
+        }
+    }
+
+    /// After disconnecting: the local session is back; offer the station profiles, or a copy of the
+    /// server's playlists, settings and library.
+    fn disconnected_window(&mut self, ctx: &egui::Context, core: &mut Playout) {
+        let Some(l) = &mut self.srv.left else { return };
+        let server = l.server.clone();
+        let mut close = false;
+        let mut profiles = false;
+        let mut copy = false;
+        let mut open = true;
+        Self::window_for(ctx, "Disconnected", [460.0, 260.0]).collapsible(false).open(&mut open).show(ctx, |ui| {
+            egui::ScrollArea::vertical().max_height(ui.available_height() - 40.0).show(ui, |ui| {
+                ui.label(RichText::new(format!("Disconnected from {server}.")).strong());
+                ui.label(tr("This app is back on its own station: your playlists, settings and library are as they were before you connected."));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(tr("Station profiles loads another set of settings. Keep a copy replaces your local playlists, settings and library with the server's."))
+                        .small()
+                        .color(GRAY),
+                );
+                if l.confirm {
+                    ui.add_space(6.0);
+                    ui.colored_label(RED, format!("Replace your local playlists, settings and library with {server}'s? Your local encoders stop."));
+                }
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if l.confirm {
+                    if ui.button(RichText::new(tr("Replace")).color(RED)).clicked() {
+                        copy = true;
+                    }
+                    if ui.button(tr("Back")).clicked() {
+                        l.confirm = false;
+                    }
+                } else {
+                    if ui.button(RichText::new(tr("OK")).strong()).clicked() {
+                        close = true;
+                    }
+                    if ui.button(tr("Station profiles…")).clicked() {
+                        profiles = true;
+                    }
+                    if ui.button(tr("Keep a copy of the server's station")).clicked() {
+                        l.confirm = true;
+                    }
+                }
+            });
+        });
+        if copy {
+            let Some(l) = self.srv.left.take() else { return };
+            // the copied settings bring the server's encoders: the local ones must not stay on air with them
+            for i in 0..core.handles.len() {
+                core.stop_encoder(i);
+            }
+            core.set_tabs(l.tabs);
+            core.set_station_cfg(l.cfg);
+            core.set_library(l.library);
+            core.save_library();
+            core.save_all();
+            core.say(format!("Copied the playlists and settings of {} here", l.server));
+            self.reset_playlist_view();
+        } else if profiles {
+            self.srv.left = None;
+            self.show_profiles = true;
+        } else if close || !open {
+            self.srv.left = None;
         }
     }
 
@@ -615,7 +697,7 @@ impl App {
                     ui.label(tr("Local session"));
                     ui.label(match &profile {
                         Some(p) => format!("saved as profile \"{p}\", restored on disconnect"),
-                        None => "not saved: the server's playlists and settings stay after disconnecting".into(),
+                        None => "put aside, restored on disconnect (not saved as a profile)".into(),
                     });
                     ui.end_row();
                 });
