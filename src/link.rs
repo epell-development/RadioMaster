@@ -385,10 +385,17 @@ impl Fs {
 
     /// A folder's folders and audio files (`all`: every file). An empty path: where browsing starts.
     pub fn list(&self, path: &std::path::Path, all: bool, library_folders: &[String]) -> sync::FsList {
+        self.search(path, "", all, library_folders)
+    }
+
+    /// The folders and audio files (`all`: every file) in a folder and its sub-folders whose names
+    /// hold every word of `query` (see `sync::search_folder`); an empty query lists the folder.
+    /// A server too old to search lists the folder instead, so filter the names again.
+    pub fn search(&self, path: &std::path::Path, query: &str, all: bool, library_folders: &[String]) -> sync::FsList {
         match self {
-            Fs::Local => sync::list_folder(path.to_path_buf(), all, library_folders),
+            Fs::Local => sync::search_folder(path.to_path_buf(), query, all, library_folders),
             Fs::Server(s) => {
-                let body = serde_json::json!({ "path": path, "all": all });
+                let body = serde_json::json!({ "path": path, "all": all, "search": query });
                 call(&agent(&s.pin), &s.base, &s.token, "fs/list", Some(body)).unwrap_or_else(|e| sync::FsList {
                     path: path.to_path_buf(),
                     error: e.text(),

@@ -111,7 +111,8 @@ enum Dlg {
     /// that tab is viewed, otherwise the end)
     Files(usize, Option<usize>, Vec<PathBuf>),
     /// file explorer listing: (panel key, folder asked for, listing)
-    FolderList(String, PathBuf, crate::playout::sync::FsList),
+    /// a file explorer's folder listing: panel key, folder, search, the list
+    FolderList(String, PathBuf, String, crate::playout::sync::FsList),
     /// sound card outputs, inputs, and the default output
     Devices(Vec<String>, Vec<String>, Option<String>),
     /// the play history for Reports
@@ -323,11 +324,14 @@ pub struct App {
     browsers: Browsers,
     web_state: HashMap<String, panes::WebState>,
     fx_dir: HashMap<String, PathBuf>,
-    fx_list: HashMap<String, (PathBuf, std::time::Instant, Arc<crate::playout::sync::FsList>)>,
+    /// each explorer's listing: folder, the search it answers, when it was made
+    fx_list: HashMap<String, (PathBuf, String, std::time::Instant, Arc<crate::playout::sync::FsList>)>,
+    /// what each explorer's search box holds (by panel key)
+    fx_search: HashMap<String, String>,
     /// explorers that show every file, not only audio (by panel key)
     fx_all: std::collections::HashSet<String>,
-    /// explorer folders being listed in the background (panel key → folder)
-    fx_loading: HashMap<String, PathBuf>,
+    /// explorer folders being listed or searched in the background (panel key → folder, search)
+    fx_loading: HashMap<String, (PathBuf, String)>,
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
     /// where each popped-out tool window was first placed (see `aux_spawn`)
     tool_spawn: HashMap<ToolWin, ([f32; 2], Option<[f32; 2]>)>,
@@ -798,6 +802,7 @@ impl App {
             web_state: HashMap::new(),
             fx_dir: HashMap::new(),
             fx_list: HashMap::new(),
+            fx_search: HashMap::new(),
             fx_loading: HashMap::new(),
             fx_all: Default::default(),
             aux_spawn: HashMap::new(),
@@ -1007,14 +1012,17 @@ impl App {
                     }
                     self.insert_rows_at(core, tab, at, rows);
                 }
-                Dlg::FolderList(key, mut dir, list) => {
-                    self.fx_loading.remove(&key);
+                Dlg::FolderList(key, mut dir, query, list) => {
+                    // (only when it's the one asked for last: an older answer can arrive late)
+                    if self.fx_loading.get(&key).is_some_and(|(d, q)| *d == dir && *q == query) {
+                        self.fx_loading.remove(&key);
+                    }
                     // the server's starting folder: shown as itself from now on
                     if dir.as_os_str().is_empty() && self.fx_dir.get(&key).is_some_and(|d| d.as_os_str().is_empty()) {
                         dir = list.path.clone();
                         self.fx_dir.insert(key.clone(), dir.clone());
                     }
-                    self.fx_list.insert(key, (dir, std::time::Instant::now(), Arc::new(list)));
+                    self.fx_list.insert(key, (dir, query, std::time::Instant::now(), Arc::new(list)));
                 }
                 Dlg::Devices(outs, ins, default) => {
                     self.dev_outputs = outs;
