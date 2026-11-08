@@ -358,39 +358,25 @@ impl App {
         }
         egui::CentralPanel::default().show(ctx, |ui| {
             self.playlist_tab_strip(ui, strip, on_air_tab);
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 if !viewing_on_air {
                     ui.label(RichText::new(tr("not on air")).small().color(Color32::from_rgb(190, 120, 0)))
                         .on_hover_text(tr("Edit this playlist freely. Play any row (or right-click the tab) to put it on air."));
                 }
                 ui.label(RichText::new(format!("{} items · {}", core.playlist.len(), fmt(core.total_secs()))).color(GRAY));
-                ui.checkbox(&mut core.cfg.loop_playlist, tr("Loop"));
-                ui.add_enabled_ui(self.perm.playback, |ui| {
-                    ui.checkbox(&mut core.cfg.repeat_track, tr("Repeat track"))
-                        .on_hover_text(tr("Play the track on air again when it ends, until this is turned off"));
-                    ui.checkbox(&mut core.cfg.shuffle, tr("Shuffle")).on_hover_text(tr(
-                        "Play the rows that haven't played yet in random order (commands, pauses and hour markers are never picked)",
-                    ));
-                    let mut sa = core.stop_after;
+                // the play modes and automation switches sit under the player (App::play_modes);
+                // only the view options for this list stay here, on the right
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .checkbox(&mut sa, tr("Stop after this track"))
-                        .on_hover_text(tr("Stop when the item on air ends (turns itself off once it has)"))
+                        .checkbox(&mut core.cfg.hour_lines, tr("Hour lines"))
+                        .on_hover_text(tr("Show a line where each new hour starts"))
                         .changed()
                     {
-                        core.set_stop_after(sa);
+                        self.hour_check = None;
                     }
+                    ui.checkbox(&mut self.workzones.follow, tr("Follow"))
+                        .on_hover_text(tr("Keep the playing track near the top as songs finish (the last one played stays in view)"));
                 });
-                ui.checkbox(&mut core.cfg.auto_enabled, tr("Auto-playlist"));
-                ui.checkbox(&mut core.cfg.random_fill, tr("Auto-fill from library"));
-                ui.checkbox(&mut self.workzones.follow, tr("Follow"))
-                    .on_hover_text(tr("Keep the playing track near the top as songs finish (the last one played stays in view)"));
-                if ui
-                    .checkbox(&mut core.cfg.hour_lines, tr("Hour lines"))
-                    .on_hover_text(tr("Show a line where each new hour starts"))
-                    .changed()
-                {
-                    self.hour_check = None;
-                }
             });
 
             // only the rows drawn are worked out (up to the next hour marker, which may skip them)
