@@ -52,6 +52,7 @@
       "description": "Free, open-source radio automation software for Windows, macOS and Linux: playlists with live start times, hour markers, smart crossfades, advert and jingle scheduling, a playlist generator, Icecast/Shoutcast streaming and AzuraCast station management.",
       "applicationCategory": "MultimediaApplication",
       "applicationSubCategory": "Radio automation software",
+      "disambiguatingDescription": "RadioMaster radio automation software for radio stations and broadcasters; not the RadioMaster brand of RC (remote-control) transmitters.",
       "operatingSystem": "Windows 10, Windows 11, macOS 12+, Linux",
       "softwareVersion": "0.2.11",
       "license": "https://opensource.org/licenses/MIT",
@@ -345,15 +346,19 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
         <h2>Radio automation, answered</h2>
       </div>
       <div class="faq">
-        <details open>
+        <details open id="faq-what-is-radiomaster">
           <summary><h3>What is RadioMaster?</h3></summary>
           <p>RadioMaster is free, open-source radio automation software for Windows, macOS and Linux. It plays your station from one screen: playlist tabs with live start times, hour markers, smart crossfades, adverts and jingles, a cart wall, voice tracks, text to speech, Icecast and Shoutcast streaming and AzuraCast station management. It suits internet radio, community, student, hospital and FM stations.</p>
         </details>
-        <details>
+        <details id="faq-is-radiomaster-related-to-radiomaster-rc-radio">
+          <summary><h3>Is RadioMaster related to RadioMaster RC radio transmitters?</h3></summary>
+          <p>No. This RadioMaster is free, open-source radio automation software for broadcasters: it plays and streams radio stations on Windows, macOS and Linux. It has nothing to do with the RadioMaster brand of RC (remote-control) transmitters and receivers for drones and models, and is not affiliated with that company.</p>
+        </details>
+        <details id="faq-is-radiomaster-really-free">
           <summary><h3>Is RadioMaster really free?</h3></summary>
           <p>Yes. RadioMaster is open source under the MIT licence. There is no account, subscription, trial or paid edition: every feature is in the free download, and the <a href="https://github.com/epell-development/RadioMaster">source code is on GitHub</a>.</p>
         </details>
-        <details>
+        <details id="faq-does-radiomaster-run-on-mac-and-linux">
           <summary><h3>Does RadioMaster run on Mac and Linux?</h3></summary>
           <p>Yes. The same app with the same features runs on Windows 10 and 11, macOS 12 or newer (Apple Silicon and Intel Macs), and 64-bit Linux (PulseAudio, PipeWire or ALSA). Each release has a Windows installer and portable zip, a macOS app and a Linux tar.gz.</p>
         </details>
@@ -361,35 +366,35 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
           <summary><h3>Why does Windows or macOS warn me before RadioMaster opens?</h3></summary>
           <p>Windows SmartScreen and macOS Gatekeeper warn about any download that isn't signed with a paid publisher certificate, and RadioMaster's downloads aren't signed yet. The warning doesn't mean something is wrong with the file: RadioMaster is open source, and every release is built from the public code by GitHub Actions. On Windows click More info, then Run anyway. On a Mac open System Settings → Privacy &amp; Security and click Open Anyway. You only need to do this once; on Windows, updates from inside RadioMaster install without it.</p>
         </details>
-        <details>
+        <details id="faq-can-radiomaster-run-a-station-24-7">
           <summary><h3>Can RadioMaster run a station 24/7 without a presenter?</h3></summary>
           <p>Yes. Build playlists with the playlist generator, keep them on the clock with hour markers, schedule adverts and jingles by song count, minutes or set times, and use the event scheduler to put playlists on air, generate new ones or run station commands at set times.</p>
         </details>
-        <details>
+        <details id="faq-can-i-stream-to-icecast-shoutcast-or">
           <summary><h3>Can I stream to Icecast, Shoutcast or AzuraCast?</h3></summary>
           <p>Yes. RadioMaster has a built-in encoder for Icecast 2 and Shoutcast 2, including AzuraCast DJ ports, in MP3, AAC, Opus, Ogg Vorbis or FLAC. Several streams can run at once with automatic reconnect and track titles. Sound-card outputs for an FM transmitter work at the same time.</p>
         </details>
-        <details>
+        <details id="faq-already-using-azuracast-keep-it-add-a">
           <summary><h3>Already using AzuraCast? Keep it. Add a proper studio.</h3></summary>
           <p>RadioMaster brings professional-style broadcast automation, live presenting, smart scheduling and hands-on playout control to your existing radio infrastructure. Use RadioMaster independently or <a href="/guides/azuracast/">connect it to AzuraCast</a> for a more complete broadcast workflow.</p>
         </details>
-        <details>
+        <details id="faq-is-radiomaster-an-alternative-to-radioboss-sam">
           <summary><h3>Is RadioMaster an alternative to RadioBOSS, SAM Broadcaster or ZaraRadio?</h3></summary>
-          <p>RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products.</p>
+          <p>RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products. See the side-by-side comparisons with <a href="/compare/radioboss-alternative/">RadioBOSS</a>, <a href="/compare/sam-broadcaster-alternative/">SAM Broadcaster</a> and <a href="/compare/zararadio-alternative/">ZaraRadio</a>.</p>
         </details>
-        <details>
+        <details id="faq-can-radiomaster-run-on-a-headless-linux">
           <summary><h3>Can RadioMaster run on a headless Linux server?</h3></summary>
           <p>Yes. <a href="/server/">RadioMaster Server</a> runs the station without a window on Linux (with a systemd service) or Windows Server. It plays playlists, runs the scheduler, adverts and jingles, and streams to Icecast and Shoutcast, through the server's sound cards or stream only. Presenters control it from the desktop app with File → Connect to Server.</p>
         </details>
-        <details>
+        <details id="faq-can-i-run-my-station-from-home">
           <summary><h3>Can I run my station from home or from my phone?</h3></summary>
           <p>Yes. Run the station on <a href="/server/">RadioMaster Server</a> and connect to it from the desktop app anywhere with File → Connect to Server: you can edit playlists, fire carts and go live with your own microphone. The server's web portal runs the station from any browser, including a phone. See the <a href="/guides/broadcast-from-anywhere/">broadcast from anywhere guide</a>.</p>
         </details>
-        <details>
+        <details id="faq-how-do-i-start-an-internet-radio">
           <summary><h3>How do I start an internet radio station with RadioMaster?</h3></summary>
           <p>Get a streaming server (Icecast, Shoutcast or AzuraCast), install RadioMaster, add your music to the library and build playlists, then add an encoder in Tools → Streams / encoders with your server's address and password and press play. The <a href="/guides/start-an-internet-radio-station/">step-by-step guide</a> covers music licences, jingles, adverts and running 24/7.</p>
         </details>
-        <details>
+        <details id="faq-where-do-i-get-help">
           <summary><h3>Where do I get help?</h3></summary>
           <p>Ask on the <a href="https://discord.gg/zVxeUXCjhc">RadioMaster Support Discord</a> or <a href="https://github.com/epell-development/RadioMaster/issues">open an issue on GitHub</a>. Every release and what changed is on the <a href="/updates/">Updates page</a>, and installed copies update themselves in one click.</p>
         </details>
@@ -407,6 +412,14 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       "acceptedAnswer": {
         "@type": "Answer",
         "text": "RadioMaster is free, open-source radio automation software for Windows, macOS and Linux. It plays your station from one screen: playlist tabs with live start times, hour markers, smart crossfades, adverts and jingles, a cart wall, voice tracks, text to speech, Icecast and Shoutcast streaming and AzuraCast station management. It suits internet radio, community, student, hospital and FM stations."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is RadioMaster related to RadioMaster RC radio transmitters?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. This RadioMaster is free, open-source radio automation software for broadcasters: it plays and streams radio stations on Windows, macOS and Linux. It has nothing to do with the RadioMaster brand of RC (remote-control) transmitters and receivers for drones and models, and is not affiliated with that company."
       }
     },
     {
@@ -462,7 +475,7 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       "name": "Is RadioMaster an alternative to RadioBOSS, SAM Broadcaster or ZaraRadio?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products."
+        "text": "RadioMaster covers the core of a broadcast automation desk (playlists, hour markers, crossfades, advert scheduling, carts, voice tracking, streaming and reports) for free, on Windows, macOS and Linux. It is an independent project and is not affiliated with any of those products. Side-by-side comparisons are at radiomaster.dovafm.com/compare/."
       }
     },
     {
@@ -511,6 +524,7 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       <a href="/server/">RadioMaster Server</a>
       <a href="/server/docs/">Server docs</a>
       <a href="/updates/">Updates</a>
+      <a href="/compare/">Compare</a>
       <a href="/#faq">FAQ</a>
       <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
@@ -518,7 +532,7 @@ cargo run --release</pre><button type="button" id="copy">Copy</button></div>
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
     </div>
-    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster radio automation software is an independent project and is not affiliated with the RadioMaster RC transmitter brand, or with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility or to compare.</p>
     <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
   </div>
 </footer>
