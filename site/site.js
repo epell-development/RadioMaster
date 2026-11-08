@@ -22,3 +22,14 @@
   var close = function (m) { if (m.matches) set(false); };
   if (wide.addEventListener) wide.addEventListener('change', close); else if (wide.addListener) wide.addListener(close);
 })();
+
+// A link to a question in the FAQ (/#faq-…) opens that answer, so every answer has its own address.
+(function () {
+  function openHash() {
+    var id = decodeURIComponent(location.hash.slice(1));
+    var el = id && document.getElementById(id);
+    if (el && el.tagName === 'DETAILS') { el.open = true; el.scrollIntoView(); }
+  }
+  window.addEventListener('hashchange', openHash);
+  openHash();
+})();

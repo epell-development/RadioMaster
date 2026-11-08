@@ -6,7 +6,8 @@
 Playlists, hour markers, smart crossfades, Icecast / Shoutcast streaming and AzuraCast station management in one studio app.</p>
 
 <p align="center">
-  <a href="https://radiomaster.dovafm.com/">Website</a> ·
+  <a href="https://radiomaster.dovafm.com/">RadioMaster radio automation website</a> ·
+  <a href="https://radiomaster.dovafm.com/guides/">Guides</a> ·
   <a href="../../releases/latest">Download</a> ·
   <a href="#playlists">Playlists</a> ·
   <a href="#work-zones">Work zones</a> ·
@@ -14,6 +15,8 @@ Playlists, hour markers, smart crossfades, Icecast / Shoutcast streaming and Azu
 </p>
 
 ![RadioMaster main window](docs/screenshots/main.png)
+
+Downloads, step-by-step guides and the server docs live on the website: **[RadioMaster, free open-source radio automation software](https://radiomaster.dovafm.com/)**.
 
 RadioMaster uses a classic broadcast-automation layout: playlist tabs in the centre, transport,
 VU meters and the Last / On Air / Next tiles on top, panels around it, and tools in their own windows.
@@ -252,5 +255,6 @@ Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING
 ## License
 [MIT](LICENSE).
 
-RadioMaster is an independent project. It is not affiliated with or endorsed by DJSoft.net (RadioBOSS) or AzuraCast;
+RadioMaster is an independent project. It is not affiliated with or endorsed by DJSoft.net (RadioBOSS) or AzuraCast,
+and it is not related to the RadioMaster brand of RC (remote-control) transmitters;
 those names are used only to describe compatibility and familiar workflows.
