@@ -191,6 +191,8 @@ pub struct FsList {
     pub entries: Vec<FsEntry>,
     /// why the folder couldn't be read (empty when it could)
     pub error: String,
+    /// a search stopped early: there are more matches than `entries` holds
+    pub truncated: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -233,6 +235,62 @@ pub fn list_folder(path: PathBuf, all: bool, library_folders: &[String]) -> FsLi
         Err(e) => out.error = e.to_string(),
     }
     out.path = path;
+    out
+}
+
+/// The most matches a file browser search returns.
+pub const SEARCH_MAX: usize = 1000;
+/// The most files and folders a search looks at, and how long it may take (network drives are slow).
+const SEARCH_LOOK: usize = 200_000;
+const SEARCH_TIME: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// A file browser search, as lower-case words: a name matches when it holds every one.
+pub fn search_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(|w| w.to_lowercase()).collect()
+}
+
+/// Whether a file or folder's name holds every word of a search (see `search_words`).
+pub fn name_matches(path: &std::path::Path, words: &[String]) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    words.iter().all(|w| name.contains(w.as_str()))
+}
+
+/// Search a folder and its sub-folders for folders and audio files (`all`: every file) whose names
+/// hold every word of `query` (reads the disk: run it off the UI thread). An empty query just lists
+/// the folder. Stops at `SEARCH_MAX` matches, or when the folder is too big or too slow to read
+/// through, and says so in `truncated`.
+pub fn search_folder(path: PathBuf, query: &str, all: bool, library_folders: &[String]) -> FsList {
+    let mut out = list_folder(path, all, library_folders);
+    let words = search_words(query);
+    if words.is_empty() || !out.error.is_empty() {
+        return out;
+    }
+    out.entries.clear();
+    let started = std::time::Instant::now();
+    // (follows links like the listing does; walkdir notices links that loop)
+    for (n, e) in walkdir::WalkDir::new(&out.path).follow_links(true).min_depth(1).into_iter().filter_map(|e| e.ok()).enumerate() {
+        if n >= SEARCH_LOOK || (n % 256 == 0 && started.elapsed() > SEARCH_TIME) {
+            out.truncated = true;
+            break;
+        }
+        let dir = e.file_type().is_dir();
+        let p = e.path();
+        if !(dir || all || crate::library::is_audio(p)) || !name_matches(p, &words) {
+            continue;
+        }
+        if out.entries.len() >= SEARCH_MAX {
+            out.truncated = true;
+            break;
+        }
+        let size = if dir { 0 } else { e.metadata().map(|m| m.len()).unwrap_or(0) };
+        out.entries.push(FsEntry { path: e.into_path(), dir, size });
+    }
+    out.entries.sort_by(|a, b| {
+        b.dir.cmp(&a.dir).then_with(|| {
+            let name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            name(&a.path).cmp(&name(&b.path)).then_with(|| a.path.cmp(&b.path))
+        })
+    });
     out
 }
 
@@ -934,6 +992,23 @@ mod tests {
 
     fn row(name: &str) -> PlEntry {
         PlEntry::file(Track { path: PathBuf::from(format!("/music/{name}.mp3")), title: name.into(), ..Default::default() })
+    }
+
+    #[test]
+    fn search_finds_names_in_sub_folders() {
+        let root = std::env::temp_dir().join(format!("rm-fx-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Rock").join("Live")).unwrap();
+        std::fs::write(root.join("Morning Show.mp3"), b"x").unwrap();
+        std::fs::write(root.join("Rock").join("Live").join("show opener.flac"), b"x").unwrap();
+        std::fs::write(root.join("Rock").join("show notes.txt"), b"x").unwrap();
+        let names = |l: &FsList| l.entries.iter().map(|e| e.path.file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>();
+        assert_eq!(names(&search_folder(root.clone(), " SHOW ", false, &[])), vec!["Morning Show.mp3", "show opener.flac"]);
+        assert_eq!(names(&search_folder(root.clone(), "show notes", true, &[])), vec!["show notes.txt"], "every word");
+        assert_eq!(names(&search_folder(root.clone(), "live", false, &[])), vec!["Live"], "folders too");
+        assert_eq!(search_folder(root.clone(), "", false, &[]).entries.len(), 2, "no search: just the folder");
+        assert!(!search_folder(root.join("gone"), "show", false, &[]).error.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

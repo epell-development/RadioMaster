@@ -15,7 +15,8 @@
 //!   POST /api/v1/server/restart | /stop
 //!   GET  /api/v1/users                     → [sync::UserWire]
 //!   POST /api/v1/users   sync::UserOp      → [sync::UserWire]
-//!   POST /api/v1/fs/list {path, all}       → sync::FsList (a folder on the server)
+//!   POST /api/v1/fs/list {path, all, search} → sync::FsList (a folder on the server; `search` looks
+//!                                          through its sub-folders for matching names)
 //!   POST /api/v1/fs/expand [path]          → [path]: the audio files, folders listed
 //!   POST /api/v1/fs/m3u  {path}            → [M3uRow]
 //!   GET  /api/v1/fs/file?path=             → the file itself
@@ -806,11 +807,13 @@ impl Api {
                     path: std::path::PathBuf,
                     #[serde(default)]
                     all: bool,
+                    #[serde(default)]
+                    search: String,
                 }
                 let Ok(a) = serde_json::from_slice::<Ask>(body) else { return error(400, "bad request") };
                 let folders = self.core.lock().cfg.library_folders.clone();
                 if p.settings {
-                    return json(200, sync::list_folder(a.path, a.all, &folders));
+                    return json(200, sync::search_folder(a.path, &a.search, a.all, &folders));
                 }
                 // everyone else stays in the library folders
                 let roots = self.library_roots();
@@ -820,7 +823,8 @@ impl Api {
                 if !a.path.as_os_str().is_empty() && !within(&roots, &a.path) {
                     return denied("browse outside the library folders");
                 }
-                let mut list = sync::list_folder(a.path, a.all, &folders);
+                // (a search stays under the folder asked for, so inside the library folders too)
+                let mut list = sync::search_folder(a.path, &a.search, a.all, &folders);
                 list.places.retain(|f| within(&roots, f));
                 list.parent = list.parent.filter(|f| within(&roots, f));
                 json(200, list)
@@ -1848,6 +1852,12 @@ mod tests {
         assert!(list.places.contains(&music));
         assert_eq!(fs.list(&music, true, &[]).entries.len(), 3, "every file");
         assert_eq!(fs.audio_files_in(&music).len(), 2);
+        // a search looks through the sub-folders too, by name
+        let found = fs.search(&music, "ID", false, &[]);
+        assert_eq!(found.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), vec![music.join("Jingles").join("id.mp3")]);
+        assert_eq!(fs.search(&music, "jing", false, &[]).entries.len(), 1, "folders match too");
+        assert!(fs.search(&music, "notes", false, &[]).entries.is_empty(), "audio only");
+        assert_eq!(fs.search(&music, "notes", true, &[]).entries.len(), 1, "every file");
 
         // an upload lands in the folder, never over a file that's there
         let local = std::env::temp_dir().join(format!("rm-upload-{}.mp3", std::process::id()));
@@ -1879,6 +1889,8 @@ mod tests {
         assert_eq!(dfs.list(&music, false, &[]).entries.len(), 2);
         assert!(dfs.list(&music, false, &[]).places.iter().all(|p| p.starts_with(&music)));
         assert!(!dfs.list(&std::env::temp_dir(), true, &[]).error.is_empty(), "outside the library");
+        assert!(!dfs.search(&std::env::temp_dir(), "mp3", true, &[]).error.is_empty(), "no searching outside it either");
+        assert_eq!(dfs.search(&music, "song", false, &[]).entries.len(), 1);
         let fetch = |p: &std::path::Path| {
             let url = format!("{}/api/v1/fs/file?path={}", dj.base, urlencoding::encode(&p.to_string_lossy()));
             ureq::get(&url).set("Authorization", &format!("Bearer {}", dj.token)).call().map(|r| r.into_string().unwrap())
