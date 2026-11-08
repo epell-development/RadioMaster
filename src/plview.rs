@@ -358,7 +358,7 @@ impl App {
         }
         egui::CentralPanel::default().show(ctx, |ui| {
             self.playlist_tab_strip(ui, strip, on_air_tab);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if !viewing_on_air {
                     ui.label(RichText::new(tr("not on air")).small().color(Color32::from_rgb(190, 120, 0)))
                         .on_hover_text(tr("Edit this playlist freely. Play any row (or right-click the tab) to put it on air."));
@@ -366,7 +366,7 @@ impl App {
                 ui.label(RichText::new(format!("{} items · {}", core.playlist.len(), fmt(core.total_secs()))).color(GRAY));
                 // the play modes and automation switches sit under the player (App::play_modes);
                 // only the view options for this list stay here, on the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut view_opts = |ui: &mut egui::Ui| {
                     if ui
                         .checkbox(&mut core.cfg.hour_lines, tr("Hour lines"))
                         .on_hover_text(tr("Show a line where each new hour starts"))
@@ -376,7 +376,13 @@ impl App {
                     }
                     ui.checkbox(&mut self.workzones.follow, tr("Follow"))
                         .on_hover_text(tr("Keep the playing track near the top as songs finish (the last one played stays in view)"));
-                });
+                };
+                // on the right when there's room; on a narrow panel they wrap onto the next line instead
+                if ui.available_width() >= 200.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), view_opts);
+                } else {
+                    view_opts(ui);
+                }
             });
 
             // only the rows drawn are worked out (up to the next hour marker, which may skip them)
