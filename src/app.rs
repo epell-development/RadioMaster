@@ -4168,8 +4168,9 @@ impl eframe::App for App {
         let arc = self.core.clone();
         let mut core = arc.lock();
         let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
-        if core.held && core.link.is_none() {
+        if core.held && core.link.is_none() && self.logged_in.as_ref().is_some_and(|u| u.admin && !u.is_open_station()) {
             // an administrator signed in on a server-only computer: the local station runs again
+            // (only administrators can sign in here then; the check just says so outright)
             core.held = false;
         }
         if let Some(msg) = self.audio.watchdog() {
