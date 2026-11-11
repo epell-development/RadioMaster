@@ -46,15 +46,16 @@ impl Release {
 
     /// The server package for this system (None: there is none, e.g. on macOS).
     pub fn server_asset(&self) -> Option<&Asset> {
-        let suffix = package_suffix()?;
+        let suffix = package_suffix(std::env::consts::OS, std::env::consts::ARCH)?;
         self.assets.iter().find(|a| a.name.starts_with("RadioMaster-Server-") && a.name.ends_with(suffix))
     }
 }
 
-/// The end of the server package's name for this system.
-fn package_suffix() -> Option<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
+/// The end of the server package's name for a system (`std::env::consts::OS` and `ARCH`).
+fn package_suffix(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
         ("linux", "x86_64") => Some("-linux-x64.tar.gz"),
+        ("linux", "aarch64") => Some("-linux-arm64.tar.gz"),
         ("windows", "x86_64") => Some("-windows-x64.zip"),
         _ => None,
     }
@@ -278,6 +279,21 @@ mod tests {
         assert!(check_download(&asset, b"abd").unwrap_err().contains("SHA-256"));
         assert!(check_download(&asset, b"ab").unwrap_err().contains("cut short"));
         assert!(check_download(&Asset::default(), b"anything").unwrap_err().contains("no SHA-256"));
+    }
+
+    #[test]
+    fn each_system_gets_its_own_server_package() {
+        let names = [
+            "RadioMaster-Server-v1.0.0-linux-x64.tar.gz",
+            "RadioMaster-Server-v1.0.0-linux-arm64.tar.gz",
+            "RadioMaster-Server-v1.0.0-windows-x64.zip",
+        ];
+        let pick = |os, arch| package_suffix(os, arch).and_then(|s| names.iter().find(|n| n.ends_with(s)).copied());
+        assert_eq!(pick("linux", "x86_64"), Some(names[0]));
+        assert_eq!(pick("linux", "aarch64"), Some(names[1]));
+        assert_eq!(pick("windows", "x86_64"), Some(names[2]));
+        assert_eq!(pick("macos", "aarch64"), None);
+        assert_eq!(pick("linux", "arm"), None);
     }
 
     #[test]
