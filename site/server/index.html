@@ -119,7 +119,7 @@
       <p class="eyebrow">Set it up</p>
       <h2 style="margin-top:0">Install RadioMaster Server in three steps</h2>
       <ol>
-        <li><b>Download</b> the Linux tar.gz or Windows zip from the <a href="https://github.com/epell-development/RadioMaster/releases/latest">latest release</a> and unpack it. On Linux it needs <code>libasound2</code> (ALSA), which nearly every distribution has.</li>
+        <li><b>Download</b> the Linux tar.gz (x64 or arm64) or Windows zip from the <a href="https://github.com/epell-development/RadioMaster/releases/latest">latest release</a> and unpack it. On Linux it needs <code>libasound2</code> (ALSA), which nearly every distribution has.</li>
         <li><b>Run the setup once.</b> It asks for the station name, the username and password the desktop apps sign in with (at least 12 characters), the port (9259 unless you choose another), and whether to use HTTPS and the web portal.
           <div class="code"><pre>RadioMaster-Server --setup</pre></div>
           Without a terminal, for example in a script or a container, give the answers as options; the password can come from the <code>RADIOMASTER_PASSWORD</code> environment variable.
@@ -178,8 +178,8 @@
       <div class="desk">
         <div class="dl rec">
           <h3 class="os-h"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 10l3 2.5L7 15M12 15.5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Linux</h3>
-          <p class="file">RadioMaster-Server-&lt;version&gt;-linux-x64.tar.gz</p>
-          <p>The server, the guide and a systemd unit. Runs on any x64 distribution with ALSA.</p>
+          <p class="file">RadioMaster-Server-&lt;version&gt;-linux-x64.tar.gz<br>RadioMaster-Server-&lt;version&gt;-linux-arm64.tar.gz</p>
+          <p>The server, the guide and a systemd unit. Runs on any x64 or 64-bit ARM distribution with ALSA, including a Raspberry Pi 4 or 5 and ARM VPSs. Pick arm64 when <code>uname -m</code> says <code>aarch64</code>.</p>
           <div class="btns"><a class="btn primary" href="https://github.com/epell-development/RadioMaster/releases/latest">Download for Linux</a></div>
         </div>
         <div class="dl">
