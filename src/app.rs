@@ -404,6 +404,8 @@ pub struct App {
     tool_open: std::collections::BTreeSet<ToolWin>,
     fade_edit: Option<tools::FadeEdit>,
     preview: Option<crate::audio::PreviewPlayer>,
+    /// a track editor preview waiting for its files to come from the server
+    preview_fetch: Option<tools::PreviewFetch>,
     art: Option<(PathBuf, Option<egui::TextureHandle>)>,
     left_w: f32,
     right_w: f32,
@@ -774,6 +776,7 @@ impl App {
             tool_open: Default::default(),
             fade_edit: None,
             preview: None,
+            preview_fetch: None,
             art: None,
             left_w: 300.0,
             right_w: 400.0,

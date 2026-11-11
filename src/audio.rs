@@ -354,6 +354,8 @@ pub struct PreviewPlayer {
     _stream: cpal::Stream,
     stop: Arc<AtomicBool>,
     pub engine: Engine,
+    /// (file played, path shown): a server's file plays from a copy fetched to this computer
+    alias: Vec<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 pub struct PreviewSide {
@@ -379,7 +381,7 @@ impl PreviewPlayer {
             }
             s2.store(true, Ordering::Relaxed);
         });
-        Ok(PreviewPlayer { _stream: stream, stop, engine })
+        Ok(PreviewPlayer { _stream: stream, stop, engine, alias: Vec::new() })
     }
 
     /// Play A from `from` seconds. If `b` is given, B comes in at A's mix point and plays for `tail`
@@ -445,15 +447,22 @@ impl PreviewPlayer {
             sleep(350);
             s2.store(true, Ordering::Relaxed);
         });
-        Ok(PreviewPlayer { _stream: stream, stop, engine })
+        Ok(PreviewPlayer { _stream: stream, stop, engine, alias: Vec::new() })
     }
 
     pub fn finished(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
     }
 
+    /// Report `shown` as the path playing while `played` (its local copy) plays.
+    pub fn shown_as(mut self, played: std::path::PathBuf, shown: std::path::PathBuf) -> Self {
+        self.alias.push((played, shown));
+        self
+    }
+
     pub fn position(&self) -> (f32, Option<std::path::PathBuf>) {
-        (self.engine.status().pos, self.engine.current_path())
+        let cur = self.engine.current_path().map(|p| self.alias.iter().find(|(a, _)| *a == p).map(|(_, s)| s.clone()).unwrap_or(p));
+        (self.engine.status().pos, cur)
     }
 }
 
