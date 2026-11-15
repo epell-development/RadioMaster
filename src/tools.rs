@@ -131,6 +131,15 @@ pub(super) enum EditSrc {
 }
 
 /// Working state of the track editor (tags + cue points + fades).
+/// A track editor preview waiting for its files to come from the server.
+pub(super) struct PreviewFetch {
+    rx: crossbeam_channel::Receiver<Result<Vec<PathBuf>, String>>,
+    a: PreviewSide,
+    b: Option<PreviewSide>,
+    from: f32,
+    tail: f32,
+}
+
 pub(super) struct FadeEdit {
     src: EditSrc,
     path: PathBuf,
@@ -321,7 +330,7 @@ impl App {
     }
 
     fn load_track_editor(&mut self, core: &mut Playout, src: EditSrc, t: Track, next: Option<(PathBuf, String, f32)>) {
-        self.preview = None;
+        self.stop_preview();
         self.te_from_lib = matches!(src, EditSrc::Library(_));
         self.te_scroll = true;
         core.request_analysis(&t.path);
@@ -426,7 +435,7 @@ impl App {
                 self.tool_open.remove(&w);
                 self.tool_spawn.remove(&w);
                 if w == ToolWin::FadeEditor {
-                    self.preview = None;
+                    self.stop_preview();
                     self.fade_edit = None;
                 }
             }
@@ -668,6 +677,70 @@ impl App {
         self.te_scroll = false; // it was clicked in the list: it is already in view
     }
 
+    fn stop_preview(&mut self) {
+        self.preview = None;
+        self.preview_fetch = None;
+    }
+
+    /// Play a preview on the preview device. While connected the paths are the server's, so the
+    /// files are fetched from it first (off the UI thread) and play once they are here.
+    fn play_preview(
+        &mut self,
+        ctx: &egui::Context,
+        core: &Playout,
+        a: PreviewSide,
+        b: Option<PreviewSide>,
+        from: f32,
+        tail: f32,
+    ) -> Result<(), String> {
+        self.stop_preview();
+        let fs = self.fs();
+        if !fs.is_server() {
+            self.preview = Some(PreviewPlayer::start(&core.cfg.audio_devices.preview, a, b, from, tail).map_err(|e| e.to_string())?);
+            return Ok(());
+        }
+        let paths: Vec<PathBuf> = std::iter::once(a.path.clone()).chain(b.as_ref().map(|b| b.path.clone())).collect();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let got = paths.iter().map(|p| fs.fetch(p)).collect::<Result<Vec<_>, _>>();
+            let _ = tx.send(got);
+            ctx.request_repaint();
+        });
+        self.preview_fetch = Some(PreviewFetch { rx, a, b, from, tail });
+        Ok(())
+    }
+
+    /// Start a preview whose files have come from the server. Returns why it couldn't play.
+    fn poll_preview_fetch(&mut self, core: &Playout) -> Option<String> {
+        let got = match self.preview_fetch.as_ref()?.rx.try_recv() {
+            Ok(got) => got,
+            Err(crossbeam_channel::TryRecvError::Empty) => return None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Err("the download stopped".into()),
+        };
+        let PreviewFetch { mut a, mut b, from, tail, .. } = self.preview_fetch.take()?;
+        let local = match got {
+            Ok(l) => l,
+            Err(e) => return Some(e),
+        };
+        let (shown_a, shown_b) = (a.path.clone(), b.as_ref().map(|b| b.path.clone()));
+        a.path = local[0].clone();
+        if let (Some(b), Some(l)) = (b.as_mut(), local.get(1)) {
+            b.path = l.clone();
+        }
+        match PreviewPlayer::start(&core.cfg.audio_devices.preview, a, b, from, tail) {
+            Ok(pv) => {
+                let mut pv = pv.shown_as(local[0].clone(), shown_a);
+                if let (Some(s), Some(l)) = (shown_b, local.get(1)) {
+                    pv = pv.shown_as(l.clone(), s);
+                }
+                self.preview = Some(pv);
+                None
+            }
+            Err(e) => Some(e.to_string()),
+        }
+    }
+
     fn track_editor(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let header = ui.horizontal(|ui| {
             let t = if self.te_browser { tr("◀ Hide track list") } else { tr("▶ Track list") };
@@ -695,6 +768,10 @@ impl App {
             });
             return;
         };
+
+        if let Some(e) = self.poll_preview_fetch(core) {
+            fe.msg = format!("Preview failed: {e}");
+        }
 
         // pick up analysed cues once they exist (unless the user already started editing)
         if !fe.have_cues && !fe.edited {
@@ -734,7 +811,7 @@ impl App {
             }
         }
         if ui.input(|i| i.key_pressed(egui::Key::F12)) {
-            self.preview = None;
+            self.stop_preview();
         }
 
         // ================= footer: prev / next / OK / cancel / apply
@@ -1069,10 +1146,9 @@ impl App {
                 }
                 if resp.double_clicked() {
                     // double-click: play from here
-                    self.preview = None;
                     let a = PreviewSide { path: fe.path.clone(), duration: fe.duration, cues: fe.cues };
-                    if let Ok(pv) = PreviewPlayer::start(&core.cfg.audio_devices.preview, a, None, fe.cursor, 0.0) {
-                        self.preview = Some(pv);
+                    if let Err(e) = self.play_preview(ui.ctx(), core, a, None, fe.cursor, 0.0) {
+                        fe.msg = format!("Preview failed: {e}");
                     }
                 }
                 if resp.hovered() {
@@ -1097,9 +1173,15 @@ impl App {
 
                 // ------------------------------------------------ transport
                 ui.horizontal(|ui| {
-                    if self.preview.is_some() {
+                    if self.preview_fetch.is_some() {
                         if ui.button(tr("⏹ Stop (F12)")).clicked() {
-                            self.preview = None;
+                            self.stop_preview();
+                        }
+                        ui.spinner();
+                        ui.label(RichText::new(tr("Fetching the track from the server…")).small().color(GRAY));
+                    } else if self.preview.is_some() {
+                        if ui.button(tr("⏹ Stop (F12)")).clicked() {
+                            self.stop_preview();
                         }
                     } else {
                         if ui
@@ -1110,9 +1192,8 @@ impl App {
                             .clicked()
                         {
                             let a = PreviewSide { path: fe.path.clone(), duration: fe.duration, cues: fe.cues };
-                            match PreviewPlayer::start(&core.cfg.audio_devices.preview, a, None, fe.cursor.max(fe.cues.cue_in), 0.0) {
-                                Ok(pv) => self.preview = Some(pv),
-                                Err(e) => fe.msg = format!("Preview failed: {e}"),
+                            if let Err(e) = self.play_preview(ui.ctx(), core, a, None, fe.cursor.max(fe.cues.cue_in), 0.0) {
+                                fe.msg = format!("Preview failed: {e}");
                             }
                         }
                         if ui
@@ -1126,9 +1207,8 @@ impl App {
                                 duration: *d,
                                 cues: next_cues.unwrap_or_else(|| Cues::plain(*d)),
                             });
-                            match PreviewPlayer::start(&core.cfg.audio_devices.preview, a, b, fe.cues.mix - 6.0, 6.0) {
-                                Ok(pv) => self.preview = Some(pv),
-                                Err(e) => fe.msg = format!("Preview failed: {e}"),
+                            if let Err(e) = self.play_preview(ui.ctx(), core, a, b, fe.cues.mix - 6.0, 6.0) {
+                                fe.msg = format!("Preview failed: {e}");
                             }
                         }
                     }

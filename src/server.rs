@@ -1863,6 +1863,14 @@ mod tests {
         let r = ureq::get(&url).set("Authorization", &format!("Bearer {}", s.token)).call().unwrap();
         assert_eq!(r.into_string().unwrap(), "not really audio");
         assert!(ureq::get(&url).call().is_err(), "only when signed in");
+        // …and the track editor plays a copy fetched to this computer
+        let got = fs.fetch(&music.join("a song.mp3")).unwrap();
+        assert_eq!(std::fs::read(&got).unwrap(), b"not really audio");
+        assert_eq!(got.extension().unwrap(), "mp3");
+        assert_eq!(fs.fetch(&music.join("a song.mp3")).unwrap(), got, "from the cache the next time");
+        assert!(fs.fetch(&music.join("no such song.mp3")).is_err());
+        assert!(crate::link::Fs::Local.fetch(&music.join("no such song.mp3")).is_err());
+        let _ = std::fs::remove_file(&got);
         assert!(crate::link::Link::plays(&s).is_ok());
 
         // a presenter stays inside the library folders: no `..`, no other folders
@@ -1889,6 +1897,7 @@ mod tests {
         let sneaky = music.join("..").join(outside.file_name().unwrap());
         assert!(fetch(&sneaky).is_err(), "`..` doesn't leave the library");
         assert!(fetch(&outside).is_err());
+        assert!(dfs.fetch(&outside).is_err(), "a presenter fetches inside the library only");
         assert!(dfs.upload(&local, &music.join("Jingles")).is_ok());
         assert!(dfs.upload(&local, &music.join("..")).is_err(), "uploads stay in the library");
         assert!(dfs.upload(&local, &std::env::temp_dir()).is_err());
