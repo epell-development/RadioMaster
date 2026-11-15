@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.2.12 — 2026-11-15
+Plugins that add their own menus, buttons and windows, pop-out tool windows, a file explorer search, server-only mode for managed computers, and RadioMaster Server for ARM64 Linux
+
+**New**
+- Plugins can add items to a new Plugins menu, toolbar buttons and playlist right-click items, show
+  their own window of controls (buttons, sliders, text boxes, tables…), and declare settings shown
+  in Settings → Plugins. They can read the station's status, playlists, history, library and carts,
+  put files in a playlist and show notices. PLUGINS.md and examples/plugins/studio-panel show how
+- New station commands for plugins, command rows and the scheduler: PLAY, RESUME, NEXT, PREV, SEEK,
+  STOPAFTER, CART, INSERT, ADD and PLUGIN
+- Pop out: tool windows (Video, Notepad, Generator, Reports and the rest) can move into their own
+  window that you can drag to another screen; it reopens where you left it until you press Put back.
+  Panels in the main window can move their active tab into a new Additional window
+- File explorer search: finds folders and audio files by name in the current folder and all its
+  sub-folders. While connected to a server, the server does the search
+- Server-only mode for enterprise setups: an administrator can tick "Only connect to a RadioMaster
+  Server (no local station)" in Settings → Users & access control. RadioMaster then opens on
+  Connect to Server, the local station stays off, and only administrators can sign in locally
+- RadioMaster Server for 64-bit ARM Linux (Raspberry Pi 4/5, ARM VPS): a linux-arm64 download, and
+  the server's self-update picks it on ARM machines
+
+**Fixed**
+- Play and Preview in the track editor said "file not found" while connected to a server; the track
+  is now fetched from the server first
+- Some video files stopped a few seconds in; damaged packets are skipped and playback carries on to
+  the end
+- Disconnecting from a server could copy the server's playlists, settings and library over your own
+  station. Your own station now always comes back as it was; a Disconnected window offers Station
+  profiles… or, after a confirm, a copy of the server's station
+
+**Changed**
+- Play modes (Loop, Repeat track, Shuffle, Stop after this track, Auto-playlist, Auto-fill) moved from
+  the playlist header into a "Play mode / Automation" row under the now playing bar
+- Video is in the View menu and Plugins in the Settings menu, instead of the Tools menu
+- Website: comparison pages (RadioMaster vs RadioBOSS, SAM Broadcaster and ZaraRadio) and clearer
+  guides
+
 ## v0.2.11 — 2026-11-08
 Ad breaks with a printable schedule per advert, show recording, video files, Repeat / Shuffle / Stop after, an optional sign-in screen and a Getting started tour
 

@@ -1,6 +1,6 @@
 [package]
 name = "radiomaster"
-version = "0.2.11"
+version = "0.2.12"
 edition = "2021"
 description = "RadioMaster — radio automation for Icecast/Shoutcast/AzuraCast, written in Rust"
 build = "build.rs"
