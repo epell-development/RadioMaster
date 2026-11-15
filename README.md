@@ -55,8 +55,8 @@ themselves in one click.
 
 ### RadioMaster Server
 For a station that runs on its own on a Linux or Windows server, download
-**`RadioMaster-Server-<version>-linux-x64.tar.gz`** or **`RadioMaster-Server-<version>-windows-x64.zip`**
-and follow [Installing RadioMaster Server](#installing-radiomaster-server) below.
+**`RadioMaster-Server-<version>-linux-x64.tar.gz`** (or **`-linux-arm64.tar.gz`** for a Raspberry Pi or ARM
+VPS) or **`RadioMaster-Server-<version>-windows-x64.zip`** and follow [Installing RadioMaster Server](#installing-radiomaster-server) below.
 
 ## Build from source (Windows)
 Double-click **`run-windows.bat`** (or `cargo run --release` in this folder).
@@ -201,7 +201,8 @@ portal. **Connect to Remote Server…** on the login screen signs straight in to
 account. The optional **web portal** runs the station from a browser on a port you choose.
 
 ### Installing RadioMaster Server
-**Linux** (Debian/Ubuntu shown; any x64 distribution with glibc 2.35 or later works):
+**Linux** (Debian/Ubuntu shown; any x64 or 64-bit ARM distribution with glibc 2.35 or later works. On ARM,
+such as a Raspberry Pi 4/5 with a 64-bit OS, use the `linux-arm64` package instead; `uname -m` says `aarch64`):
 
 ```
 sudo apt install libasound2                 # ALSA, usually there already

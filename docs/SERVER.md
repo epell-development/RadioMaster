@@ -8,6 +8,9 @@ from the desktop app with **File → Connect to Server**.
 Each release has:
 - **`RadioMaster-Server-<version>-linux-x64.tar.gz`** — `RadioMaster-Server`, this guide and a systemd unit.
   Needs `libasound2` (ALSA), which nearly every distribution has.
+- **`RadioMaster-Server-<version>-linux-arm64.tar.gz`** — the same for 64-bit ARM Linux: a Raspberry Pi 4 or 5
+  with a 64-bit OS, or an ARM VPS (Ampere, Graviton…). Check with `uname -m`: `aarch64` takes this one,
+  `x86_64` the x64 one. The wrong one won't start (systemd reports `status=203/EXEC`).
 - **`RadioMaster-Server-<version>-windows-x64.zip`** — `RadioMaster-Server.exe` and this guide.
 
 ## Set it up
@@ -83,8 +86,8 @@ account and your server account allow.
 The server looks for a newer release on GitHub at start-up and every six hours (`--no-update-check` turns this
 off). When it is behind (or older than the app connecting to it), the app shows a blue **⬆ Server** button next
 to the connection button, like its own update button, and opens the update window once for administrators.
-**⬇ Update the server** downloads the RadioMaster Server package for the server's system (Linux x64 or Windows
-x64), puts the new program in place of the old one and restarts; the apps reconnect by themselves after a few
+**⬇ Update the server** downloads the RadioMaster Server package for the server's system (Linux x64, Linux ARM64
+or Windows x64), puts the new program in place of the old one and restarts; the apps reconnect by themselves after a few
 seconds of silence. **Restart** and **Stop** are there too (and under **File → Server info…**), each asking
 once more before it goes ahead. A stopped server stays off air until it is started again on that computer.
 

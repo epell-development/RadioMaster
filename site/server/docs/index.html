@@ -121,7 +121,7 @@
     <article class="wrap prose">
 <h2 id="install" style="margin-top:0">Install</h2>
       <p>Every <a href="https://github.com/epell-development/RadioMaster/releases/latest">release</a> has two server downloads:</p>
-      <div class="rundown-table"><table><thead><tr><th>Download</th><th>Contains</th></tr></thead><tbody><tr><td class="k">RadioMaster-Server-&lt;version&gt;-linux-x64.tar.gz</td><td><code>RadioMaster-Server</code>, the guide and a systemd unit. Needs <code>libasound2</code> (ALSA), which nearly every distribution has</td></tr><tr><td class="k">RadioMaster-Server-&lt;version&gt;-windows-x64.zip</td><td><code>RadioMaster-Server.exe</code> and the guide, for Windows Server or any 64-bit Windows</td></tr></tbody></table></div>
+      <div class="rundown-table"><table><thead><tr><th>Download</th><th>Contains</th></tr></thead><tbody><tr><td class="k">RadioMaster-Server-&lt;version&gt;-linux-x64.tar.gz</td><td><code>RadioMaster-Server</code>, the guide and a systemd unit. Needs <code>libasound2</code> (ALSA), which nearly every distribution has</td></tr><tr><td class="k">RadioMaster-Server-&lt;version&gt;-linux-arm64.tar.gz</td><td>The same for 64-bit ARM Linux: a Raspberry Pi 4 or 5 with a 64-bit OS, or an ARM VPS. Pick it when <code>uname -m</code> says <code>aarch64</code>; the x64 package won't start there (systemd reports <code>status=203/EXEC</code>)</td></tr><tr><td class="k">RadioMaster-Server-&lt;version&gt;-windows-x64.zip</td><td><code>RadioMaster-Server.exe</code> and the guide, for Windows Server or any 64-bit Windows</td></tr></tbody></table></div>
       <p>Unpack it anywhere. On Linux, <code>/usr/local/bin</code> is a good home if you'll run it as a service.</p>
 
       <h2 id="setup">Setup</h2>
