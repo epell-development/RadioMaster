@@ -226,6 +226,10 @@ pub struct Accounts {
     /// setting existed) means yes once accounts exist; with no accounts RadioMaster never asks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_sign_in: Option<bool>,
+    /// Enterprise setup: this computer only runs stations on a RadioMaster Server. There is no
+    /// local station to sign in to, except for administrators (to change this setting).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub server_only: bool,
 }
 
 pub fn hash(password: &str) -> Result<String, String> {
@@ -332,6 +336,23 @@ impl Accounts {
         }
         Ok(())
     }
+    /// Whether only connecting to a server is offered: only while an administrator can sign in
+    /// here, so it can always be turned off again.
+    pub fn server_only(&self) -> bool {
+        self.server_only && self.has_admin()
+    }
+    /// Turn server-only mode on or off. On needs an active administrator account first.
+    pub fn set_server_only(&mut self, on: bool) -> Result<(), String> {
+        if on && !self.has_admin() {
+            return Err("Create an administrator account first, so someone can sign in".into());
+        }
+        let was = std::mem::replace(&mut self.server_only, on);
+        if let Err(e) = self.save() {
+            self.server_only = was;
+            return Err(e);
+        }
+        Ok(())
+    }
     pub fn login(&self, name: &str, password: &str) -> Option<Operator> {
         self.users.iter().find(|u| !u.disabled && u.name == name && verify(&u.password_hash, password)).cloned()
     }
@@ -381,6 +402,21 @@ mod tests {
         let back: Accounts = serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
         assert_eq!(back.require_sign_in, Some(true));
         assert!(Operator::open_station().is_open_station() && !admin().is_open_station());
+    }
+
+    #[test]
+    fn server_only_needs_an_administrator() {
+        let mut a: Accounts = serde_json::from_str(r#"{"users":[],"server_only":true}"#).unwrap();
+        // nobody could sign in to turn it off again: ignored
+        assert!(!a.server_only());
+        a.users.push(Operator { name: "it".into(), password_hash: String::new(), admin: true, perms: Perms::default(), disabled: false });
+        assert!(a.server_only());
+        a.users[0].disabled = true;
+        assert!(!a.server_only());
+        // off is the default and isn't written, so older versions read the file as before
+        let off: Accounts = serde_json::from_str(r#"{"users":[]}"#).unwrap();
+        assert!(!off.server_only);
+        assert!(!serde_json::to_string(&off).unwrap().contains("server_only"));
     }
 
     #[test]

@@ -59,8 +59,10 @@ fn main() -> eframe::Result<()> {
     }
     engine.set_volume(cfg.volume);
     let remote = cfg.remote.clone();
-    let core = Arc::new(Mutex::new(playout::Playout::new(engine, cfg)));
-    if remote.enabled {
+    // a server-only computer (enterprise setup) keeps its own station off the air
+    let held = auth::Accounts::load().server_only();
+    let core = Arc::new(Mutex::new(playout::Playout::new_held(engine, cfg, held)));
+    if remote.enabled && !held {
         remote::spawn(core.clone(), remote.port, remote.password);
     }
 

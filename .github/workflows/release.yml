@@ -1,7 +1,7 @@
 name: Release
 
 # Push a tag like v0.2.0 to build RadioMaster.exe and publish a GitHub release with it
-# (plus macOS, Linux and the headless RadioMaster Server for Linux and Windows).
+# (plus macOS, Linux and the headless RadioMaster Server for Linux x64, Linux ARM64 and Windows).
 on:
   push:
     tags: ['v*']
@@ -144,6 +144,30 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: RadioMaster-Server-*-linux-x64.tar.gz
+
+  # The same server for 64-bit ARM Linux (Raspberry Pi 4/5 with a 64-bit OS, ARM VPSs such as Ampere or
+  # Graviton), built natively on GitHub's ARM runner with the same older Ubuntu (glibc 2.35+).
+  server-linux-arm64:
+    needs: verify
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --bin RadioMaster-Server
+      - name: Smoke test
+        run: tools/smoke_server.sh target/release/RadioMaster-Server
+      - name: Package
+        run: |
+          name="RadioMaster-Server-${GITHUB_REF_NAME}-linux-arm64"
+          mkdir "$name"
+          cp target/release/RadioMaster-Server docs/SERVER.md server/radiomaster-server.service LICENSE CHANGELOG.md "$name/"
+          tar czf "$name.tar.gz" "$name"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: RadioMaster-Server-*-linux-arm64.tar.gz
 
   macos:
     needs: verify

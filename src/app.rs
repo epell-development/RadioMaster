@@ -111,7 +111,8 @@ enum Dlg {
     /// that tab is viewed, otherwise the end)
     Files(usize, Option<usize>, Vec<PathBuf>),
     /// file explorer listing: (panel key, folder asked for, listing)
-    FolderList(String, PathBuf, crate::playout::sync::FsList),
+    /// a file explorer's folder listing: panel key, folder, search, the list
+    FolderList(String, PathBuf, String, crate::playout::sync::FsList),
     /// sound card outputs, inputs, and the default output
     Devices(Vec<String>, Vec<String>, Option<String>),
     /// the play history for Reports
@@ -329,12 +330,19 @@ pub struct App {
     browsers: Browsers,
     web_state: HashMap<String, panes::WebState>,
     fx_dir: HashMap<String, PathBuf>,
-    fx_list: HashMap<String, (PathBuf, std::time::Instant, Arc<crate::playout::sync::FsList>)>,
+    /// each explorer's listing: folder, the search it answers, when it was made
+    fx_list: HashMap<String, (PathBuf, String, std::time::Instant, Arc<crate::playout::sync::FsList>)>,
+    /// what each explorer's search box holds (by panel key)
+    fx_search: HashMap<String, String>,
     /// explorers that show every file, not only audio (by panel key)
     fx_all: std::collections::HashSet<String>,
-    /// explorer folders being listed in the background (panel key → folder)
-    fx_loading: HashMap<String, PathBuf>,
+    /// explorer folders being listed or searched in the background (panel key → folder, search)
+    fx_loading: HashMap<String, (PathBuf, String)>,
     aux_spawn: HashMap<u64, ([f32; 2], Option<[f32; 2]>)>,
+    /// where each popped-out tool window was first placed (see `aux_spawn`)
+    tool_spawn: HashMap<ToolWin, ([f32; 2], Option<[f32; 2]>)>,
+    /// false once a platform turns out unable to open extra OS windows
+    pop_out_supported: bool,
     layout_checked: std::time::Instant,
     perf: Option<Perf>,
     eq_name: String,
@@ -406,6 +414,8 @@ pub struct App {
     tool_open: std::collections::BTreeSet<ToolWin>,
     fade_edit: Option<tools::FadeEdit>,
     preview: Option<crate::audio::PreviewPlayer>,
+    /// a track editor preview waiting for its files to come from the server
+    preview_fetch: Option<tools::PreviewFetch>,
     art: Option<(PathBuf, Option<egui::TextureHandle>)>,
     left_w: f32,
     right_w: f32,
@@ -742,7 +752,7 @@ impl App {
         let (dlg_tx, dlg_rx) = mpsc::channel();
         let notify = core.lock().notify.clone();
         core.lock().plugin_event("app_start", serde_json::json!({ "version": crate::updater::CURRENT }));
-        App {
+        let mut app = App {
             notify,
             core,
             audio,
@@ -776,6 +786,7 @@ impl App {
             tool_open: Default::default(),
             fade_edit: None,
             preview: None,
+            preview_fetch: None,
             art: None,
             left_w: 300.0,
             right_w: 400.0,
@@ -801,9 +812,12 @@ impl App {
             web_state: HashMap::new(),
             fx_dir: HashMap::new(),
             fx_list: HashMap::new(),
+            fx_search: HashMap::new(),
             fx_loading: HashMap::new(),
             fx_all: Default::default(),
             aux_spawn: HashMap::new(),
+            tool_spawn: HashMap::new(),
+            pop_out_supported: true,
             layout_checked: std::time::Instant::now(),
             perf: None,
             eq_name: String::new(),
@@ -869,7 +883,12 @@ impl App {
             user_pw: HashMap::new(),
             user_delete: None,
             break_snooze: 5,
+        };
+        if app.accounts.server_only() {
+            // only connecting to a server is offered: start right there
+            app.open_connect(true);
         }
+        app
     }
 
     /// A window that always fits on screen, centred, with a sensible size.
@@ -1003,14 +1022,17 @@ impl App {
                     }
                     self.insert_rows_at(core, tab, at, rows);
                 }
-                Dlg::FolderList(key, mut dir, list) => {
-                    self.fx_loading.remove(&key);
+                Dlg::FolderList(key, mut dir, query, list) => {
+                    // (only when it's the one asked for last: an older answer can arrive late)
+                    if self.fx_loading.get(&key).is_some_and(|(d, q)| *d == dir && *q == query) {
+                        self.fx_loading.remove(&key);
+                    }
                     // the server's starting folder: shown as itself from now on
                     if dir.as_os_str().is_empty() && self.fx_dir.get(&key).is_some_and(|d| d.as_os_str().is_empty()) {
                         dir = list.path.clone();
                         self.fx_dir.insert(key.clone(), dir.clone());
                     }
-                    self.fx_list.insert(key, (dir, std::time::Instant::now(), Arc::new(list)));
+                    self.fx_list.insert(key, (dir, query, std::time::Instant::now(), Arc::new(list)));
                 }
                 Dlg::Devices(outs, ins, default) => {
                     self.dev_outputs = outs;
@@ -1222,6 +1244,11 @@ impl App {
                     } else if ui.button(tr("Log out")).clicked() {
                         if self.srv.signed_in_remotely() {
                             self.disconnect(core);
+                        } else if self.accounts.server_only() {
+                            // an administrator was looking after this server-only computer
+                            self.disconnect(core);
+                            self.hold_local_station(core);
+                            self.open_connect(true);
                         }
                         self.logged_in = None;
                         self.sign_in_now = false;
@@ -1994,7 +2021,61 @@ impl App {
                     });
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(2.0);
+            ui.separator();
+            self.play_modes(ui, core);
+            ui.add_space(2.0);
+        });
+    }
+
+    /// The row of play mode and automation switches under the player
+    /// (they used to crowd the playlist header).
+    fn play_modes(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
+        let toggle = |ui: &mut egui::Ui, value: bool, text: &str| ui.selectable_label(value, text);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("PLAY MODE")).small().color(GRAY));
+            let v = core.cfg.loop_playlist;
+            if toggle(ui, v, tr("🔁 Loop")).on_hover_text(tr("Start the playlist again from the top when it ends")).clicked() {
+                core.cfg.loop_playlist = !v;
+            }
+            ui.add_enabled_ui(self.perm.playback, |ui| {
+                let v = core.cfg.repeat_track;
+                if toggle(ui, v, tr("🔂 Repeat track"))
+                    .on_hover_text(tr("Play the track on air again when it ends, until this is turned off"))
+                    .clicked()
+                {
+                    core.cfg.repeat_track = !v;
+                }
+                let v = core.cfg.shuffle;
+                if toggle(ui, v, tr("🔀 Shuffle"))
+                    .on_hover_text(tr(
+                        "Play the rows that haven't played yet in random order (commands, pauses and hour markers are never picked)",
+                    ))
+                    .clicked()
+                {
+                    core.cfg.shuffle = !v;
+                }
+                let v = core.stop_after;
+                if toggle(ui, v, tr("🔚 Stop after this track"))
+                    .on_hover_text(tr("Stop when the item on air ends (turns itself off once it has)"))
+                    .clicked()
+                {
+                    core.set_stop_after(!v);
+                }
+            });
+            ui.separator();
+            ui.label(RichText::new(tr("AUTOMATION")).small().color(GRAY));
+            let v = core.cfg.auto_enabled;
+            if toggle(ui, v, tr("Auto-playlist")).on_hover_text(tr("Top up the playlist automatically when it runs low")).clicked() {
+                core.cfg.auto_enabled = !v;
+            }
+            let v = core.cfg.random_fill;
+            if toggle(ui, v, tr("Auto-fill from library"))
+                .on_hover_text(tr("Add a random library track at the end when the playlist runs out"))
+                .clicked()
+            {
+                core.cfg.random_fill = !v;
+            }
         });
     }
 
@@ -2308,6 +2389,22 @@ impl App {
                                 } else {
                                     ui.small(tr("RadioMaster opens straight to the station with full access, so anyone at this computer can change settings and accounts. Turn this on to make people sign in."));
                                 }
+                                ui.add_space(6.0);
+                                // enterprise setup: this computer only runs a RadioMaster Server's station
+                                let mut only=self.accounts.server_only();
+                                let real_admin=self.logged_in.as_ref().is_some_and(|u|u.admin && !u.is_open_station());
+                                let can=real_admin || (admin && only);
+                                if ui
+                                    .add_enabled(can, egui::Checkbox::new(&mut only, tr("Only connect to a RadioMaster Server (no local station)")))
+                                    .on_disabled_hover_text(if !admin { tr("Only administrators can change this") } else { tr("Sign in with an administrator account first, so someone can turn this off again") })
+                                    .on_hover_text(tr("For computers in a company setup: people can't run a station on this computer, only sign in to a server"))
+                                    .changed()
+                                {
+                                    if let Err(e)=self.accounts.set_server_only(only){self.auth_error=e;}
+                                }
+                                if only {
+                                    ui.small(tr("RadioMaster starts with Connect to Server. Only administrators can sign in on this computer; disconnecting goes back to the connect screen."));
+                                }
                                 if admin && !self.auth_error.is_empty() && !self.show_users {ui.colored_label(RED,&self.auth_error);}
                                 ui.add_space(6.0);
                                 if admin && ui.button(tr("Manage operator accounts…")).clicked(){self.auth_error.clear();self.show_users=true;}
@@ -2323,6 +2420,7 @@ impl App {
     }
 
     fn authentication(&mut self, ctx: &egui::Context) {
+        let server_only = self.accounts.server_only();
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.vertical_centered(|ui| {
@@ -2334,74 +2432,125 @@ impl App {
                 }
                 ui.heading(tr("Studio Access"));
                 ui.add_space(18.0);
-                if self.accounts.users.is_empty() {
-                    ui.label(tr("First run: create your administrator account."));
+                if server_only {
+                    // enterprise setup: the station lives on a server, there is none on this computer
+                    ui.label(tr("This computer runs stations on a RadioMaster Server. Sign in with your server account."));
+                    ui.add_space(6.0);
+                    if ui
+                        .add_sized([300.0, 30.0], egui::Button::new(RichText::new(tr("Connect to Remote Server…")).strong()))
+                        .on_hover_text(tr("Sign in with the server's username and password"))
+                        .clicked()
+                    {
+                        self.open_connect(true);
+                    }
+                    ui.add_space(24.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    // folded away: it's only for whoever looks after this computer
+                    let id = egui::Id::new("admin_sign_in");
+                    let mut open = ui.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                    let arrow = if open { "⏷" } else { "⏵" };
+                    if ui.small_button(format!("{arrow} {}", tr("Administrator sign-in (this computer)"))).clicked() {
+                        open = !open;
+                        ui.data_mut(|d| d.insert_temp(id, open));
+                    }
+                    if open {
+                        ui.add_space(4.0);
+                        ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(tr("An administrator set this computer to connect to a server only. Administrators can still sign in here to change that in Settings → Users & access control."))
+                                    .small()
+                                    .color(GRAY),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        self.local_sign_in(ui, true);
+                    }
                 } else {
-                    ui.label(tr("Sign in to access station controls."));
-                }
-                ui.add_sized([300.0, 26.0], egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("Username")));
-                ui.add_sized(
-                    [300.0, 26.0],
-                    egui::TextEdit::singleline(&mut self.login_password)
-                        .password(true)
-                        .hint_text(tr("Password (12+ characters for setup)")),
-                );
-                let enter =
-                    ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.login_name.trim().is_empty() && !self.login_password.is_empty();
-                if ui.button(if self.accounts.users.is_empty() { tr("Create administrator") } else { tr("Sign in") }).clicked() || enter {
                     if self.accounts.users.is_empty() {
-                        match self.accounts.add(&self.login_name, &self.login_password, true) {
-                            Ok(()) => {
-                                self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
-                                self.auth_error.clear();
-                            }
-                            Err(e) => self.auth_error = e,
-                        }
+                        ui.label(tr("First run: create your administrator account."));
                     } else {
-                        self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
-                        self.auth_error = if self.logged_in.is_some() { String::new() } else { "Invalid username or password".into() };
+                        ui.label(tr("Sign in to access station controls."));
                     }
-                    self.login_password.clear();
-                    if self.logged_in.is_some() {
-                        self.login_name.clear(); // the "add a user" form reuses this box
-                        self.sign_in_now = false;
+                    self.local_sign_in(ui, false);
+                    ui.add_space(14.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    if ui
+                        .add_sized([300.0, 26.0], egui::Button::new(tr("Connect to Remote Server…")))
+                        .on_hover_text(tr("Run a station on a RadioMaster Server, signing in with the server's username and password instead of a local account"))
+                        .clicked()
+                    {
+                        self.open_connect(true);
                     }
-                }
-                if !self.accounts.sign_in_required() && ui.button(tr("Cancel")).on_hover_text(tr("Back to the station without signing in")).clicked() {
-                    self.sign_in_now = false;
-                    self.srv.show_connect = false;
-                    self.srv.from_login = false;
-                    self.login_password.clear();
-                    self.auth_error.clear();
-                }
-                ui.colored_label(RED, &self.auth_error);
-                if !self.accounts.users.is_empty() {
-                    ui.add_space(8.0);
-                    ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(tr("Forgot your password? Another administrator can set a new one in File → Users…. If no administrator can sign in, close RadioMaster and delete operators.json from its settings folder: it then starts without asking, and your playlists and settings are kept."))
-                                .small()
-                                .color(GRAY),
-                        );
-                        if ui.small_button(tr("Open the settings folder")).clicked() {
-                            crate::plugins::open_folder(&data_dir());
-                        }
-                    });
-                }
-                ui.add_space(14.0);
-                ui.separator();
-                ui.add_space(6.0);
-                if ui
-                    .add_sized([300.0, 26.0], egui::Button::new(tr("Connect to Remote Server…")))
-                    .on_hover_text(tr("Run a station on a RadioMaster Server, signing in with the server's username and password instead of a local account"))
-                    .clicked()
-                {
-                    self.open_connect(true);
                 }
                 ui.add_space(20.0);
             });
             });
         });
+    }
+
+    /// Username, password and sign in (or create the first administrator) for this computer.
+    /// `admins_only`: a server-only computer, where only administrators may sign in here.
+    fn local_sign_in(&mut self, ui: &mut egui::Ui, admins_only: bool) {
+        ui.add_sized([300.0, 26.0], egui::TextEdit::singleline(&mut self.login_name).hint_text(tr("Username")));
+        ui.add_sized(
+            [300.0, 26.0],
+            egui::TextEdit::singleline(&mut self.login_password).password(true).hint_text(tr("Password (12+ characters for setup)")),
+        );
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && !self.srv.show_connect
+            && !self.login_name.trim().is_empty()
+            && !self.login_password.is_empty();
+        if ui.button(if self.accounts.users.is_empty() { tr("Create administrator") } else { tr("Sign in") }).clicked() || enter {
+            if self.accounts.users.is_empty() {
+                match self.accounts.add(&self.login_name, &self.login_password, true) {
+                    Ok(()) => {
+                        self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
+                        self.auth_error.clear();
+                    }
+                    Err(e) => self.auth_error = e,
+                }
+            } else {
+                self.logged_in = self.accounts.login(&self.login_name, &self.login_password);
+                self.auth_error = if self.logged_in.is_some() { String::new() } else { tr("Invalid username or password").into() };
+                if admins_only && self.logged_in.as_ref().is_some_and(|u| !u.admin) {
+                    self.logged_in = None;
+                    self.auth_error = tr("This computer only connects to a server: sign in with Connect to Remote Server").into();
+                }
+            }
+            self.login_password.clear();
+            if self.logged_in.is_some() {
+                self.login_name.clear(); // the "add a user" form reuses this box
+                self.sign_in_now = false;
+                self.srv.show_connect = false;
+                self.srv.from_login = false;
+            }
+        }
+        if !self.accounts.sign_in_required()
+            && !admins_only
+            && ui.button(tr("Cancel")).on_hover_text(tr("Back to the station without signing in")).clicked()
+        {
+            self.sign_in_now = false;
+            self.srv.show_connect = false;
+            self.srv.from_login = false;
+            self.login_password.clear();
+            self.auth_error.clear();
+        }
+        ui.colored_label(RED, &self.auth_error);
+        if !self.accounts.users.is_empty() {
+            ui.add_space(8.0);
+            ui.allocate_ui_with_layout(egui::vec2(440.0, 0.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(tr("Forgot your password? Another administrator can set a new one in File → Users…. If no administrator can sign in, close RadioMaster and delete operators.json from its settings folder: it then starts without asking, and your playlists and settings are kept."))
+                        .small()
+                        .color(GRAY),
+                );
+                if ui.small_button(tr("Open the settings folder")).clicked() {
+                    crate::plugins::open_folder(&data_dir());
+                }
+            });
+        }
     }
 
     /// Microphone on / off.
@@ -4077,7 +4226,7 @@ impl eframe::App for App {
         if ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.focused) {
             self.browsers.focus_parent("");
         }
-        if self.logged_in.is_none() && !self.sign_in_now && !self.accounts.sign_in_required() {
+        if self.logged_in.is_none() && !self.sign_in_now && !self.accounts.sign_in_required() && !self.accounts.server_only() {
             // sign-in is turned off (or there are no accounts yet): straight in
             self.logged_in = Some(crate::auth::Operator::open_station());
         }
@@ -4121,6 +4270,11 @@ impl eframe::App for App {
         let arc = self.core.clone();
         let mut core = arc.lock();
         let lock_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        if core.held && core.link.is_none() && self.logged_in.as_ref().is_some_and(|u| u.admin && !u.is_open_station()) {
+            // an administrator signed in on a server-only computer: the local station runs again
+            // (only administrators can sign in here then; the check just says so outright)
+            core.held = false;
+        }
         if let Some(msg) = self.audio.watchdog() {
             core.say(msg);
         }

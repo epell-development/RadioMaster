@@ -88,6 +88,21 @@ jobs:
       - name: Smoke test
         run: tools/smoke_server.sh target/debug/RadioMaster-Server
 
+  # The headless server on 64-bit ARM Linux, as the release builds it.
+  server-linux-arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --bin RadioMaster-Server
+      - name: Smoke test
+        run: tools/smoke_server.sh target/debug/RadioMaster-Server
+
   build-macos:
     runs-on: macos-latest
     steps:
@@ -140,7 +155,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: always()
-    needs: [checks, test-linux, server-linux, build-macos, build-windows]
+    needs: [checks, test-linux, server-linux, server-linux-arm64, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

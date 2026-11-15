@@ -385,10 +385,17 @@ impl Fs {
 
     /// A folder's folders and audio files (`all`: every file). An empty path: where browsing starts.
     pub fn list(&self, path: &std::path::Path, all: bool, library_folders: &[String]) -> sync::FsList {
+        self.search(path, "", all, library_folders)
+    }
+
+    /// The folders and audio files (`all`: every file) in a folder and its sub-folders whose names
+    /// hold every word of `query` (see `sync::search_folder`); an empty query lists the folder.
+    /// A server too old to search lists the folder instead, so filter the names again.
+    pub fn search(&self, path: &std::path::Path, query: &str, all: bool, library_folders: &[String]) -> sync::FsList {
         match self {
-            Fs::Local => sync::list_folder(path.to_path_buf(), all, library_folders),
+            Fs::Local => sync::search_folder(path.to_path_buf(), query, all, library_folders),
             Fs::Server(s) => {
-                let body = serde_json::json!({ "path": path, "all": all });
+                let body = serde_json::json!({ "path": path, "all": all, "search": query });
                 call(&agent(&s.pin), &s.base, &s.token, "fs/list", Some(body)).unwrap_or_else(|e| sync::FsList {
                     path: path.to_path_buf(),
                     error: e.text(),
@@ -421,6 +428,53 @@ impl Fs {
         }
     }
 
+    /// A copy of `path` on this computer that can be played here: the file itself when it is local,
+    /// otherwise a copy fetched from the server into a cache folder (kept for the next time).
+    pub fn fetch(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+        let Fs::Server(s) = self else {
+            return if path.is_file() { Ok(path.to_path_buf()) } else { Err(format!("file not found: {}", path.display())) };
+        };
+        let dir = fetch_cache_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let dest = dir.join(fetch_cache_name(&s.base, path));
+        if dest.metadata().is_ok_and(|m| m.len() > 0) {
+            // (newly used: the cache keeps the newest)
+            let _ = std::fs::File::options().write(true).open(&dest).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+            return Ok(dest);
+        }
+        let url = format!("{}/api/v1/fs/file?path={}", s.base, urlencoding::encode(&path.to_string_lossy()));
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(5))
+            .timeout(Duration::from_secs(600))
+            .tls_config(crate::tls::client_config(&s.pin, Default::default()))
+            .build();
+        let r = match agent.get(&url).set("Authorization", &format!("Bearer {}", s.token)).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, r)) => {
+                return Err(r
+                    .into_json::<serde_json::Value>()
+                    .ok()
+                    .and_then(|v| v["error"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("HTTP {code}")))
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        // (into a .part first, so a broken download is never taken for the file)
+        let part = dest.with_extension("part");
+        let write = || -> std::io::Result<()> {
+            let mut f = std::fs::File::create(&part)?;
+            std::io::copy(&mut r.into_reader(), &mut f)?;
+            f.sync_all()?;
+            std::fs::rename(&part, &dest)
+        };
+        if let Err(e) = write() {
+            let _ = std::fs::remove_file(&part);
+            return Err(format!("couldn't fetch the file from the server: {e}"));
+        }
+        prune_fetch_cache(&dir, FETCH_CACHE_KEEP);
+        Ok(dest)
+    }
+
     /// Copy a file from this computer into `dir` on the server; returns where it went there.
     pub fn upload(&self, file: &std::path::Path, dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
         let Fs::Server(s) = self else { return Err("not connected to a server".into()) };
@@ -448,6 +502,40 @@ impl Fs {
                 .unwrap_or_else(|| format!("HTTP {code}"))),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+/// How many fetched files the cache keeps (the newest).
+const FETCH_CACHE_KEEP: usize = 24;
+
+/// Where `Fs::fetch` keeps the files it fetched from a server.
+fn fetch_cache_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("RadioMaster-server-files")
+}
+
+/// A server file's name in the cache: one per server and path, keeping the extension (decoders
+/// go by it).
+fn fetch_cache_name(base: &str, path: &std::path::Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    path.hash(&mut h);
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ext = if ext.is_empty() || ext == "part" { "bin".to_string() } else { ext };
+    format!("{:016x}.{ext}", h.finish())
+}
+
+/// Delete all but the `keep` newest files in the cache.
+fn prune_fetch_cache(dir: &std::path::Path, keep: usize) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = rd
+        .flatten()
+        .filter(|e| e.path().extension().is_none_or(|x| x != "part"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    for (_, p) in files.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(p);
     }
 }
 
