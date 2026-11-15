@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" href="/img/icon.png">
 <link rel="apple-touch-icon" href="/img/icon.png">
-<title>How to Stream to Icecast, Shoutcast or AzuraCast with RadioMaster (MP3, AAC, Opus)</title>
+<title>How to Stream to Icecast or Shoutcast with Free Radio Automation Software · RadioMaster</title>
 <meta name="description" content="Set up RadioMaster&#x27;s built-in encoder to stream your station to Icecast 2, Shoutcast 2 or an AzuraCast DJ port in MP3, AAC, Opus, Ogg Vorbis or FLAC, with song titles and automatic reconnect.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <link rel="canonical" href="https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/">
@@ -30,7 +30,7 @@
   "@context": "https://schema.org",
   "@graph": [
     {
-      "@type": "Article",
+      "@type": "TechArticle",
       "@id": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#article",
       "headline": "How to stream to Icecast or Shoutcast",
       "description": "Set up RadioMaster's built-in encoder to stream your station to Icecast 2, Shoutcast 2 or an AzuraCast DJ port in MP3, AAC, Opus, Ogg Vorbis or FLAC, with song titles and automatic reconnect.",
@@ -56,6 +56,89 @@
       "about": {
         "@id": "https://radiomaster.dovafm.com/#app"
       }
+    },
+    {
+      "@type": "HowTo",
+      "@id": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#howto",
+      "name": "How to stream to Icecast or Shoutcast with RadioMaster",
+      "description": "Add an encoder in RadioMaster, the free radio automation software, and stream your station to an Icecast 2, Shoutcast 2 or AzuraCast server.",
+      "image": "https://radiomaster.dovafm.com/img/main.png",
+      "totalTime": "PT10M",
+      "estimatedCost": {
+        "@type": "MonetaryAmount",
+        "currency": "USD",
+        "value": "0"
+      },
+      "supply": [
+        {
+          "@type": "HowToSupply",
+          "name": "An Icecast, Shoutcast or AzuraCast server address, port, mount and source password"
+        }
+      ],
+      "tool": [
+        {
+          "@type": "HowToTool",
+          "name": "RadioMaster (free download for Windows, macOS and Linux)"
+        }
+      ],
+      "step": [
+        {
+          "@type": "HowToStep",
+          "position": 1,
+          "name": "Open the encoders window",
+          "text": "Open Tools → Streams / encoders.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 2,
+          "name": "Add an encoder",
+          "text": "Press Add encoder and give it a name, for example Main 128k.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 3,
+          "name": "Choose the server type",
+          "text": "Choose the Server type: Icecast, or Shoutcast (v2 DJ).",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 4,
+          "name": "Enter the server details",
+          "text": "Fill in Host, Port, Mount, Username and Password from your stream host.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 5,
+          "name": "Pick format and bitrate",
+          "text": "Pick the Format (MP3, AAC, Opus, Ogg Vorbis or FLAC) and the Bitrate in kbps.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 6,
+          "name": "Add station details",
+          "text": "Fill in Stream name, Genre, Description and Website, and tick List publicly if directories should list you.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 7,
+          "name": "Turn on track titles",
+          "text": "Leave Send track titles on, and tick Connect on startup to go on air as soon as RadioMaster opens.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        },
+        {
+          "@type": "HowToStep",
+          "position": 8,
+          "name": "Connect",
+          "text": "Press Connect. The encoder shows when it is connected, and Disconnect stops it.",
+          "url": "https://radiomaster.dovafm.com/guides/stream-to-icecast-shoutcast/#add"
+        }
+      ]
     },
     {
       "@type": "BreadcrumbList",
@@ -193,6 +276,7 @@
       <a href="/server/">RadioMaster Server</a>
       <a href="/server/docs/">Server docs</a>
       <a href="/updates/">Updates</a>
+      <a href="/compare/">Compare</a>
       <a href="/#faq">FAQ</a>
       <a href="https://github.com/epell-development/RadioMaster">GitHub</a>
       <a href="https://discord.gg/zVxeUXCjhc">Support Discord</a>
@@ -200,7 +284,7 @@
       <a href="https://github.com/epell-development/RadioMaster/issues">Report a problem</a>
       <a href="https://github.com/epell-development/RadioMaster/blob/main/LICENSE">MIT licence</a>
     </div>
-    <p>RadioMaster is an independent project and is not affiliated with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility.</p>
+    <p>RadioMaster radio automation software is an independent project and is not affiliated with the RadioMaster RC transmitter brand, or with DJSoft.net (RadioBOSS), SAM Broadcaster, ZaraRadio, Icecast, Shoutcast or AzuraCast. Names are used only to describe compatibility or to compare.</p>
     <p>RadioMaster - A <a href="https://deg.dovafm.com">DovaFM Digital Entertainment Group</a> Brand.</p>
   </div>
 </footer>
