@@ -536,7 +536,14 @@ impl App {
         };
         let dir = self.fx_dir.entry(key.clone()).or_insert_with(start).clone();
         let all = self.fx_all.contains(&key);
-        let listed = self.fx_list.get(&key).filter(|(d, _, _)| *d == dir).map(|(_, _, l)| l.clone());
+        // the search, as the words it looks for (so extra spaces don't start another search)
+        let words = crate::playout::sync::search_words(self.fx_search.get(&key).map_or("", |q| q.as_str()));
+        let query = words.join(" ");
+        let searching = !query.is_empty();
+        let listed = self.fx_list.get(&key).filter(|(d, _, _, _)| *d == dir).map(|(_, q, _, l)| (q.clone(), l.clone()));
+        // a listing made for another search shows, filtered, until the new one arrives
+        let fresh = listed.as_ref().is_some_and(|(q, _)| *q == query);
+        let listed = listed.map(|(_, l)| l);
         let mut go: Option<PathBuf> = None;
         ui.horizontal_wrapped(|ui| {
             if ui.small_button("⬆").on_hover_text(tr("Up one folder")).clicked() {
@@ -566,27 +573,69 @@ impl App {
                 self.fx_list.remove(&key);
             }
         });
+        ui.horizontal(|ui| {
+            let mut q = self.fx_search.get(&key).cloned().unwrap_or_default();
+            let clear = !q.is_empty() && ui.small_button("✖").on_hover_text(tr("Clear the search")).clicked();
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut q)
+                    .hint_text(format!("🔍 {}", tr("Search this folder and its sub-folders")))
+                    .desired_width(f32::INFINITY),
+            );
+            if clear || (r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+                q.clear();
+            }
+            if q.is_empty() {
+                self.fx_search.remove(&key);
+            } else {
+                self.fx_search.insert(key.clone(), q);
+            }
+        });
         let where_ = if fs.is_server() { format!("{} {}", tr("Server:"), dir.display()) } else { dir.display().to_string() };
         ui.label(RichText::new(where_).small().color(GRAY));
         ui.separator();
         // the folder is listed when it changes, on Refresh, or every few seconds — not every frame, and
-        // off the UI thread (network and cloud drives, and servers, can take seconds to answer)
-        let stale = self.fx_list.get(&key).is_none_or(|(d, t, _)| *d != dir || t.elapsed() > Duration::from_secs(5));
-        if stale && self.fx_loading.get(&key) != Some(&dir) {
-            self.fx_loading.insert(key.clone(), dir.clone());
-            let (k, d, folders) = (key.clone(), dir.clone(), core.cfg.library_folders.clone());
+        // off the UI thread (network and cloud drives, and servers, can take seconds to answer). A search
+        // reads every sub-folder, so it is redone less often, and only one runs at a time for each
+        // explorer: typing starts the next search when the last one is done.
+        let every = Duration::from_secs(if searching { 30 } else { 5 });
+        let stale = self.fx_list.get(&key).is_none_or(|(d, q, t, _)| *d != dir || *q != query || t.elapsed() > every);
+        let busy = self.fx_loading.get(&key).is_some_and(|(d, _)| *d == dir);
+        if stale && !busy {
+            self.fx_loading.insert(key.clone(), (dir.clone(), query.clone()));
+            let (k, d, q, folders) = (key.clone(), dir.clone(), query.clone(), core.cfg.library_folders.clone());
             self.dlg(move || {
-                let list = fs.list(&d, all, &folders);
-                Some(super::Dlg::FolderList(k, d, list))
+                let mut list = fs.search(&d, &q, all, &folders);
+                if !q.is_empty() {
+                    // (a server too old to search sends the folder itself)
+                    let words = crate::playout::sync::search_words(&q);
+                    list.entries.retain(|e| crate::playout::sync::name_matches(&e.path, &words));
+                }
+                Some(super::Dlg::FolderList(k, d, q, list))
             });
         }
-        let listing = listed.is_none();
+        let listing = listed.is_none() || (searching && !fresh);
         if listing {
-            ui.spinner();
+            ui.horizontal(|ui| {
+                ui.spinner();
+                if searching {
+                    ui.label(RichText::new(tr("Searching…")).small().color(GRAY));
+                }
+            });
         }
         let list = listed.unwrap_or_default();
         if !list.error.is_empty() {
             ui.colored_label(RED, &list.error);
+        } else if fresh && searching {
+            let n = list.entries.len();
+            let found = if n == 1 { tr("1 match").to_string() } else { format!("{n} {}", tr("matches")) };
+            ui.label(RichText::new(found).small().color(GRAY));
+            if list.truncated {
+                ui.label(
+                    RichText::new(tr("The search stopped early: there were too many matches, or the folder is too big. Type more of the name, or open a sub-folder first."))
+                        .small()
+                        .color(GRAY),
+                );
+            }
         }
         let mut add: Vec<PathBuf> = vec![];
         // only the rows in view are drawn; the others just take their space (big folders stay smooth)
@@ -594,7 +643,9 @@ impl App {
             .max(ui.spacing().interact_size.y)
             + ui.spacing().item_spacing.y;
         let mut skipped = 0.0;
-        for e in list.entries.iter().take(5000) {
+        // while a search runs, the last listing shows narrowed to it
+        let narrow = searching && !fresh;
+        for e in list.entries.iter().filter(|e| !narrow || crate::playout::sync::name_matches(&e.path, &words)).take(5000) {
             let row = egui::Rect::from_min_size(ui.cursor().min + egui::vec2(0.0, skipped), egui::vec2(1.0, row_h));
             if !ui.is_rect_visible(row) {
                 skipped += row_h;
@@ -614,9 +665,22 @@ impl App {
             } else {
                 RichText::new(format!("   {name}")).color(GRAY)
             };
-            let r = ui.selectable_label(false, text).interact(egui::Sense::drag());
+            // a search result in a sub-folder says which one, after its name
+            let sub =
+                p.parent().and_then(|f| f.strip_prefix(&dir).ok()).filter(|f| !f.as_os_str().is_empty()).map(|f| f.display().to_string());
+            let mut job = egui::text::LayoutJob::default();
+            text.append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+            if let Some(sub) = &sub {
+                RichText::new(format!("   {sub}")).small().color(GRAY).append_to(
+                    &mut job,
+                    ui.style(),
+                    egui::FontSelection::Default,
+                    egui::Align::Center,
+                );
+            }
+            let r = ui.selectable_label(false, job).interact(egui::Sense::drag());
             if !e.dir {
-                r.clone().on_hover_text(format!("{} · {}", name, size_text(e.size)));
+                r.clone().on_hover_text(format!("{} · {}", p.display(), size_text(e.size)));
             }
             if !audio {
                 continue; // shown, but not something a playlist can play
@@ -653,12 +717,21 @@ impl App {
             ui.add_space(skipped);
         }
         if list.entries.is_empty() && !listing && list.error.is_empty() {
-            ui.label(RichText::new(if all { tr("This folder is empty.") } else { tr("No folders or audio files here.") }).color(GRAY));
+            let empty = if searching {
+                tr("Nothing here or in its sub-folders matches the search.")
+            } else if all {
+                tr("This folder is empty.")
+            } else {
+                tr("No folders or audio files here.")
+            };
+            ui.label(RichText::new(empty).color(GRAY));
         }
         if !add.is_empty() && self.perm.edit_playlists {
             self.add_files_later(self.view_pl, Some(usize::MAX), add);
         }
         if let Some(p) = go {
+            // opening a folder shows what's in it, so the search ends
+            self.fx_search.remove(&key);
             self.fx_dir.insert(key, p);
         }
         ui.small(tr("Double-click a folder to open it, or a file to add it to the playlist you're viewing."));
