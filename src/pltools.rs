@@ -109,7 +109,7 @@ impl VoiceRec {
 }
 
 const COMMAND_HELP: &str =
-    "STOP · PAUSE · VOLUME 80 · ENCODER START 1 · ENCODER STOP 1 · LOAD C:\\Shows\\news.m3u · PLAYLIST Evening · RUN program arguments";
+    "STOP · PAUSE · PLAY · NEXT · VOLUME 80 · CART 3 · INSERT C:\\Jingles\\id.mp3 · ENCODER START 1 · ENCODER STOP 1 · LOAD C:\\Shows\\news.m3u · PLAYLIST Evening · PLUGIN name action · RUN program arguments";
 
 impl App {
     fn new_item_dlg(&self, kind: DlgKind) -> ItemDlg {

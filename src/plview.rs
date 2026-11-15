@@ -405,6 +405,21 @@ impl App {
             self.followed = Some(key);
             let may_edit = self.perm.edit_playlists;
             let may_play = self.perm.playback;
+            let plugin_items = self.plugin_row_items(core);
+            let plugin_menu = |ui: &mut egui::Ui, acts: &mut Vec<PlAct>| {
+                if plugin_items.is_empty() {
+                    return;
+                }
+                ui.separator();
+                for (k, (_, it)) in plugin_items.iter().enumerate() {
+                    let r = ui.button(&it.label);
+                    let r = if it.tooltip.is_empty() { r } else { r.on_hover_text(&it.tooltip) };
+                    if r.clicked() {
+                        acts.push(PlAct::Plugin(k));
+                        ui.close_menu();
+                    }
+                }
+            };
             let dragging_rows = egui::DragAndDrop::payload::<DragRows>(ctx);
             let dragging_files = egui::DragAndDrop::payload::<DragFiles>(ctx);
             let mut drop_line: Option<(f32, egui::Rangef)> = None;
@@ -570,6 +585,7 @@ impl App {
                                 acts.push(PlAct::Play(i));
                                 ui.close_menu();
                             }
+                            plugin_menu(ui, &mut acts);
                             ui.label(RichText::new(tr("Your account can't change playlists")).small().color(GRAY));
                             return;
                         }
@@ -617,6 +633,7 @@ impl App {
                             acts.push(PlAct::Upload);
                             ui.close_menu();
                         }
+                        plugin_menu(ui, &mut acts);
                         ui.separator();
                         if ui.button(tr("🗑 Remove")).clicked() {
                             acts.push(PlAct::Remove);
@@ -699,6 +716,11 @@ impl App {
                         }
                         self.tab_ops.push(TabOp::Rows(t, rows));
                         core.say(format!("{n} item(s) {} {}", if moving { "moved to" } else { "copied to" }, strip[t].0));
+                    }
+                    PlAct::Plugin(k) => {
+                        if let Some((id, it)) = plugin_items.get(k) {
+                            self.plugin_row_act(core, id, it);
+                        }
                     }
                 }
             }

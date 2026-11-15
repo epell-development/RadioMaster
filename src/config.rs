@@ -924,6 +924,8 @@ pub struct Config {
     pub peq_presets: Vec<(String, Vec<crate::dsp::PeqBand>)>,
     /// plugin folders that are switched off
     pub plugins_off: Vec<String>,
+    /// each plugin's settings (Settings → Plugins), by plugin folder name
+    pub plugin_settings: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
     /// interface language (a file in the lang folder); empty = English
     pub language: String,
     /// ffmpeg program for AAC / Opus / Vorbis / FLAC streams (empty = look for it)
@@ -942,6 +944,7 @@ impl Default for Config {
             eq_presets: vec![],
             peq_presets: vec![],
             plugins_off: vec![],
+            plugin_settings: Default::default(),
             language: String::new(),
             ffmpeg_path: String::new(),
             hear_server: true,
