@@ -213,6 +213,40 @@ document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click
   }
 }));
 
+/// "1:30", "90" or "1:02:03" as seconds (the same rules as the app's Go to box); null if not a time.
+function parseTime(s) {
+  s = (s || "").trim();
+  const parts = s.split(":").map((p) => p.trim());
+  if (!s || parts.length > 3) return null;
+  let secs = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const last = i === parts.length - 1;
+    if (!(last ? /^\d+(\.\d+)?$/ : /^\d+$/).test(parts[i])) return null;
+    const v = parseFloat(parts[i]);
+    if (i > 0 && v >= 60) return null;
+    secs = secs * 60 + v;
+  }
+  return secs;
+}
+
+/// Jump in the track on air: by `delta` seconds, or (`to`) to a time.
+function seekTo(secs) {
+  if (!live || !live.has_track) { toast("Nothing is playing", true); return; }
+  send({ cmd: "seek", secs: Math.max(0, Math.min(secs, live.total || 0)) });
+}
+
+document.querySelectorAll("[data-seek]").forEach((b) => b.addEventListener("click", () => {
+  if (live) seekTo(live.pos + parseFloat(b.dataset.seek));
+}));
+$("seekForm").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const t = parseTime($("seekTo").value);
+  if (t === null) { toast("Type a time like 1:30 or 90", true); return; }
+  if (live && live.has_track && t > live.total) { toast("The track is only " + fmt(live.total), true); return; }
+  seekTo(t);
+  $("seekTo").value = "";
+});
+
 $("modeRepeat").addEventListener("change", (e) => {
   const on = e.target.checked;
   saveCfg((c) => { c.repeat_track = on; }, on ? "Repeat track is on" : "Repeat track is off");
