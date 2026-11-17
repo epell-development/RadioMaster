@@ -569,6 +569,38 @@ fn clock_job(now: &chrono::DateTime<chrono::Local>, twelve: bool, size: f32, col
     job
 }
 
+/// The track on air's waveform in the On Air tile, with a line where playback has got to.
+/// `wave` is None while the file is still being analysed (an empty strip is drawn, so the
+/// tile keeps its size).
+fn on_air_wave(ui: &mut egui::Ui, wave: Option<&crate::fade::Waveform>, pos: f32, total: f32) {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 2.0, Color32::from_rgba_unmultiplied(18, 90, 34, 28));
+    let Some(w) = wave.filter(|w| !w.peaks.is_empty()) else { return };
+    let dur = w.duration().max(total).max(0.1);
+    let done = (pos / dur).clamp(0.0, 1.0);
+    // one bar per 2 px: the loudest bin under it, so drops and peaks stand out
+    let cols = ((rect.width() / 2.0) as usize).max(1);
+    let per = w.peaks.len() as f32 / cols as f32;
+    let mid = rect.center().y;
+    for c in 0..cols {
+        let a = (c as f32 * per) as usize;
+        let b = (((c + 1) as f32 * per) as usize).clamp(a + 1, w.peaks.len());
+        let Some(pk) = w.peaks.get(a..b).map(|s| s.iter().fold(0f32, |m, &v| m.max(v))) else { break };
+        let x = rect.left() + (c as f32 + 0.5) * rect.width() / cols as f32;
+        let h = (pk.min(1.0) * rect.height() * 0.5).max(0.5);
+        let played = (c as f32 + 0.5) / cols as f32 <= done;
+        let col = if played { Color32::from_rgb(18, 90, 34) } else { Color32::from_rgb(70, 160, 90) };
+        p.line_segment([egui::pos2(x, mid - h), egui::pos2(x, mid + h)], egui::Stroke::new(1.2_f32, col));
+    }
+    let x = rect.left() + done * rect.width();
+    p.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(2.0_f32, Color32::from_rgb(200, 30, 30)));
+    if let Some(h) = resp.hover_pos() {
+        let at = (h.x - rect.left()) / rect.width() * dur;
+        resp.on_hover_text(format!("{} / {}", fmt(at), fmt(dur)));
+    }
+}
+
 fn with_key(text: &str, key: String) -> String {
     if key.is_empty() {
         text.to_string()
@@ -1791,6 +1823,12 @@ impl App {
             let previous =
                 core.history.iter().rev().nth(if st.has_track { 1 } else { 0 }).map(|h| h.text.clone()).unwrap_or_else(|| "—".into());
             let marker = core.secs_to_next_marker();
+            // the waveform for the On Air tile (worked out in the background the first time)
+            let on_air_file = core.on_air.as_ref().filter(|_| st.has_track).map(|t| t.path.clone());
+            let wave = on_air_file.as_ref().and_then(|p| core.waves.get(p).cloned());
+            if let Some(p) = on_air_file.as_ref().filter(|p| wave.is_none() && core.wave_error(p).is_none()) {
+                core.request_analysis(p);
+            }
 
             // ---- row 1: clock / last / on air / next (widths derived from the real space available)
             let gap = ui.spacing().item_spacing.x;
@@ -1804,7 +1842,7 @@ impl App {
                 egui::Frame::default().fill(fill).corner_radius(4).inner_margin(margin as i8).show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(w);
-                        ui.set_min_height(46.0);
+                        ui.set_min_height(66.0);
                         f(ui);
                     });
                 });
@@ -1844,6 +1882,7 @@ impl App {
                 tile(ui, Color32::from_rgb(176, 240, 186), tiles[2], &mut |ui| {
                     ui.label(RichText::new(tr("●  ON AIR")).strong().color(Color32::from_rgb(18, 90, 34)).small());
                     ui.add(egui::Label::new(RichText::new(title.clone()).color(Color32::BLACK).size(17.0).strong()).truncate());
+                    on_air_wave(ui, wave.as_deref(), st.pos, st.total);
                 });
                 tile(ui, Color32::from_rgb(245, 246, 190), tiles[3], &mut |ui| {
                     ui.label(RichText::new(tr("COMING UP NEXT")).color(Color32::from_rgb(80, 80, 30)).small());
