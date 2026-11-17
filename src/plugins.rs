@@ -806,10 +806,10 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(50));
         }
+        // (looked up, not taken from the last line: another test's copy of the service may write after it)
         let got = std::fs::read_to_string(dir.join("got.txt")).unwrap();
-        let last: Value = serde_json::from_str(got.lines().last().unwrap()).unwrap();
-        assert_eq!(last["event"], "settings");
-        assert_eq!(last["settings"]["station"], "Radio Two");
+        let lines: Vec<Value> = got.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert!(lines.iter().any(|l| l["event"] == "settings" && l["settings"]["station"] == "Radio Two"), "{got}");
         thread::sleep(Duration::from_millis(100));
         left.extend(p.take_requests());
         assert!(left.iter().all(|(i, _, m)| i == id && m["do"] == "notify"), "{left:?}");
