@@ -432,6 +432,8 @@ impl App {
             let sel = &mut self.sel;
             let anchor = &mut self.anchor;
             let pl = &core.playlist;
+            let (fmt_secs, fmt_mins) = (core.cfg.time_fmt(true), core.cfg.time_fmt(false));
+            let start_w = if core.cfg.clock_12h { 96.0 } else { 82.0 };
 
             let mut tb = TableBuilder::new(ui)
                 .id_salt(("playlist_table", (avail_w / 24.0) as i32, wide, very_wide))
@@ -441,7 +443,7 @@ impl App {
                 .column(Column::exact(52.0))
                 .column(Column::remainder().at_least(120.0).clip(true))
                 .column(Column::exact(64.0))
-                .column(Column::exact(82.0));
+                .column(Column::exact(start_w));
             if wide {
                 tb = tb.column(Column::exact(140.0));
             }
@@ -503,8 +505,8 @@ impl App {
                     row.col(|ui| {
                         row_background(ui, e, is_cur);
                         let t = match st {
-                            Some(s) if skipped => format!("skip {}", s.at.format("%H:%M")),
-                            Some(s) => s.at.format("%H:%M:%S").to_string(),
+                            Some(s) if skipped => format!("skip {}", s.at.format(fmt_mins)),
+                            Some(s) => s.at.format(fmt_secs).to_string(),
                             None => String::new(),
                         };
                         ui.label(txt(t));

@@ -928,12 +928,36 @@ pub struct Config {
     pub plugin_settings: std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
     /// interface language (a file in the lang folder); empty = English
     pub language: String,
+    /// clocks and start times show 12-hour time with AM/PM instead of 24-hour time
+    pub clock_12h: bool,
     /// ffmpeg program for AAC / Opus / Vorbis / FLAC streams (empty = look for it)
     pub ffmpeg_path: String,
     /// while connected to RadioMaster Server: play the station's mix on this machine's sound cards
     pub hear_server: bool,
     /// show recording (logger): the on-air mix saved to files, one per hour
     pub recording: RecordCfg,
+}
+
+impl Config {
+    /// The strftime pattern for a time of day as the clocks show it: 24-hour, or 12-hour with
+    /// AM/PM when "12-hour clock" is ticked in Settings → General.
+    pub fn time_fmt(&self, secs: bool) -> &'static str {
+        match (self.clock_12h, secs) {
+            (true, true) => "%-I:%M:%S %p",
+            (true, false) => "%-I:%M %p",
+            (false, true) => "%H:%M:%S",
+            (false, false) => "%H:%M",
+        }
+    }
+
+    /// An hour of the day (0–23) as the clocks show it: "13:00" or "1 PM".
+    pub fn hour_text(&self, h: u32) -> String {
+        if !self.clock_12h {
+            return format!("{h:02}:00");
+        }
+        let h12 = if h.is_multiple_of(12) { 12 } else { h % 12 };
+        format!("{h12} {}", if h < 12 { "AM" } else { "PM" })
+    }
 }
 
 impl Default for Config {
@@ -946,6 +970,7 @@ impl Default for Config {
             plugins_off: vec![],
             plugin_settings: Default::default(),
             language: String::new(),
+            clock_12h: false,
             ffmpeg_path: String::new(),
             hear_server: true,
             audio_devices: AudioDevices::default(),
@@ -1224,5 +1249,25 @@ mod rule_tests {
         assert_eq!(c.ads[0].label(), "A");
         c.ads[0].advertiser = "Acme".into();
         assert_eq!(c.ads[0].label(), "Acme — A");
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::Config;
+    use chrono::TimeZone;
+
+    #[test]
+    fn twelve_hour_clock() {
+        let mut c = Config::default();
+        let t = chrono::Local.with_ymd_and_hms(2026, 11, 17, 13, 5, 9).unwrap();
+        assert_eq!(t.format(c.time_fmt(true)).to_string(), "13:05:09");
+        assert_eq!(c.hour_text(0), "00:00");
+        c.clock_12h = true;
+        assert_eq!(t.format(c.time_fmt(true)).to_string(), "1:05:09 PM");
+        assert_eq!(t.format(c.time_fmt(false)).to_string(), "1:05 PM");
+        assert_eq!(c.hour_text(0), "12 AM");
+        assert_eq!(c.hour_text(12), "12 PM");
+        assert_eq!(c.hour_text(23), "11 PM");
     }
 }

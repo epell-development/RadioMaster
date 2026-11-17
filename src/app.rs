@@ -556,6 +556,51 @@ fn seek_to_id() -> egui::Id {
 }
 
 /// A hover text with the shortcut that does the same, if it has one.
+/// A big clock: the time in monospace digits, plus AM/PM in smaller letters on a 12-hour clock
+/// (Settings → General). The digits keep the same width as the seconds tick.
+fn clock_job(now: &chrono::DateTime<chrono::Local>, twelve: bool, size: f32, color: Color32) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::default();
+    let digits = now.format(if twelve { "%l:%M:%S" } else { "%H:%M:%S" }).to_string();
+    job.append(digits.trim_start(), 0.0, TextFormat::simple(egui::FontId::monospace(size), color));
+    if twelve {
+        job.append(&now.format("%p").to_string(), size * 0.15, TextFormat::simple(egui::FontId::proportional(size * 0.45), color));
+    }
+    job
+}
+
+/// The track on air's waveform in the On Air tile, with a line where playback has got to.
+/// `wave` is None while the file is still being analysed (an empty strip is drawn, so the
+/// tile keeps its size).
+fn on_air_wave(ui: &mut egui::Ui, wave: Option<&crate::fade::Waveform>, pos: f32, total: f32) {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 2.0, Color32::from_rgba_unmultiplied(18, 90, 34, 28));
+    let Some(w) = wave.filter(|w| !w.peaks.is_empty()) else { return };
+    let dur = w.duration().max(total).max(0.1);
+    let done = (pos / dur).clamp(0.0, 1.0);
+    // one bar per 2 px: the loudest bin under it, so drops and peaks stand out
+    let cols = ((rect.width() / 2.0) as usize).max(1);
+    let per = w.peaks.len() as f32 / cols as f32;
+    let mid = rect.center().y;
+    for c in 0..cols {
+        let a = (c as f32 * per) as usize;
+        let b = (((c + 1) as f32 * per) as usize).clamp(a + 1, w.peaks.len());
+        let Some(pk) = w.peaks.get(a..b).map(|s| s.iter().fold(0f32, |m, &v| m.max(v))) else { break };
+        let x = rect.left() + (c as f32 + 0.5) * rect.width() / cols as f32;
+        let h = (pk.min(1.0) * rect.height() * 0.5).max(0.5);
+        let played = (c as f32 + 0.5) / cols as f32 <= done;
+        let col = if played { Color32::from_rgb(18, 90, 34) } else { Color32::from_rgb(70, 160, 90) };
+        p.line_segment([egui::pos2(x, mid - h), egui::pos2(x, mid + h)], egui::Stroke::new(1.2_f32, col));
+    }
+    let x = rect.left() + done * rect.width();
+    p.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(2.0_f32, Color32::from_rgb(200, 30, 30)));
+    if let Some(h) = resp.hover_pos() {
+        let at = (h.x - rect.left()) / rect.width() * dur;
+        resp.on_hover_text(format!("{} / {}", fmt(at), fmt(dur)));
+    }
+}
+
 fn with_key(text: &str, key: String) -> String {
     if key.is_empty() {
         text.to_string()
@@ -1616,7 +1661,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(core.notify.lock().clone());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(core.now().format("%a %d %b  %H:%M:%S").to_string());
+                    ui.label(core.now().format(&format!("%a %d %b  {}", core.cfg.time_fmt(true))).to_string());
                     ui.separator();
                     let live = core.handles.iter().flatten().filter(|h| h.status.lock().state == EncState::Live).count();
                     ui.label(RichText::new(format!("● {live} stream(s) live")).color(if live > 0 { GREEN } else { GRAY }));
@@ -1778,19 +1823,26 @@ impl App {
             let previous =
                 core.history.iter().rev().nth(if st.has_track { 1 } else { 0 }).map(|h| h.text.clone()).unwrap_or_else(|| "—".into());
             let marker = core.secs_to_next_marker();
+            // the waveform for the On Air tile (worked out in the background the first time)
+            let on_air_file = core.on_air.as_ref().filter(|_| st.has_track).map(|t| t.path.clone());
+            let wave = on_air_file.as_ref().and_then(|p| core.waves.get(p).cloned());
+            if let Some(p) = on_air_file.as_ref().filter(|p| wave.is_none() && core.wave_error(p).is_none()) {
+                core.request_analysis(p);
+            }
 
             // ---- row 1: clock / last / on air / next (widths derived from the real space available)
             let gap = ui.spacing().item_spacing.x;
             let margin = 8.0;
             let usable = (ui.available_width() - 3.0 * gap - 4.0 * 2.0 * margin - 6.0).max(520.0);
-            let clock_w = 228.0;
+            // (AM/PM needs a little more room)
+            let clock_w = if core.cfg.clock_12h { 252.0 } else { 228.0 };
             let rest = (usable - clock_w).max(300.0);
             let tiles = [clock_w, rest * 0.26, rest * 0.46, rest * 0.28];
             let tile = |ui: &mut egui::Ui, fill: Color32, w: f32, f: &mut dyn FnMut(&mut egui::Ui)| {
                 egui::Frame::default().fill(fill).corner_radius(4).inner_margin(margin as i8).show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(w);
-                        ui.set_min_height(46.0);
+                        ui.set_min_height(66.0);
                         f(ui);
                     });
                 });
@@ -1799,13 +1851,7 @@ impl App {
                 tile(ui, Color32::from_rgb(232, 236, 243), tiles[0], &mut |ui| {
                     ui.label(RichText::new(now.format("%a %d/%m/%Y").to_string()).color(Color32::from_rgb(70, 78, 92)).small());
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(now.format("%H:%M:%S").to_string())
-                                .monospace()
-                                .size(22.0)
-                                .strong()
-                                .color(Color32::from_rgb(20, 24, 32)),
-                        );
+                        ui.label(clock_job(&now, core.cfg.clock_12h, 22.0, Color32::from_rgb(20, 24, 32)));
                         // countdown to the top of the next hour
                         let into = now.minute() * 60 + now.second();
                         let left = 3600 - into;
@@ -1817,7 +1863,7 @@ impl App {
                                 .strong()
                                 .color(Color32::from_rgb(0, 128, 128)),
                         )
-                        .on_hover_text(format!("Time left until {next_h:02}:00"));
+                        .on_hover_text(format!("{} {}", tr("Time left until"), core.cfg.hour_text(next_h)));
                         if let Some(m) = marker.filter(|m| *m < 6 * 3600) {
                             ui.label(
                                 RichText::new(format!("⏰{:02}:{:02}", m / 60, m % 60))
@@ -1836,6 +1882,7 @@ impl App {
                 tile(ui, Color32::from_rgb(176, 240, 186), tiles[2], &mut |ui| {
                     ui.label(RichText::new(tr("●  ON AIR")).strong().color(Color32::from_rgb(18, 90, 34)).small());
                     ui.add(egui::Label::new(RichText::new(title.clone()).color(Color32::BLACK).size(17.0).strong()).truncate());
+                    on_air_wave(ui, wave.as_deref(), st.pos, st.total);
                 });
                 tile(ui, Color32::from_rgb(245, 246, 190), tiles[3], &mut |ui| {
                     ui.label(RichText::new(tr("COMING UP NEXT")).color(Color32::from_rgb(80, 80, 30)).small());
@@ -1867,7 +1914,11 @@ impl App {
                             }
                             if ui
                                 .add_sized(bs, egui::Button::new(RichText::new("▶").color(Color32::from_rgb(20, 140, 50))))
-                                .on_hover_text(tr("Play"))
+                                .on_hover_text(if core.resume_next && core.state == PlayState::Stopped {
+                                    tr("Play (goes on with the next track)")
+                                } else {
+                                    tr("Play")
+                                })
                                 .clicked()
                             {
                                 let s = self.sel.iter().next().cloned();
@@ -2062,6 +2113,20 @@ impl App {
                 {
                     core.set_stop_after(!v);
                 }
+                // after "Stop after this track" has stopped playback: go on with the next row
+                if core.resume_next && core.state == PlayState::Stopped {
+                    let next = core.upcoming().and_then(|i| core.playlist.get(i)).map(|e| e.title()).unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(tr("▶ Resume")).strong().color(Color32::WHITE))
+                                .fill(Color32::from_rgb(30, 140, 60)),
+                        )
+                        .on_hover_text(format!("{} {next}", tr("Go on with the next track:")))
+                        .clicked()
+                    {
+                        core.play_pressed(None);
+                    }
+                }
             });
             ui.separator();
             ui.label(RichText::new(tr("AUTOMATION")).small().color(GRAY));
@@ -2174,7 +2239,7 @@ impl App {
             ui.add_space(12.0);
             ui.label(RichText::new(tr("STUDIO CLOCK")).small().color(GRAY));
             let now = core.now();
-            ui.label(RichText::new(now.format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
+            ui.label(clock_job(&now, core.cfg.clock_12h, 51.0, ACCENT));
             ui.label(now.format("%A, %d %B %Y").to_string());
             if let Some(m) = core.secs_to_next_marker() {
                 ui.label(
@@ -2194,7 +2259,7 @@ impl App {
         for (i, e) in core.playlist.iter().enumerate().skip(next).take(14) {
             ui.horizontal(|ui| {
                 let t = starts.get(i);
-                ui.monospace(t.map(|s| s.at.format("%H:%M:%S").to_string()).unwrap_or_else(|| "--:--:--".into()));
+                ui.monospace(t.map(|s| s.at.format(core.cfg.time_fmt(true)).to_string()).unwrap_or_else(|| "--:--:--".into()));
                 let mut txt = RichText::new(e.title());
                 if t.is_some_and(|s| s.skipped) {
                     txt = txt.strikethrough().color(GRAY);
@@ -2263,6 +2328,8 @@ impl App {
                                 if ui.button(tr("Station profiles…")).clicked(){self.show_profiles=true;}
                                 ui.separator();
                                 ui.checkbox(&mut core.cfg.check_updates, tr("Check for updates when RadioMaster starts"));
+                                ui.checkbox(&mut core.cfg.clock_12h, tr("12-hour clock (AM/PM)"))
+                                    .on_hover_text(tr("Show the clocks and playlist start times as 1:30 PM instead of 13:30 (this computer only)"));
                                 ui.separator();
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(tr("Language"));

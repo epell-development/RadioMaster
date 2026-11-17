@@ -292,6 +292,7 @@ impl App {
 
     fn gen_preview_ui(&mut self, ui: &mut egui::Ui, core: &mut Playout) {
         let Some(p) = &self.gen.preview else { return };
+        let time_fmt = core.cfg.time_fmt(true);
         let mut close = false;
         let mut use_it = false;
         let mut again: Option<bool> = None;
@@ -314,7 +315,7 @@ impl App {
                     for k in range {
                         let (r, (at, _)) = (&p.rows[k], &p.times[k]);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(at.format("%H:%M:%S").to_string()).monospace());
+                            ui.label(RichText::new(at.format(time_fmt).to_string()).monospace());
                             ui.label(RichText::new(format!("{:>8}", r.length_text())).monospace().color(GRAY));
                             ui.add_sized([70.0, row_h], egui::Label::new(RichText::new(tr(r.type_label())).small().color(GRAY)));
                             ui.label(if r.is_file() { r.track.label() } else { r.title() });

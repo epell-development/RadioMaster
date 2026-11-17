@@ -366,6 +366,8 @@ pub struct Live {
     pub recording: Option<crate::recorder::RecStatus>,
     /// "Stop after this track" is on
     pub stop_after: bool,
+    /// playback was stopped by "Stop after this track" (Play goes on with the next row)
+    pub resume_next: bool,
     /// the row Shuffle plays next on the on-air playlist
     pub shuffle_next: Option<usize>,
 }
@@ -624,11 +626,13 @@ pub fn digest<T: Serialize>(v: &T) -> u64 {
 }
 
 /// The settings that belong to one machine and are never copied between the server and its apps:
-/// sound cards, the remote-control API, interface language, update checks, plugins and ffmpeg.
+/// sound cards, the remote-control API, interface language and clock style, update checks, plugins
+/// and ffmpeg.
 pub fn keep_local(new: &mut Config, here: &Config) {
     new.audio_devices = here.audio_devices.clone();
     new.remote = here.remote.clone();
     new.language = here.language.clone();
+    new.clock_12h = here.clock_12h;
     new.check_updates = here.check_updates;
     new.plugins_off = here.plugins_off.clone();
     new.plugin_settings = here.plugin_settings.clone();
@@ -807,6 +811,7 @@ impl Playout {
             breaks: self.breaks.clone(),
             recording: self.recording(),
             stop_after: self.stop_after,
+            resume_next: self.resume_next,
             shuffle_next: self.shuffle_next,
         }
     }
@@ -853,6 +858,7 @@ impl Playout {
         self.breaks = l.breaks;
         self.rec_mirror = l.recording;
         self.stop_after = l.stop_after;
+        self.resume_next = l.resume_next;
         self.shuffle_next = l.shuffle_next;
         self.scanning = l.scanning;
         self.scan_progress = l.scan_progress;

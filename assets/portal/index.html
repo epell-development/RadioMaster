@@ -64,6 +64,12 @@
           <button data-cmd="stop" title="Stop" aria-label="Stop">⏹</button>
           <button data-cmd="next" title="Next" aria-label="Next">⏭</button>
         </div>
+        <form class="row wrap seekrow" id="seekForm">
+          <button type="button" data-seek="-30" title="Back 30 seconds" aria-label="Back 30 seconds">−30s</button>
+          <button type="button" data-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">+30s</button>
+          <input id="seekTo" placeholder="1:30" inputmode="numeric" aria-label="Go to a time in the track (minutes:seconds)" title="Go to a time in the track (minutes:seconds, or seconds)">
+          <button type="submit" id="seekGo">Go to</button>
+        </form>
         <div class="row wrap modes">
           <label><input type="checkbox" id="modeRepeat"> Repeat track</label>
           <label><input type="checkbox" id="modeShuffle"> Shuffle</label>
