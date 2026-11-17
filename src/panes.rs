@@ -36,7 +36,7 @@ impl App {
         let mut new_window: Option<usize> = None;
         let targets: Vec<Pane> = self.workzones.visible_panes().into_iter().filter(|p| *p != pane).collect();
         ui.horizontal(|ui| {
-            ui.menu_button("➕", |ui| {
+            icon_menu_button(ui, "➕", |ui| {
                 for tab in Tab::PANEL {
                     if ui.add_enabled(!pt.tabs.contains(&tab), egui::Button::new(self.tab_name(tab))).clicked() {
                         add = Some(tab);
@@ -58,12 +58,10 @@ impl App {
                     ui.close_menu();
                 }
             })
-            .response
             .on_hover_text(tr("Add a tab to this panel"));
             if !matches!(pane, Pane::Aux(_))
                 && !pt.tabs.is_empty()
-                && ui
-                    .small_button("🗖")
+                && icon_button(ui, "🗖")
                     .on_hover_text(tr("Pop this tab out into its own window, which you can move to another screen"))
                     .clicked()
             {
@@ -331,25 +329,25 @@ impl App {
         let mut open_ext = false;
         let mut delete_web: Option<usize> = None;
         ui.horizontal(|ui| {
-            if ui.small_button("◀").on_hover_text(tr("Back")).clicked() {
+            if icon_button(ui, "◀").on_hover_text(tr("Back")).clicked() {
                 self.browsers.back(&key);
             }
-            if ui.small_button("▶").on_hover_text(tr("Forward")).clicked() {
+            if icon_button(ui, "▶").on_hover_text(tr("Forward")).clicked() {
                 self.browsers.forward(&key);
             }
-            if ui.small_button("⟳").on_hover_text(tr("Reload")).clicked() {
+            if icon_button(ui, "⟳").on_hover_text(tr("Reload")).clicked() {
                 self.browsers.reload(&key);
             }
-            if ui.small_button("🏠").on_hover_text(tr("Home")).clicked() {
+            if icon_button(ui, "🏠").on_hover_text(tr("Home")).clicked() {
                 if let Some(st) = self.web_state.get_mut(&key) {
                     st.entry = default.clone();
                 }
                 navigate = true;
             }
-            if ui.small_button(tr("Go")).clicked() {
+            if ui.button(tr("Go")).clicked() {
                 navigate = true;
             }
-            if ui.small_button("↗").on_hover_text(tr("Open in your browser")).clicked() {
+            if icon_button(ui, "↗").on_hover_text(tr("Open in your browser")).clicked() {
                 open_ext = true;
             }
         });

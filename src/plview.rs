@@ -339,7 +339,7 @@ impl App {
                     }
                 });
             }
-            if self.perm.edit_playlists && ui.small_button("➕").on_hover_text(tr("New playlist")).clicked() {
+            if self.perm.edit_playlists && icon_button(ui, "➕").on_hover_text(tr("New playlist")).clicked() {
                 self.tab_ops.push(TabOp::New);
             }
         });

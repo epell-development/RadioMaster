@@ -446,6 +446,33 @@ pub(super) fn delete_button(ui: &mut egui::Ui, id: impl std::hash::Hash, what: &
     yes
 }
 
+/// Side of the square icon-only buttons: as tall as a normal button or a tab label, so they line up
+/// with the text beside them.
+fn icon_side(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y
+}
+
+/// The one icon-only button used in panel headers and toolbars: always the same square, whatever the
+/// glyph, with the icon centred, so a row of them lines up.
+pub(super) fn icon_button(ui: &mut egui::Ui, icon: &str) -> egui::Response {
+    let s = icon_side(ui);
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.x = 0.0;
+        ui.add_sized([s, s], egui::Button::new(icon))
+    })
+    .inner
+}
+
+/// An icon-only button that opens a menu, the same size as `icon_button`.
+pub(super) fn icon_menu_button<R>(ui: &mut egui::Ui, icon: &str, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::Response {
+    let s = icon_side(ui);
+    ui.allocate_ui_with_layout(egui::vec2(s, s), egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+        ui.spacing_mut().button_padding.x = 0.0;
+        egui::menu::menu_custom_button(ui, egui::Button::new(icon), add_contents).response
+    })
+    .inner
+}
+
 /// A date as "YYYY-MM-DD" text with a calendar button. `optional`: empty means "no limit" and a
 /// ✖ clears it. Returns true when it changed.
 pub(super) fn date_edit(ui: &mut egui::Ui, id: impl std::hash::Hash, value: &mut String, optional: bool) -> bool {
