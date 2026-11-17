@@ -474,6 +474,9 @@ pub struct Playout {
     // ---- play modes
     /// stop when the item on air ends instead of going on (one-off; cleared when it fires or on Stop)
     pub stop_after: bool,
+    /// playback stopped because of "Stop after this track": Play (or Resume) goes on with the row
+    /// after the one that ended instead of starting that one again. Cleared when anything starts.
+    pub resume_next: bool,
     /// the row Shuffle plays next (picked ahead so "Coming up next" can show it)
     pub shuffle_next: Option<usize>,
 }
@@ -615,6 +618,7 @@ impl Playout {
             rec_mirror: None,
             rec_error: String::new(),
             stop_after: false,
+            resume_next: false,
             shuffle_next: None,
         }
     }
@@ -1172,7 +1176,7 @@ impl Playout {
     /// The row that plays after the one on air, as far as it can be known (None: the queue is
     /// empty, or Shuffle hasn't picked yet). Comments and hour markers are passed over.
     pub fn upcoming(&self) -> Option<usize> {
-        if self.cfg.repeat_track && self.current.and_then(|c| self.playlist.get(c)).is_some_and(|e| e.is_file()) {
+        if self.cfg.repeat_track && !self.resume_next && self.current.and_then(|c| self.playlist.get(c)).is_some_and(|e| e.is_file()) {
             return self.current;
         }
         if self.cfg.shuffle {
@@ -1205,7 +1209,8 @@ impl Playout {
     fn auto_next(&mut self, old_fade: Option<f32>) -> bool {
         if self.stop_after {
             self.stop_after = false;
-            self.say("Stopped after the track, as asked");
+            self.resume_next = true;
+            self.say("Stopped after the track, as asked. Press Play or Resume to go on with the next one");
             return false;
         }
         // Repeat only replays a plain file row, and only when nothing else is owed first:
@@ -1269,6 +1274,7 @@ impl Playout {
             return false;
         }
         self.current = Some(i);
+        self.resume_next = false;
         self.playlist[i].played = true;
         let e = self.playlist[i].clone();
         let xf = old_fade.unwrap_or(0.0);
@@ -2019,6 +2025,8 @@ impl Playout {
             Some("RESUME") => {
                 if self.state == PlayState::Paused {
                     self.pause_toggle();
+                } else if self.state == PlayState::Stopped && self.resume_next {
+                    self.play_pressed(None);
                 }
             }
             Some("NEXT") => self.next(),
@@ -2509,12 +2517,27 @@ impl Playout {
                 self.state = PlayState::Playing;
                 self.plugin_event("resumed", json!({}));
             }
+            // stopped by "Stop after this track": go on with what follows the row that ended
+            // (unless another row was picked), rather than starting that row again
+            PlayState::Stopped if self.resume_next && selected.is_none_or(|s| Some(s) == self.current) => self.resume(),
             _ => {
                 let i = selected.or(self.current).unwrap_or(0);
                 if !self.play_index(i, 0.0) {
                     self.say("Nothing to play — add tracks to the playlist");
                 }
             }
+        }
+    }
+
+    /// Go on after "Stop after this track" stopped playback: the row after the one that ended
+    /// (Shuffle, Loop and Auto-fill are followed as usual; Repeat track isn't, this once).
+    fn resume(&mut self) {
+        self.sub_queue.clear();
+        self.pending_jump = None;
+        self.wait_until = None;
+        if !self.advance(0.0) {
+            self.resume_next = false;
+            self.say("Nothing more to play — add tracks to the playlist");
         }
     }
 
@@ -4030,6 +4053,21 @@ mod tests {
         assert!(!p.auto_next(Some(0.0)));
         assert!(!p.stop_after);
         assert_eq!(p.current, Some(1));
+        // …and Play then goes on with the next row instead of starting the same one again (#69),
+        // even with Repeat track on
+        p.state = PlayState::Stopped;
+        assert!(p.resume_next);
+        assert_eq!(p.upcoming(), Some(2));
+        p.play_pressed(None);
+        assert_eq!(p.current, Some(2));
+        assert!(!p.resume_next);
+        // picking a row by hand still plays that row
+        p.set_stop_after(true);
+        assert!(!p.auto_next(Some(0.0)));
+        p.state = PlayState::Stopped;
+        p.play_pressed(Some(0));
+        assert_eq!(p.current, Some(0));
+        p.cfg.repeat_track = false;
         // Stop clears it too
         p.set_stop_after(true);
         p.stop();

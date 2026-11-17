@@ -366,6 +366,8 @@ pub struct Live {
     pub recording: Option<crate::recorder::RecStatus>,
     /// "Stop after this track" is on
     pub stop_after: bool,
+    /// playback was stopped by "Stop after this track" (Play goes on with the next row)
+    pub resume_next: bool,
     /// the row Shuffle plays next on the on-air playlist
     pub shuffle_next: Option<usize>,
 }
@@ -807,6 +809,7 @@ impl Playout {
             breaks: self.breaks.clone(),
             recording: self.recording(),
             stop_after: self.stop_after,
+            resume_next: self.resume_next,
             shuffle_next: self.shuffle_next,
         }
     }
@@ -853,6 +856,7 @@ impl Playout {
         self.breaks = l.breaks;
         self.rec_mirror = l.recording;
         self.stop_after = l.stop_after;
+        self.resume_next = l.resume_next;
         self.shuffle_next = l.shuffle_next;
         self.scanning = l.scanning;
         self.scan_progress = l.scan_progress;

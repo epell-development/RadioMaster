@@ -1867,7 +1867,11 @@ impl App {
                             }
                             if ui
                                 .add_sized(bs, egui::Button::new(RichText::new("▶").color(Color32::from_rgb(20, 140, 50))))
-                                .on_hover_text(tr("Play"))
+                                .on_hover_text(if core.resume_next && core.state == PlayState::Stopped {
+                                    tr("Play (goes on with the next track)")
+                                } else {
+                                    tr("Play")
+                                })
                                 .clicked()
                             {
                                 let s = self.sel.iter().next().cloned();
@@ -2061,6 +2065,20 @@ impl App {
                     .clicked()
                 {
                     core.set_stop_after(!v);
+                }
+                // after "Stop after this track" has stopped playback: go on with the next row
+                if core.resume_next && core.state == PlayState::Stopped {
+                    let next = core.upcoming().and_then(|i| core.playlist.get(i)).map(|e| e.title()).unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(tr("▶ Resume")).strong().color(Color32::WHITE))
+                                .fill(Color32::from_rgb(30, 140, 60)),
+                        )
+                        .on_hover_text(format!("{} {next}", tr("Go on with the next track:")))
+                        .clicked()
+                    {
+                        core.play_pressed(None);
+                    }
                 }
             });
             ui.separator();

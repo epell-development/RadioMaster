@@ -42,7 +42,7 @@ pub fn spawn(core: Arc<Mutex<Playout>>, port: u16, password: String) {
                             "position": c.status.pos, "duration": c.status.total,
                             "volume": c.cfg.volume, "next": next,
                             "playlist_length": c.playlist.len(),
-                            "repeat_track": c.cfg.repeat_track, "shuffle": c.cfg.shuffle, "stop_after": c.stop_after,
+                            "repeat_track": c.cfg.repeat_track, "shuffle": c.cfg.shuffle, "stop_after": c.stop_after, "resume_next": c.resume_next,
                         })
                     }
                     "/api/play" => {
