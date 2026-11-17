@@ -556,6 +556,19 @@ fn seek_to_id() -> egui::Id {
 }
 
 /// A hover text with the shortcut that does the same, if it has one.
+/// A big clock: the time in monospace digits, plus AM/PM in smaller letters on a 12-hour clock
+/// (Settings → General). The digits keep the same width as the seconds tick.
+fn clock_job(now: &chrono::DateTime<chrono::Local>, twelve: bool, size: f32, color: Color32) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut job = LayoutJob::default();
+    let digits = now.format(if twelve { "%l:%M:%S" } else { "%H:%M:%S" }).to_string();
+    job.append(digits.trim_start(), 0.0, TextFormat::simple(egui::FontId::monospace(size), color));
+    if twelve {
+        job.append(&now.format("%p").to_string(), size * 0.15, TextFormat::simple(egui::FontId::proportional(size * 0.45), color));
+    }
+    job
+}
+
 fn with_key(text: &str, key: String) -> String {
     if key.is_empty() {
         text.to_string()
@@ -1616,7 +1629,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(core.notify.lock().clone());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(core.now().format("%a %d %b  %H:%M:%S").to_string());
+                    ui.label(core.now().format(&format!("%a %d %b  {}", core.cfg.time_fmt(true))).to_string());
                     ui.separator();
                     let live = core.handles.iter().flatten().filter(|h| h.status.lock().state == EncState::Live).count();
                     ui.label(RichText::new(format!("● {live} stream(s) live")).color(if live > 0 { GREEN } else { GRAY }));
@@ -1783,7 +1796,8 @@ impl App {
             let gap = ui.spacing().item_spacing.x;
             let margin = 8.0;
             let usable = (ui.available_width() - 3.0 * gap - 4.0 * 2.0 * margin - 6.0).max(520.0);
-            let clock_w = 228.0;
+            // (AM/PM needs a little more room)
+            let clock_w = if core.cfg.clock_12h { 252.0 } else { 228.0 };
             let rest = (usable - clock_w).max(300.0);
             let tiles = [clock_w, rest * 0.26, rest * 0.46, rest * 0.28];
             let tile = |ui: &mut egui::Ui, fill: Color32, w: f32, f: &mut dyn FnMut(&mut egui::Ui)| {
@@ -1799,13 +1813,7 @@ impl App {
                 tile(ui, Color32::from_rgb(232, 236, 243), tiles[0], &mut |ui| {
                     ui.label(RichText::new(now.format("%a %d/%m/%Y").to_string()).color(Color32::from_rgb(70, 78, 92)).small());
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(now.format("%H:%M:%S").to_string())
-                                .monospace()
-                                .size(22.0)
-                                .strong()
-                                .color(Color32::from_rgb(20, 24, 32)),
-                        );
+                        ui.label(clock_job(&now, core.cfg.clock_12h, 22.0, Color32::from_rgb(20, 24, 32)));
                         // countdown to the top of the next hour
                         let into = now.minute() * 60 + now.second();
                         let left = 3600 - into;
@@ -1817,7 +1825,7 @@ impl App {
                                 .strong()
                                 .color(Color32::from_rgb(0, 128, 128)),
                         )
-                        .on_hover_text(format!("Time left until {next_h:02}:00"));
+                        .on_hover_text(format!("{} {}", tr("Time left until"), core.cfg.hour_text(next_h)));
                         if let Some(m) = marker.filter(|m| *m < 6 * 3600) {
                             ui.label(
                                 RichText::new(format!("⏰{:02}:{:02}", m / 60, m % 60))
@@ -2192,7 +2200,7 @@ impl App {
             ui.add_space(12.0);
             ui.label(RichText::new(tr("STUDIO CLOCK")).small().color(GRAY));
             let now = core.now();
-            ui.label(RichText::new(now.format("%H:%M:%S").to_string()).monospace().size(51.0).strong().color(ACCENT));
+            ui.label(clock_job(&now, core.cfg.clock_12h, 51.0, ACCENT));
             ui.label(now.format("%A, %d %B %Y").to_string());
             if let Some(m) = core.secs_to_next_marker() {
                 ui.label(
@@ -2212,7 +2220,7 @@ impl App {
         for (i, e) in core.playlist.iter().enumerate().skip(next).take(14) {
             ui.horizontal(|ui| {
                 let t = starts.get(i);
-                ui.monospace(t.map(|s| s.at.format("%H:%M:%S").to_string()).unwrap_or_else(|| "--:--:--".into()));
+                ui.monospace(t.map(|s| s.at.format(core.cfg.time_fmt(true)).to_string()).unwrap_or_else(|| "--:--:--".into()));
                 let mut txt = RichText::new(e.title());
                 if t.is_some_and(|s| s.skipped) {
                     txt = txt.strikethrough().color(GRAY);
@@ -2281,6 +2289,8 @@ impl App {
                                 if ui.button(tr("Station profiles…")).clicked(){self.show_profiles=true;}
                                 ui.separator();
                                 ui.checkbox(&mut core.cfg.check_updates, tr("Check for updates when RadioMaster starts"));
+                                ui.checkbox(&mut core.cfg.clock_12h, tr("12-hour clock (AM/PM)"))
+                                    .on_hover_text(tr("Show the clocks and playlist start times as 1:30 PM instead of 13:30 (this computer only)"));
                                 ui.separator();
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(tr("Language"));

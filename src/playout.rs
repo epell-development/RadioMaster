@@ -2376,7 +2376,7 @@ impl Playout {
             }
             let titles = files.iter().map(|p| self.entry_for(p).track.label()).collect();
             if t > now {
-                self.say(format!("{name}: cuts in at {}", t.format("%H:%M")));
+                self.say(format!("{name}: cuts in at {}", t.format(self.cfg.time_fmt(false))));
             }
             self.breaks.push(AdBreak { rule: id, name, adverts, at: t.timestamp(), files, titles });
         }

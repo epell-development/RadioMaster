@@ -626,11 +626,13 @@ pub fn digest<T: Serialize>(v: &T) -> u64 {
 }
 
 /// The settings that belong to one machine and are never copied between the server and its apps:
-/// sound cards, the remote-control API, interface language, update checks, plugins and ffmpeg.
+/// sound cards, the remote-control API, interface language and clock style, update checks, plugins
+/// and ffmpeg.
 pub fn keep_local(new: &mut Config, here: &Config) {
     new.audio_devices = here.audio_devices.clone();
     new.remote = here.remote.clone();
     new.language = here.language.clone();
+    new.clock_12h = here.clock_12h;
     new.check_updates = here.check_updates;
     new.plugins_off = here.plugins_off.clone();
     new.plugin_settings = here.plugin_settings.clone();

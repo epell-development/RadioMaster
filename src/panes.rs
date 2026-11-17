@@ -801,7 +801,7 @@ impl App {
                 .column(Column::exact(34.0))
                 .column(Column::remainder().at_least(80.0).clip(true))
                 .column(Column::exact(52.0))
-                .column(Column::exact(70.0))
+                .column(Column::exact(if c.cfg.clock_12h { 84.0 } else { 70.0 }))
                 .header(20.0, |mut h| {
                     for t in ["#", "Title", "Length", "Start"] {
                         h.col(|ui| {
@@ -833,7 +833,7 @@ impl App {
                             row_background(ui, e, is_cur);
                             let t = match st {
                                 Some(s) if s.skipped => "skip".to_string(),
-                                Some(s) => s.at.format("%H:%M:%S").to_string(),
+                                Some(s) => s.at.format(c.cfg.time_fmt(true)).to_string(),
                                 None => String::new(),
                             };
                             ui.label(RichText::new(t).color(col));
