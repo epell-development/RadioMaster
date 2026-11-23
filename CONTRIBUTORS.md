@@ -11,5 +11,6 @@ Format: `- Name or handle — what you did`
 ## Code
 
 ## Translations
+- Servextex — Spanish translation
 
 ## Testing and ideas
